@@ -10,6 +10,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
+use std::path::Path;
 
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
@@ -36,6 +37,16 @@ enum Commands {
     Models,
     /// 单次聊天（文档 §18 Chat）。
     Chat { model: String, message: String },
+    /// 注册并加载本地 GGUF 模型。
+    Load {
+        path: String,
+        #[arg(long)]
+        id: Option<String>,
+        #[arg(long, default_value_t = 4096)]
+        context_length: u64,
+    },
+    /// 卸载常驻模型并释放内存。
+    Unload { model: String },
     /// 交互式聊天（文档 §18 Run）。
     Run { model: String },
     /// 查看运行中的模型（文档 §18 Runtime）。
@@ -51,6 +62,12 @@ fn main() {
         Commands::Status => cmd_status(&base),
         Commands::Models => cmd_models(&base),
         Commands::Chat { model, message } => cmd_chat(&base, &model, &message),
+        Commands::Load {
+            path,
+            id,
+            context_length,
+        } => cmd_load(&base, &path, id.as_deref(), context_length).map(|_| ()),
+        Commands::Unload { model } => cmd_unload(&base, &model),
         Commands::Run { model } => cmd_run(&base, &model),
         Commands::Ps => cmd_ps(&base),
         Commands::Serve => cmd_serve(&base),
@@ -79,7 +96,7 @@ fn http(method: &str, url: &str, body: Option<&str>) -> Result<(u16, String), St
     let mut stream =
         TcpStream::connect(host_port).map_err(|e| format!("cannot connect to {host_port}: {e}"))?;
     stream
-        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .set_read_timeout(Some(std::time::Duration::from_secs(300)))
         .ok();
 
     let body_str = body.unwrap_or("");
@@ -168,6 +185,7 @@ fn cmd_models(base: &str) -> Result<(), String> {
 }
 
 fn cmd_chat(base: &str, model: &str, message: &str) -> Result<(), String> {
+    let model = resolve_model_argument(base, model)?;
     let body = json!({
         "model": model,
         "messages": [{"role": "user", "content": message}],
@@ -189,6 +207,7 @@ fn cmd_chat(base: &str, model: &str, message: &str) -> Result<(), String> {
 
 /// 交互式聊天（文档 §18 Run）。
 fn cmd_run(base: &str, model: &str) -> Result<(), String> {
+    let model = resolve_model_argument(base, model)?;
     println!("Interactive chat with '{model}' (Ctrl-D / 'exit' to quit)");
     let stdin = std::io::stdin();
     let mut history: Vec<(String, String)> = Vec::new();
@@ -231,6 +250,58 @@ fn cmd_run(base: &str, model: &str) -> Result<(), String> {
         println!("{}", content);
         history.push((line, content));
     }
+    Ok(())
+}
+
+fn resolve_model_argument(base: &str, model: &str) -> Result<String, String> {
+    if Path::new(model).is_file() {
+        cmd_load(base, model, None, 4096)
+    } else {
+        Ok(model.to_string())
+    }
+}
+
+fn cmd_load(
+    base: &str,
+    path: &str,
+    id: Option<&str>,
+    context_length: u64,
+) -> Result<String, String> {
+    let body = json!({
+        "path": path,
+        "id": id,
+        "context_length": context_length,
+    });
+    let (status, response) = post_json(base, "/api/models/load", &body)?;
+    if status != 200 {
+        let message = response["error"]["message"]
+            .as_str()
+            .unwrap_or("unknown error");
+        return Err(format!(
+            "{}: {message}",
+            response["error"]["type"].as_str().unwrap_or("error")
+        ));
+    }
+    let model_id = response["id"]
+        .as_str()
+        .ok_or_else(|| format!("invalid load response: {response}"))?
+        .to_string();
+    println!("Loaded {model_id} with llama.cpp");
+    Ok(model_id)
+}
+
+fn cmd_unload(base: &str, model: &str) -> Result<(), String> {
+    let (status, response) = post_json(base, &format!("/api/models/{model}/unload"), &json!({}))?;
+    if status != 200 {
+        let message = response["error"]["message"]
+            .as_str()
+            .unwrap_or("unknown error");
+        return Err(format!(
+            "{}: {message}",
+            response["error"]["type"].as_str().unwrap_or("error")
+        ));
+    }
+    println!("Unloaded {model}");
     Ok(())
 }
 

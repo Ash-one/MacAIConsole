@@ -3,6 +3,7 @@
 //! 所有推理 engine（llama.cpp / MLX / whisper / mock）必须实现统一的 `Provider`
 //! interface，再按能力补上 `ChatProvider` / `STTProvider` / `TTSProvider`。
 
+use std::fmt;
 use std::pin::Pin;
 
 use async_trait::async_trait;
@@ -16,6 +17,7 @@ use crate::AIError;
 
 /// 模型能力标签（文档 §7）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Capability {
     Chat,
     Completion,
@@ -42,6 +44,64 @@ impl Capability {
     }
 }
 
+/// Provider 的故障隔离边界。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IsolationMode {
+    InProcess,
+    Worker,
+}
+
+/// 不触发模型加载的静态能力描述。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderDescriptor {
+    pub id: String,
+    pub capabilities: Vec<Capability>,
+    pub isolation: IsolationMode,
+    pub supported_devices: Vec<String>,
+}
+
+/// Provider 在当前主机上的实时状态。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderStatus {
+    pub available: bool,
+    pub ready: bool,
+    pub effective_device: Option<String>,
+    pub resident_models: Vec<String>,
+    pub reason: Option<String>,
+    pub install_hint: Option<String>,
+}
+
+/// 带机器可判定类别与人类可读上下文的 Provider 错误。
+#[derive(Debug, Clone)]
+pub struct ProviderError {
+    pub kind: AIError,
+    pub message: String,
+}
+
+impl ProviderError {
+    pub fn new(kind: AIError, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+}
+
+impl From<AIError> for ProviderError {
+    fn from(kind: AIError) -> Self {
+        Self::new(kind, kind.as_str())
+    }
+}
+
+impl fmt::Display for ProviderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.kind, self.message)
+    }
+}
+
+impl std::error::Error for ProviderError {}
+
 /// 已加载模型的句柄。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelHandle {
@@ -56,31 +116,35 @@ pub struct ProviderHealth {
     pub message: Option<String>,
 }
 
-/// 统一 Provider interface（文档 §7 原文）。
+/// 统一 Provider interface（文档 §7）。
 #[async_trait]
 pub trait Provider: Send + Sync {
     fn id(&self) -> &'static str;
 
     fn capabilities(&self) -> Vec<Capability>;
 
-    async fn load(&self, model: &ModelSpec) -> Result<ModelHandle, AIError>;
+    fn descriptor(&self) -> ProviderDescriptor;
 
-    async fn unload(&self, handle: &ModelHandle) -> Result<(), AIError>;
+    async fn status(&self) -> ProviderStatus;
 
-    async fn health_check(&self) -> Result<ProviderHealth, AIError>;
+    async fn load(&self, model: &ModelSpec) -> Result<ModelHandle, ProviderError>;
+
+    async fn unload(&self, handle: &ModelHandle) -> Result<(), ProviderError>;
+
+    async fn health_check(&self) -> Result<ProviderHealth, ProviderError>;
 }
 
 /// Chat 流式输出：Provider 产生 chunk 流，daemon 转发为 SSE（文档 §34）。
-pub type ChatStream = Pin<Box<dyn Stream<Item = ChatChunk> + Send>>;
+pub type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatChunk, ProviderError>> + Send>>;
 
 /// Chat 能力（文档 §7、§14、§34）。
 #[async_trait]
 pub trait ChatProvider: Provider {
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, AIError>;
+    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError>;
 
     /// 流式版本。默认实现：把非流式结果包装成单 chunk 流。
     /// 真实 Provider（llama.cpp / MLX）应覆盖为逐 token 流。
-    async fn chat_stream(&self, request: ChatRequest) -> Result<ChatStream, AIError> {
+    async fn chat_stream(&self, request: ChatRequest) -> Result<ChatStream, ProviderError> {
         let resp = self.chat(request).await?;
         let chunk = ChatChunk {
             id: resp.id,
@@ -100,7 +164,7 @@ pub trait ChatProvider: Provider {
                 })
                 .collect(),
         };
-        Ok(Box::pin(futures::stream::once(async { chunk })))
+        Ok(Box::pin(futures::stream::once(async { Ok(chunk) })))
     }
 }
 
@@ -110,11 +174,11 @@ pub trait STTProvider: Provider {
     async fn transcribe(
         &self,
         request: TranscriptionRequest,
-    ) -> Result<TranscriptionResponse, AIError>;
+    ) -> Result<TranscriptionResponse, ProviderError>;
 }
 
 /// TTS 能力（文档 §7）。
 #[async_trait]
 pub trait TTSProvider: Provider {
-    async fn synthesize(&self, request: SpeechRequest) -> Result<SpeechResponse, AIError>;
+    async fn synthesize(&self, request: SpeechRequest) -> Result<SpeechResponse, ProviderError>;
 }

@@ -10,11 +10,11 @@ use tokio::time::sleep;
 
 use ai_core::model::ModelSpec;
 use ai_core::provider::{
-    Capability, ChatProvider, ChatStream, ModelHandle, Provider, ProviderHealth,
+    Capability, ChatProvider, ChatStream, IsolationMode, ModelHandle, Provider, ProviderDescriptor,
+    ProviderError, ProviderHealth, ProviderStatus,
 };
 use ai_core::request::ChatRequest;
 use ai_core::response::{ChatChunk, ChatChunkChoice, ChatChunkDelta, ChatResponse, ChatUsage};
-use ai_core::AIError;
 
 pub struct MockProvider;
 
@@ -41,18 +41,38 @@ impl Provider for MockProvider {
         vec![Capability::Chat]
     }
 
-    async fn load(&self, _model: &ModelSpec) -> Result<ModelHandle, AIError> {
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderDescriptor {
+            id: self.id().to_string(),
+            capabilities: self.capabilities(),
+            isolation: IsolationMode::InProcess,
+            supported_devices: vec!["cpu".to_string()],
+        }
+    }
+
+    async fn status(&self) -> ProviderStatus {
+        ProviderStatus {
+            available: true,
+            ready: true,
+            effective_device: Some("cpu".to_string()),
+            resident_models: vec![],
+            reason: None,
+            install_hint: None,
+        }
+    }
+
+    async fn load(&self, _model: &ModelSpec) -> Result<ModelHandle, ProviderError> {
         Ok(ModelHandle {
             model_id: "mock".to_string(),
             provider_id: "mock".to_string(),
         })
     }
 
-    async fn unload(&self, _handle: &ModelHandle) -> Result<(), AIError> {
+    async fn unload(&self, _handle: &ModelHandle) -> Result<(), ProviderError> {
         Ok(())
     }
 
-    async fn health_check(&self) -> Result<ProviderHealth, AIError> {
+    async fn health_check(&self) -> Result<ProviderHealth, ProviderError> {
         Ok(ProviderHealth {
             ok: true,
             message: Some("mock provider healthy".to_string()),
@@ -62,7 +82,7 @@ impl Provider for MockProvider {
 
 #[async_trait]
 impl ChatProvider for MockProvider {
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, AIError> {
+    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
         let reply = Self::reply_text(&request);
         let prompt_tokens: u64 = request
             .messages
@@ -92,7 +112,7 @@ impl ChatProvider for MockProvider {
     }
 
     /// 流式版本：reply 按 2 字符分块，最后发 finish chunk。
-    async fn chat_stream(&self, request: ChatRequest) -> Result<ChatStream, AIError> {
+    async fn chat_stream(&self, request: ChatRequest) -> Result<ChatStream, ProviderError> {
         let reply = Self::reply_text(&request);
         let model = request.model.clone();
         let id = format!("chatcmpl-mock-{}", now_id());
@@ -135,7 +155,7 @@ impl ChatProvider for MockProvider {
                             finish_reason: None,
                         }],
                     };
-                    Some((chunk, (chars, i + 1, false, id, created, model)))
+                    Some((Ok(chunk), (chars, i + 1, false, id, created, model)))
                 } else {
                     let chunk = ChatChunk {
                         id,
@@ -150,7 +170,7 @@ impl ChatProvider for MockProvider {
                     };
                     // 下一轮进入 finished=true → 终止。
                     Some((
-                        chunk,
+                        Ok(chunk),
                         (chars, i, true, String::new(), created, String::new()),
                     ))
                 }
@@ -212,16 +232,18 @@ mod tests {
 
         let content: String = chunks
             .iter()
-            .filter_map(|chunk| chunk.choices[0].delta.content.as_deref())
+            .filter_map(|chunk| chunk.as_ref().unwrap().choices[0].delta.content.as_deref())
             .collect();
 
         assert_eq!(content, "你好，world");
         assert_eq!(
-            chunks[0].choices[0].delta.role.as_deref(),
+            chunks[0].as_ref().unwrap().choices[0].delta.role.as_deref(),
             Some("assistant")
         );
         assert_eq!(
-            chunks.last().unwrap().choices[0].finish_reason.as_deref(),
+            chunks.last().unwrap().as_ref().unwrap().choices[0]
+                .finish_reason
+                .as_deref(),
             Some("stop")
         );
     }

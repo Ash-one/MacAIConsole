@@ -12,7 +12,8 @@ pub mod response;
 pub use errors::{AIError, ApiErrorBody};
 pub use model::{ModelSpec, ModelState};
 pub use provider::{
-    Capability, ChatProvider, ModelHandle, Provider, ProviderHealth, STTProvider, TTSProvider,
+    Capability, ChatProvider, IsolationMode, ModelHandle, Provider, ProviderDescriptor,
+    ProviderError, ProviderHealth, ProviderStatus, STTProvider, TTSProvider,
 };
 pub use request::{ChatMessage, ChatRequest, SpeechRequest, TranscriptionRequest};
 pub use response::{

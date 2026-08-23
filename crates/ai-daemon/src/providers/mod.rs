@@ -1,7 +1,8 @@
-//! Provider 实现目录（文档 §8）。第一阶段只含 Mock；真实 backend
-//! （llama.cpp / MLX / whisper.cpp / MLX-Audio）在后续 milestone 作为
-//! 独立进程接入，daemon 里对应的是进程管理 wrapper。
+//! Provider 实现目录（文档 §8）。真实 backend 以独立进程接入，daemon
+//! 中的 wrapper 负责生命周期、健康检查与协议转换。
 
+pub mod llama_cpp;
 pub mod mock;
 
+pub use llama_cpp::LlamaCppProvider;
 pub use mock::MockProvider;

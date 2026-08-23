@@ -1,31 +1,27 @@
-//! aiworkd — Local AI Runtime daemon（文档 §4.2、§13）。
+//! aiworkd — macOS Local AI Runtime daemon。
 //!
-//! 原型阶段实现 OpenAI-compatible API：
-//!   GET  /health
-//!   GET  /v1/models
-//!   POST /v1/chat/completions   （含 SSE streaming）
-//!   GET  /api/runtime
-//!
-//! 默认监听 127.0.0.1:11435（文档 §13、§43：默认不得绑定 0.0.0.0）。
+//! 对外提供 OpenAI-compatible chat API；管理面提供 Provider 状态与模型
+//! load/unload。默认只绑定 127.0.0.1:11435。
 
 mod providers;
 mod runtime;
 
+use std::path::Path as FilePath;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::State;
+use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::stream::StreamExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use ai_core::errors::{AIError, ApiErrorBody};
-use ai_core::provider::{ChatProvider, Provider};
+use ai_core::provider::ProviderError;
 use ai_core::request::ChatRequest;
 use ai_core::response::ModelEntry;
 
@@ -33,13 +29,11 @@ use crate::runtime::Runtime;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// 共享状态。
 #[derive(Clone)]
 struct AppState {
     runtime: Arc<Runtime>,
 }
 
-/// 简单的健康检查响应。
 #[derive(Serialize)]
 struct HealthResponse {
     status: String,
@@ -47,55 +41,34 @@ struct HealthResponse {
     model_count: usize,
 }
 
+#[derive(Debug, Deserialize)]
+struct LoadModelRequest {
+    path: String,
+    id: Option<String>,
+    name: Option<String>,
+    context_length: Option<u64>,
+    keep_alive: Option<String>,
+}
+
 #[tokio::main]
 async fn main() {
     init_tracing();
 
     let runtime = Arc::new(Runtime::new());
-
-    // 原型内置模型：mock（文档 §62 验收对象）。
-    runtime
-        .register(ai_core::model::ModelSpec {
-            id: "mock".to_string(),
-            name: "Mock Model (echo)".to_string(),
-            model_type: "llm".to_string(),
-            provider: "mock".to_string(),
-            source: None,
-            path: None,
-            format: Some("mock".to_string()),
-            size_bytes: None,
-            memory_estimate: Some(0),
-            keep_alive: Some("always".to_string()),
-            context_length: Some(4096),
-        })
-        .await;
-
-    // 演示用第二个模型：stub 模型，用于展示 /v1/models 的多模型与错误路径。
-    runtime
-        .register(ai_core::model::ModelSpec {
-            id: "demo".to_string(),
-            name: "Demo Model (unavailable)".to_string(),
-            model_type: "llm".to_string(),
-            provider: "llama.cpp".to_string(),
-            source: None,
-            path: None,
-            format: Some("gguf".to_string()),
-            size_bytes: None,
-            memory_estimate: Some(4 * 1024 * 1024 * 1024),
-            keep_alive: Some("5m".to_string()),
-            context_length: Some(8192),
-        })
-        .await;
+    runtime.register(mock_model()).await;
 
     let state = AppState {
-        runtime: runtime.clone(),
+        runtime: Arc::clone(&runtime),
     };
-
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/models", get(list_models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/api/runtime", get(runtime_info))
+        .route("/api/providers", get(provider_statuses))
+        .route("/api/models/load", post(register_and_load_model))
+        .route("/api/models/{id}/load", post(load_registered_model))
+        .route("/api/models/{id}/unload", post(unload_model))
         .with_state(state);
 
     let addr = "127.0.0.1:11435";
@@ -104,9 +77,24 @@ async fn main() {
         .expect("bind failed");
 
     tracing::info!(%addr, "aiworkd listening");
-    println!("AI Runtime running at http://{}", addr);
-
+    println!("AI Runtime running at http://{addr}");
     axum::serve(listener, app).await.expect("server error");
+}
+
+fn mock_model() -> ai_core::model::ModelSpec {
+    ai_core::model::ModelSpec {
+        id: "mock".to_string(),
+        name: "Mock Model (echo)".to_string(),
+        model_type: "llm".to_string(),
+        provider: "mock".to_string(),
+        source: None,
+        path: None,
+        format: Some("mock".to_string()),
+        size_bytes: None,
+        memory_estimate: Some(0),
+        keep_alive: Some("always".to_string()),
+        context_length: Some(4096),
+    }
 }
 
 fn init_tracing() {
@@ -118,75 +106,163 @@ fn init_tracing() {
         .init();
 }
 
-// ---------- handlers ----------
-
 async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
-    let count = state.runtime.list_models().await.len();
     Json(HealthResponse {
         status: "ok".to_string(),
         version: VERSION.to_string(),
-        model_count: count,
+        model_count: state.runtime.list_models().await.len(),
     })
 }
 
-/// GET /v1/models（OpenAI-compatible）。
 async fn list_models(State(state): State<AppState>) -> Json<Value> {
     let models: Vec<ModelEntry> = state
         .runtime
         .list_models()
         .await
         .into_iter()
-        .map(|e| ModelEntry {
-            id: e.spec.id,
+        .map(|entry| ModelEntry {
+            id: entry.spec.id,
             object: "model".to_string(),
-            created: 0,
-            owned_by: format!("aiworkd/{}", e.spec.provider),
+            created: entry.loaded_at.unwrap_or(0),
+            owned_by: format!("aiworkd/{}", entry.spec.provider),
         })
         .collect();
-    Json(json!({
-        "object": "list",
-        "data": models,
-    }))
+    Json(json!({"object": "list", "data": models}))
 }
 
-/// GET /api/runtime（内部管理 API，文档 §17）。
 async fn runtime_info(State(state): State<AppState>) -> Json<ai_core::response::RuntimeInfo> {
     Json(state.runtime.runtime_info(VERSION).await)
 }
 
-/// POST /v1/chat/completions（文档 §14）。
-/// stream=true → SSE；否则普通 JSON。
+async fn provider_statuses(State(state): State<AppState>) -> Json<Value> {
+    let providers: Vec<Value> = state
+        .runtime
+        .provider_statuses()
+        .await
+        .into_iter()
+        .map(|(descriptor, status)| json!({"descriptor": descriptor, "status": status}))
+        .collect();
+    Json(json!({"data": providers}))
+}
+
+async fn register_and_load_model(
+    State(state): State<AppState>,
+    Json(request): Json<LoadModelRequest>,
+) -> Response {
+    let path = match FilePath::new(&request.path).canonicalize() {
+        Ok(path) => path,
+        Err(error) => {
+            return api_error(
+                AIError::ModelNotFound,
+                format!("cannot open model '{}': {error}", request.path),
+            )
+        }
+    };
+    if path.extension().and_then(|value| value.to_str()) != Some("gguf") {
+        return api_error(
+            AIError::InvalidRequest,
+            format!("expected a .gguf model, got '{}'", path.display()),
+        );
+    }
+
+    let id = request.id.unwrap_or_else(|| {
+        path.file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("model")
+            .to_string()
+    });
+    if !valid_model_id(&id) {
+        return api_error(
+            AIError::InvalidRequest,
+            "model id may contain only letters, numbers, '.', '_' and '-'",
+        );
+    }
+    let metadata = match path.metadata() {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return api_error(
+                AIError::ModelNotFound,
+                format!("cannot inspect model '{}': {error}", path.display()),
+            )
+        }
+    };
+    let spec = ai_core::model::ModelSpec {
+        id: id.clone(),
+        name: request.name.unwrap_or_else(|| id.clone()),
+        model_type: "llm".to_string(),
+        provider: "llama.cpp".to_string(),
+        source: None,
+        path: Some(path.to_string_lossy().into_owned()),
+        format: Some("gguf".to_string()),
+        size_bytes: Some(metadata.len()),
+        memory_estimate: Some(metadata.len()),
+        keep_alive: request.keep_alive.or_else(|| Some("5m".to_string())),
+        context_length: request.context_length.or(Some(4096)),
+    };
+
+    match state.runtime.register_and_load(spec).await {
+        Ok(handle) => Json(json!({
+            "id": handle.model_id,
+            "provider": handle.provider_id,
+            "state": "ready"
+        }))
+        .into_response(),
+        Err(error) => provider_error(error),
+    }
+}
+
+async fn load_registered_model(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match state.runtime.load_model(&id).await {
+        Ok(handle) => Json(json!({
+            "id": handle.model_id,
+            "provider": handle.provider_id,
+            "state": "ready"
+        }))
+        .into_response(),
+        Err(error) => provider_error(error),
+    }
+}
+
+async fn unload_model(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
+    if state.runtime.get_model(&id).await.is_none() {
+        return api_error(AIError::ModelNotFound, format!("model '{id}' not found"));
+    }
+    match state.runtime.unload_model(&id).await {
+        Ok(()) => Json(json!({"id": id, "state": "unloaded"})).into_response(),
+        Err(error) => provider_error(error),
+    }
+}
+
 async fn chat_completions(State(state): State<AppState>, Json(req): Json<ChatRequest>) -> Response {
     let request_id = state.runtime.next_request_id();
     tracing::info!(%request_id, model = %req.model, stream = req.stream, "chat request");
 
-    // 模型解析（文档 §26：request → model loaded? → memory check → eviction → load → inference）。
-    let Some(model) = state.runtime.get_model(&req.model).await else {
-        return api_error(
-            AIError::ModelNotFound,
-            format!("model '{}' not found", req.model),
-        );
+    let model_id = req.model.clone();
+    let model_lease = state.runtime.model_lease(&model_id);
+    let provider = match state.runtime.chat_provider(&model_id).await {
+        Ok(provider) => provider,
+        Err(error) => return provider_error(error),
     };
-
-    let provider = state.runtime.chat_provider();
-    if model.provider != provider.id() {
-        return api_error(
-            AIError::ProviderUnavailable,
-            format!(
-                "provider '{}' is not available in this prototype",
-                model.provider
-            ),
-        );
-    }
-
+    state.runtime.touch_model(&model_id).await;
     let request_guard = state.runtime.request_guard();
 
     if req.stream {
         match provider.chat_stream(req).await {
             Ok(stream) => {
-                let chunks = stream.map(move |chunk| {
+                let chunks = stream.map(move |result| {
                     let _request_guard = &request_guard;
-                    Ok::<_, std::convert::Infallible>(Event::default().json_data(chunk).unwrap())
+                    let _model_lease = &model_lease;
+                    let event = match result {
+                        Ok(chunk) => Event::default().json_data(chunk).unwrap(),
+                        Err(error) => Event::default()
+                            .event("error")
+                            .json_data(ApiErrorBody::new(error.kind, error.message))
+                            .unwrap(),
+                    };
+                    Ok::<_, std::convert::Infallible>(event)
                 });
                 let done = futures::stream::once(async {
                     Ok::<_, std::convert::Infallible>(Event::default().data("[DONE]"))
@@ -195,20 +271,41 @@ async fn chat_completions(State(state): State<AppState>, Json(req): Json<ChatReq
                     .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)));
                 (StatusCode::OK, sse).into_response()
             }
-            Err(e) => api_error(e, "chat stream failed"),
+            Err(error) => provider_error(error),
         }
     } else {
         match provider.chat(req).await {
-            Ok(resp) => Json(resp).into_response(),
-            Err(e) => api_error(e, "chat failed"),
+            Ok(response) => Json(response).into_response(),
+            Err(error) => provider_error(error),
         }
     }
 }
 
-/// 统一 API 错误（文档 §45）。
-fn api_error(err: AIError, message: impl Into<String>) -> Response {
+fn valid_model_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn provider_error(error: ProviderError) -> Response {
+    api_error(error.kind, error.message)
+}
+
+fn api_error(error: AIError, message: impl Into<String>) -> Response {
     let status =
-        StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let body = Json(ApiErrorBody::new(err, message));
-    (status, body).into_response()
+        StatusCode::from_u16(error.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    (status, Json(ApiErrorBody::new(error, message))).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_model_aliases() {
+        assert!(valid_model_id("SmolLM2-135M.Q4_K_M"));
+        assert!(!valid_model_id("../model"));
+        assert!(!valid_model_id("model name"));
+    }
 }
