@@ -157,20 +157,18 @@ Intel Mac 暂不进入第一阶段。
         │ Provider Manager           │
         └─────────────┬──────────────┘
                       │
-        ┌─────────────┼────────────────────┐
-        │             │                    │
-        ▼             ▼                    ▼
-   llama.cpp         MLX              MLX-Audio
-                                        │
-                                  ┌─────┴─────┐
-                                  ▼           ▼
-                                 STT         TTS
+        ┌──────────┬──────────┬──────────┬──────────┐
+        │          │          │          │          │
+        ▼          ▼          ▼          ▼          ▼
+   llama.cpp    MLX-LM    whisper.cpp  MLX-ASR   MLX-Audio
+        │          │          │          │          │
+        ▼          ▼          ▼          ▼          ▼
+       LLM        LLM        STT        STT         TTS
 ```
 
-额外 Backend：
+Realtime / extra Backend：
 
 ```text
-whisper.cpp
 sherpa-onnx
 ```
 
@@ -325,6 +323,8 @@ ai-workbench/
 │   │
 │   ├── whisper-cpp/
 │   │
+│   ├── mlx-asr/
+│   │
 │   ├── mlx-audio/
 │   │
 │   └── sherpa-onnx/
@@ -383,11 +383,34 @@ health check
 示例：
 
 ```rust
+enum IsolationMode {
+    InProcess,
+    Worker,
+}
+
+struct ProviderDescriptor {
+    id: String,
+    capabilities: Vec<Capability>,
+    isolation: IsolationMode,
+    supported_devices: Vec<String>,
+}
+
+struct ProviderStatus {
+    available: bool,
+    ready: bool,
+    effective_device: Option<String>,
+    resident_models: Vec<String>,
+    reason: Option<String>,
+    install_hint: Option<String>,
+}
+
 #[async_trait]
 pub trait Provider {
     fn id(&self) -> &'static str;
 
     fn capabilities(&self) -> Vec<Capability>;
+
+    fn descriptor(&self) -> ProviderDescriptor;
 
     async fn load(
         &self,
@@ -402,8 +425,28 @@ pub trait Provider {
     async fn health_check(
         &self,
     ) -> Result<ProviderHealth>;
+
+    async fn status(
+        &self,
+    ) -> Result<ProviderStatus>;
 }
 ```
+
+Provider 元数据必须描述真实能力，而不是 UI 展示意图。至少包括：
+
+```text
+capabilities
+supported_devices
+isolation mode
+availability + reason
+effective device
+install hint
+resident models
+```
+
+`available`、`ready`、`resident` 是不同状态：已安装不等于可用，可用不等于已就绪，已就绪不等于模型常驻。
+
+Provider 列举必须 best-effort：一个 Provider 探测失败时，将该项报告为 unavailable 并给出原因，不得让整个 `/api/providers` 返回 500。
 
 Capability：
 
@@ -471,6 +514,9 @@ whisper.cpp
 MLX-LM
     Python
 
+MLX-ASR
+    Python
+
 MLX-Audio
     Python
 
@@ -487,12 +533,26 @@ aiworkd
   │
   ├── mlx-lm worker
   │
+  ├── mlx-asr worker
+  │
   ├── mlx-audio worker
   │
   └── whisper worker
 ```
 
-Python Backend 采用 persistent worker。
+Python Backend 采用 persistent worker。第三方原生库、容易崩溃的 C/C++ binding、依赖冲突明显的引擎也优先使用隔离 worker。
+
+进程边界按故障域划分：
+
+```text
+稳定且可控的 Rust/C API
+→ 可在 aiworkd 内运行
+
+Python / 第三方 native runtime / 易崩溃 backend
+→ 独立 persistent worker
+```
+
+默认按 Provider 复用 worker 与环境；只有依赖确实冲突时，才为该 Provider 使用独立 venv。不要为每个模型复制一套 Python 环境。
 
 禁止每次请求：
 
@@ -517,20 +577,55 @@ request 2
 request 3
 ```
 
+worker 应支持惰性启动、模型常驻、空闲回收和幂等 shutdown。worker 崩溃只影响其承载的 Provider；`aiworkd` 保持存活并将请求标记为 `backend_crashed`。
+
+这里吸收 VoiceStudio 的 sidecar 故障隔离经验，但不采用它的 FastAPI/PyTorch 单体作为 Runtime Authority。
+
 ---
 
 # 9. Inter-Process Communication
 
-第一版本优先：
+第一版本优先使用 Unix Domain Socket 上的 length-prefixed JSON。
 
 ```text
-Unix Domain Socket
+4-byte big-endian length
+JSON body
 ```
 
-推荐消息：
+协议必须具备：
 
 ```text
-JSON
+protocol_version
+request_id
+method / event
+deadline_ms
+bounded frame size
+operation allowlist
+```
+
+控制帧保持小型；音频和大型模型数据通过受控临时文件、memory map 或后续共享内存传递。单帧设置硬上限（初始 64 MiB），在分配 buffer 前校验长度，防止损坏 worker 触发超大内存分配。
+
+第一版允许的方法固定为：
+
+```text
+hello
+capabilities
+health
+load
+unload
+infer
+cancel
+shutdown
+```
+
+worker 可主动发送：
+
+```text
+ready
+progress
+heartbeat
+result
+error
 ```
 
 例如：
@@ -554,6 +649,8 @@ gRPC
 ```
 
 第一阶段不要因为 RPC 技术提前增加系统复杂度。
+
+IPC 应先保证边界、取消、超时和错误语义；只有 profiling 证明 JSON framing 成为瓶颈时，才迁移 MessagePack / Protobuf。
 
 ---
 
@@ -616,7 +713,9 @@ GGUF
 
 ```text
 whisper.cpp
-MLX-Audio
+MLX-native ASR worker
+    ├── mlx-whisper
+    └── parakeet-mlx
 ```
 
 第二阶段：
@@ -637,17 +736,17 @@ offline transcription
 low dependency
 ```
 
-### MLX-Audio
+### MLX-native ASR
 
 适合：
 
 ```text
 Apple Silicon
-new ASR models
-Parakeet
-Whisper
-Qwen audio models
+Whisper → mlx-whisper
+Parakeet → parakeet-mlx
 ```
+
+MLX ASR 与 MLX TTS 使用不同 Provider capability；允许共用基础 MLX 环境，但不能假定 `mlx-audio` 包负责所有 ASR 模型。
 
 ### sherpa-onnx
 
@@ -1104,6 +1203,9 @@ estimated model memory
 actual RSS
 last_used
 model state
+effective device
+resident / unloadable
+active lease count
 ```
 
 模型生命周期：
@@ -1135,6 +1237,25 @@ enum ModelState {
     Failed,
 }
 ```
+
+Runtime 必须提供单一的 loaded-model inventory。注册表中的模型与内存中真实常驻的模型分开表示；`loaded_models` 只能列出实际 resident 的模型。
+
+每个常驻模型至少报告：
+
+```text
+model id
+provider id
+effective device
+state
+estimated memory
+measured memory（可用时）
+loaded_at
+last_used_at
+active lease count
+unloadable
+```
+
+推理开始前获取 model lease，结束或客户端断开时释放。手动 unload、LRU eviction 和 idle reaper 必须跳过 lease count > 0 的模型，避免在请求中途释放权重。
 
 ---
 
@@ -1235,6 +1356,20 @@ always
 
 Scheduler 第一版保持简单。
 
+Apple Silicon / MPS 第一版每个 accelerator lane 默认并发为 1。只有 benchmark 与稳定性测试证明同模型并发能提升吞吐且不会增加内存峰值时，才提高并发。
+
+队列等待与实际执行使用两个独立时钟：
+
+```text
+queue timeout
+→ 任务尚未开始，返回可重试的 busy / 503
+
+execution timeout
+→ 任务已经开始，返回 inference timeout
+```
+
+队列必须支持 position、cancel、queued/running 计数。长任务的进度 heartbeat 可以在有界范围内延长执行 deadline；heartbeat 不能无限续期。
+
 单模型请求：
 
 ```text
@@ -1276,7 +1411,7 @@ mlx
 llama.cpp
 ```
 
-auto 初期按照格式：
+auto 初期先按模型格式生成候选，再验证 Provider availability 与设备能力：
 
 ```text
 MLX weights
@@ -1285,6 +1420,20 @@ MLX weights
 GGUF
 → llama.cpp
 ```
+
+选择结果必须显式记录：
+
+```text
+requested provider
+selected provider
+effective device
+accelerated / cpu fallback / unavailable
+reason
+```
+
+禁止静默 CPU fallback。某个 Provider 在当前 Mac 上只能走 CPU 时，API、CLI 与 GUI 必须展示原因；对于预计内存或时延明显不合理的大模型，可由策略直接拒绝并提示选择更轻模型。
+
+显式指定 `--provider` 时，将其视为硬选择：不可用就失败，不再悄悄切换到其他 Provider。
 
 未来可基于 benchmark 数据选择。
 
@@ -1480,6 +1629,16 @@ send:
 unload
 ```
 
+`aiworkd` 自身先绑定端口并提供轻量 `/health`；Provider worker 与重型 ML import 在后台启动。对外区分：
+
+```text
+liveness  = daemon event loop 正常
+readiness = 所需 registry / provider 已可服务
+deep health = 至少一个真实轻量操作可完成
+```
+
+启动进度通过 `/api/startup` 或事件流暴露，GUI 不依赖固定 sleep 猜测模型导入时间。
+
 Worker 崩溃：
 
 ```text
@@ -1487,6 +1646,8 @@ detect
 restart
 restore state if necessary
 ```
+
+重启必须有次数上限和退避。只有幂等 load 可以自动恢复；正在执行的 inference 不得无条件重放，避免重复生成或重复写文件。
 
 ---
 
@@ -1528,6 +1689,17 @@ restore state if necessary
 }
 ```
 
+协议还必须定义：
+
+```text
+cancel acknowledgement
+progress sequence
+heartbeat lease
+worker generation / restart id
+```
+
+收到未知 operation、超限 frame、错误 protocol version 或重复终态时，关闭该 worker 连接并记录结构化错误；不得执行自由形式命令或由客户端提供可执行路径。
+
 ---
 
 # 34. Streaming Protocol
@@ -1543,6 +1715,14 @@ SSE
  ↓
 Client
 ```
+
+OpenAI-compatible SSE 最后发送：
+
+```text
+data: [DONE]
+```
+
+长任务事件带单调递增 `seq`。进入 SQLite 持久化阶段后，客户端可用 `after_seq` 重连并回放有界事件尾部；实时分发保持内存内，磁盘写失败只降低可恢复性，不中断当前 stream。
 
 STT realtime：
 
@@ -1730,6 +1910,16 @@ if absent:
     launch
 ```
 
+GUI 连接已有 daemon 时必须同时检查：
+
+```text
+service identity
+API version compatibility
+deep health
+```
+
+端口被其他进程占用时只报告冲突，不得直接杀死未知进程。已有兼容 `aiworkd` 时附着；版本不兼容时提示用户停止旧 daemon 或执行受控升级。
+
 CLI：
 
 ```text
@@ -1832,6 +2022,10 @@ daemon.log
 providers.log
 ```
 
+日志使用 rotation，并为每次 daemon / worker run 记录独立 run id 或 byte boundary。崩溃诊断只读取本次 run 的 stderr 尾部，避免把下一次健康启动误归因到上一次崩溃。
+
+诊断包可以包含版本、Provider 状态、routing decision、内存快照与脱敏日志；不得包含 prompt、音频、API token 或完整本地路径。
+
 每个 request 必须具备：
 
 ```text
@@ -1888,6 +2082,14 @@ TTFT
 tokens generated
 
 memory usage
+
+queue depth / running workers
+
+selected provider / effective device
+
+provider restart count
+
+progress heartbeat age
 ```
 
 这些数据主要用于本地调试。
@@ -1914,6 +2116,16 @@ LRU eviction
 API serialization
 
 Provider selection
+
+Provider metadata truthfulness
+
+no-silent-fallback routing
+
+model lease vs unload race
+
+queue timeout vs execution timeout
+
+framed IPC size / op validation
 ```
 
 ---
@@ -1938,6 +2150,12 @@ stream response
 unload
 
 OOM eviction
+
+worker crash and bounded restart
+
+SSE reconnect from after_seq
+
+daemon liveness vs readiness vs deep health
 ```
 
 ---
@@ -2092,12 +2310,13 @@ ai transcribe
 
 ---
 
-# 53. Phase 5 — MLX Audio
+# 53. Phase 5 — MLX Speech Workers
 
 加入：
 
 ```text
-MLX Audio worker
+MLX ASR worker
+MLX Audio TTS worker
 ```
 
 支持：
@@ -2131,6 +2350,14 @@ LRU
 keep_alive
 
 automatic unload
+
+model leases
+
+per-device job queue
+
+queue / execution deadlines
+
+job metadata + bounded event replay
 ```
 
 ---
@@ -2167,11 +2394,11 @@ streaming STT
 streaming TTS
 ```
 
-候选 Backend：
+初始职责：
 
 ```text
-sherpa-onnx
-MLX-Audio
+streaming STT → sherpa-onnx
+streaming TTS → MLX-Audio
 ```
 
 根据实验结果选择。
@@ -2198,6 +2425,8 @@ Agent Runtime
 MCP
 
 Realtime conversation
+
+Remote GPU workers（V1 后）
 ```
 
 通过：
@@ -2306,6 +2535,18 @@ load
 health
 unload
 ```
+
+---
+
+## Constraint 6
+
+Provider 必须诚实报告能力、可用性、设备与 fallback。UI 显示的状态必须来自 Runtime routing decision，不能维护第二套推断逻辑。
+
+---
+
+## Constraint 7
+
+模型卸载必须经过 lease / busy guard。任何 idle reaper 或手动 unload 都不能中断正在运行的请求。
 
 ---
 
@@ -2459,6 +2700,7 @@ Milestone 1 完成时，必须满足：
 * `aiworkd` 可以独立运行
 * `ai` 可以发现 daemon
 * Provider interface 已建立
+* Provider descriptor / status 可查询
 * Mock Provider 可运行
 * llama.cpp Provider 可运行
 * 模型可以 load / unload
@@ -2467,6 +2709,8 @@ Milestone 1 完成时，必须满足：
 * SSE streaming 可用
 * CLI Chat 可用
 * Provider 崩溃不会导致 daemon 崩溃
+* worker IPC 能拒绝未知 operation 与超限 frame
+* liveness、readiness、deep health 语义分离
 * 基础 logging 可用
 
 无需：
@@ -2498,6 +2742,9 @@ Milestone 2：
 * Memory estimate
 * keep_alive
 * LRU eviction
+* model lease / busy guard
+* no-silent-fallback routing
+* queue wait 与 execution deadline 分离
 
 此时形成完整：
 
@@ -2512,11 +2759,13 @@ Local LLM Runtime
 Milestone 3：
 
 * whisper.cpp
-* MLX-Audio
+* MLX-native ASR（mlx-whisper / parakeet-mlx）
+* MLX-Audio TTS
 * STT API
 * TTS API
 * CLI STT
 * CLI TTS
+* long-running job metadata 与有界事件回放
 
 此时项目达到：
 
@@ -2617,7 +2866,7 @@ GUI 可以管理相同的所有模型和 runtime 状态。
            │           │           │
       ┌────┴────┐ ┌────┴────┐ ┌────┴────┐
       │         │ │         │ │         │
-     MLX   llama.cpp MLX whisper MLX   sherpa
+     MLX   llama.cpp MLX-ASR whisper.cpp MLX-Audio sherpa
 ```
 
 核心技术选择：
@@ -2635,13 +2884,19 @@ Registry     SQLite
 
 LLM          MLX + llama.cpp
 
-STT          whisper.cpp + MLX-Audio
+STT          whisper.cpp + MLX-native ASR
 
 TTS          MLX-Audio
 
 Realtime     sherpa-onnx / MLX-Audio
 
 Model Store  Hugging Face
+
+Provider IPC Unix Domain Socket + framed JSON
+
+Routing      capability + availability + effective device
+
+Job Model    per-device queue + cancellation + bounded event replay
 ```
 
 整个项目围绕：
@@ -2658,7 +2913,73 @@ aiworkd
 
 ---
 
-# 68. Instruction for Coding Agents
+# 68. VoiceStudio Reference Decisions
+
+参考项目：
+
+```text
+https://github.com/debpalash/VoiceStudio
+inspected commit: afa361913cbfd2549421b15e54a2550592b46e58
+license: AGPL-3.0-only
+```
+
+VoiceStudio 证明了「桌面 UI 只是本地 Runtime 客户端」「多引擎必须有统一能力矩阵」「高风险推理 backend 应使用常驻隔离进程」这些方向有效。
+
+本项目只迁移架构规律与接口思想，不直接复制 VoiceStudio 的 AGPL 实现代码。
+
+## 保留当前路线
+
+| 决策 | 原因 |
+|---|---|
+| SwiftUI 而非 Tauri/React | 第一阶段只支持 Apple Silicon；原生菜单栏、全局快捷键、AVFoundation 与系统权限链路更直接 |
+| Rust `aiworkd` 而非 Python FastAPI 作为 Runtime Authority | daemon 生命周期、内存调度、协议边界与 CLI 可保持轻量稳定；Python 只承载需要 Python 生态的 Provider |
+| Axum + OpenAI-compatible API | 当前原型已验证 chat 与 SSE；后续扩展 audio endpoints 即可 |
+| 先少量 Provider 再扩展 | VoiceStudio 的大量引擎带来显著依赖、安装、兼容与测试成本；MacAI 先验证最优 Apple Silicon 路径 |
+
+## 吸收的机制
+
+| VoiceStudio 中的有效机制 | MacAI 中的落点 |
+|---|---|
+| 引擎能力、可用性、设备与隔离元数据 | `ProviderDescriptor` / `ProviderStatus` |
+| no-silent-fallback routing | Backend Selection 与统一 routing decision |
+| 长驻 sidecar + crash isolation | Python / 第三方 native persistent worker |
+| lazy load、idle unload、loaded-model inventory | Runtime model lease、LRU 与 idle reaper |
+| early bind + startup progress + deep health | `aiworkd` liveness/readiness/deep-health API |
+| serial GPU queue、取消、queue position | Apple Silicon accelerator lane，初始 concurrency=1 |
+| queue wait 与 execution timeout 分离 | Scheduler 两类 deadline 与可重试 busy 错误 |
+| job metadata + SSE event tail | SQLite jobs/events 与 `after_seq` 重连 |
+| per-run crash evidence 与日志脱敏 | daemon/worker run id、rotation、诊断包 |
+
+## V1 继续排除
+
+```text
+Tauri / React frontend
+Python monolithic backend
+remote GPU workers
+distributed scheduling
+plugin marketplace
+大规模引擎矩阵
+```
+
+远程 worker 的 capability negotiation、warm-model affinity、TLS enrollment 与 circuit breaker 只作为未来设计参考；V1 不实现网络任务调度。
+
+关键证据（固定到 inspected commit）：
+
+* [TTS backend contract and registry](https://github.com/debpalash/VoiceStudio/blob/afa361913cbfd2549421b15e54a2550592b46e58/backend/services/tts_backend.py)
+* [ASR backend contract and registry](https://github.com/debpalash/VoiceStudio/blob/afa361913cbfd2549421b15e54a2550592b46e58/backend/services/asr_backend.py)
+* [No-silent-fallback routing](https://github.com/debpalash/VoiceStudio/blob/afa361913cbfd2549421b15e54a2550592b46e58/backend/services/engine_routing.py)
+* [Persistent subprocess backend](https://github.com/debpalash/VoiceStudio/blob/afa361913cbfd2549421b15e54a2550592b46e58/backend/services/subprocess_backend.py)
+* [Loaded-model inventory and unload](https://github.com/debpalash/VoiceStudio/blob/afa361913cbfd2549421b15e54a2550592b46e58/backend/services/model_lifecycle.py)
+* [GPU queue and execution guards](https://github.com/debpalash/VoiceStudio/blob/afa361913cbfd2549421b15e54a2550592b46e58/backend/services/model_manager.py)
+* [Resource-gating job queue](https://github.com/debpalash/VoiceStudio/blob/afa361913cbfd2549421b15e54a2550592b46e58/backend/core/job_queue.py)
+* [Job metadata and SSE event persistence](https://github.com/debpalash/VoiceStudio/blob/afa361913cbfd2549421b15e54a2550592b46e58/backend/core/job_store.py)
+* [Early-bind backend startup](https://github.com/debpalash/VoiceStudio/blob/afa361913cbfd2549421b15e54a2550592b46e58/backend/main.py)
+* [Desktop backend supervision](https://github.com/debpalash/VoiceStudio/blob/afa361913cbfd2549421b15e54a2550592b46e58/frontend/src-tauri/src/backend.rs)
+* [Remote-worker design](https://github.com/debpalash/VoiceStudio/blob/afa361913cbfd2549421b15e54a2550592b46e58/docs/remote-workers.md)
+
+---
+
+# 69. Instruction for Coding Agents
 
 开发时遵循以下顺序：
 
