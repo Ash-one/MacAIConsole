@@ -1,0 +1,17 @@
+[package]
+name = "ai-cli"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "ai"
+path = "src/main.rs"
+
+[dependencies]
+ai-core = { path = "../ai-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }

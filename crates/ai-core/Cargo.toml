@@ -1,0 +1,11 @@
+[package]
+name = "ai-core"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
