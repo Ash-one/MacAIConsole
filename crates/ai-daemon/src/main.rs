@@ -6,12 +6,13 @@
 mod providers;
 mod runtime;
 
-use std::path::Path as FilePath;
+use std::path::{Path as FilePath, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Path as AxumPath, State};
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::extract::{DefaultBodyLimit, Multipart, Path as AxumPath, State};
+use axum::http::{header, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -22,7 +23,7 @@ use serde_json::{json, Value};
 
 use ai_core::errors::{AIError, ApiErrorBody};
 use ai_core::provider::ProviderError;
-use ai_core::request::ChatRequest;
+use ai_core::request::{ChatRequest, SpeechRequest, TranscriptionRequest};
 use ai_core::response::ModelEntry;
 
 use crate::runtime::Runtime;
@@ -56,6 +57,8 @@ async fn main() {
 
     let runtime = Arc::new(Runtime::new());
     runtime.register(mock_model()).await;
+    runtime.register(whisper_model()).await;
+    runtime.register(macos_say_model()).await;
 
     let state = AppState {
         runtime: Arc::clone(&runtime),
@@ -64,11 +67,14 @@ async fn main() {
         .route("/health", get(health))
         .route("/v1/models", get(list_models))
         .route("/v1/chat/completions", post(chat_completions))
+        .route("/v1/audio/transcriptions", post(audio_transcriptions))
+        .route("/v1/audio/speech", post(audio_speech))
         .route("/api/runtime", get(runtime_info))
         .route("/api/providers", get(provider_statuses))
         .route("/api/models/load", post(register_and_load_model))
         .route("/api/models/{id}/load", post(load_registered_model))
         .route("/api/models/{id}/unload", post(unload_model))
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .with_state(state);
 
     let addr = "127.0.0.1:11435";
@@ -94,6 +100,42 @@ fn mock_model() -> ai_core::model::ModelSpec {
         memory_estimate: Some(0),
         keep_alive: Some("always".to_string()),
         context_length: Some(4096),
+    }
+}
+
+fn whisper_model() -> ai_core::model::ModelSpec {
+    let path = std::env::var("AIWORK_WHISPER_MODEL")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(".build/models/ggml-base.bin"));
+    let size = path.metadata().ok().map(|metadata| metadata.len());
+    ai_core::model::ModelSpec {
+        id: "whisper-base".to_string(),
+        name: "Whisper Base".to_string(),
+        model_type: "stt".to_string(),
+        provider: "whisper.cpp".to_string(),
+        source: None,
+        path: Some(path.to_string_lossy().into_owned()),
+        format: Some("ggml".to_string()),
+        size_bytes: size,
+        memory_estimate: size,
+        keep_alive: Some("always".to_string()),
+        context_length: None,
+    }
+}
+
+fn macos_say_model() -> ai_core::model::ModelSpec {
+    ai_core::model::ModelSpec {
+        id: "macos-say".to_string(),
+        name: "macOS System Speech".to_string(),
+        model_type: "tts".to_string(),
+        provider: "macos-say".to_string(),
+        source: None,
+        path: None,
+        format: Some("system".to_string()),
+        size_bytes: None,
+        memory_estimate: Some(0),
+        keep_alive: Some("always".to_string()),
+        context_length: None,
     }
 }
 
@@ -125,6 +167,7 @@ async fn list_models(State(state): State<AppState>) -> Json<Value> {
             object: "model".to_string(),
             created: entry.loaded_at.unwrap_or(0),
             owned_by: format!("aiworkd/{}", entry.spec.provider),
+            model_type: entry.spec.model_type,
         })
         .collect();
     Json(json!({"object": "list", "data": models}))
@@ -278,6 +321,158 @@ async fn chat_completions(State(state): State<AppState>, Json(req): Json<ChatReq
             Ok(response) => Json(response).into_response(),
             Err(error) => provider_error(error),
         }
+    }
+}
+
+async fn audio_transcriptions(State(state): State<AppState>, mut multipart: Multipart) -> Response {
+    let mut upload: Option<UploadedAudio> = None;
+    let mut model = "whisper-base".to_string();
+    let mut language = None;
+    let mut response_format = "json".to_string();
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(error) => {
+                return api_error(
+                    AIError::InvalidRequest,
+                    format!("invalid multipart request: {error}"),
+                )
+            }
+        };
+        let name = field.name().unwrap_or_default().to_string();
+        match name.as_str() {
+            "file" => {
+                let file_name = field.file_name().unwrap_or("audio.wav").to_string();
+                if FilePath::new(&file_name)
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .map(|value| value.eq_ignore_ascii_case("wav"))
+                    != Some(true)
+                {
+                    return api_error(
+                        AIError::InvalidRequest,
+                        "whisper.cpp STT currently accepts .wav uploads",
+                    );
+                }
+                let bytes = match field.bytes().await {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        return api_error(
+                            AIError::InvalidRequest,
+                            format!("cannot read uploaded audio: {error}"),
+                        )
+                    }
+                };
+                if bytes.is_empty() {
+                    return api_error(AIError::InvalidRequest, "uploaded audio is empty");
+                }
+                let uploaded = UploadedAudio::new(state.runtime.next_request_id());
+                if let Err(error) = tokio::fs::write(&uploaded.path, &bytes).await {
+                    return api_error(
+                        AIError::Internal,
+                        format!("cannot stage uploaded audio: {error}"),
+                    );
+                }
+                upload = Some(uploaded);
+            }
+            "model" => match field.text().await {
+                Ok(value) if !value.trim().is_empty() => model = value,
+                Ok(_) => {}
+                Err(error) => {
+                    return api_error(
+                        AIError::InvalidRequest,
+                        format!("cannot read model field: {error}"),
+                    )
+                }
+            },
+            "language" => match field.text().await {
+                Ok(value) if !value.trim().is_empty() => language = Some(value),
+                Ok(_) => {}
+                Err(error) => {
+                    return api_error(
+                        AIError::InvalidRequest,
+                        format!("cannot read language field: {error}"),
+                    )
+                }
+            },
+            "response_format" => match field.text().await {
+                Ok(value) if !value.trim().is_empty() => response_format = value,
+                Ok(_) => {}
+                Err(error) => {
+                    return api_error(
+                        AIError::InvalidRequest,
+                        format!("cannot read response_format field: {error}"),
+                    )
+                }
+            },
+            _ => {}
+        }
+    }
+
+    let Some(upload) = upload else {
+        return api_error(
+            AIError::InvalidRequest,
+            "multipart field 'file' is required",
+        );
+    };
+    if !matches!(response_format.as_str(), "json" | "text") {
+        return api_error(
+            AIError::InvalidRequest,
+            "response_format must be 'json' or 'text'",
+        );
+    }
+    let request = TranscriptionRequest {
+        model,
+        file: Some(upload.path.to_string_lossy().into_owned()),
+        language,
+        response_format: Some(response_format.clone()),
+    };
+    match state.runtime.transcribe(request).await {
+        Ok(response) if response_format == "text" => (
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            response.text,
+        )
+            .into_response(),
+        Ok(response) => Json(response).into_response(),
+        Err(error) => provider_error(error),
+    }
+}
+
+async fn audio_speech(
+    State(state): State<AppState>,
+    Json(mut request): Json<SpeechRequest>,
+) -> Response {
+    if request.model.trim().is_empty() {
+        request.model = "macos-say".to_string();
+    }
+    match state.runtime.synthesize(request).await {
+        Ok(speech) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, speech.content_type)
+            .header(header::CONTENT_LENGTH, speech.bytes)
+            .body(Body::from(speech.audio))
+            .unwrap(),
+        Err(error) => provider_error(error),
+    }
+}
+
+struct UploadedAudio {
+    path: PathBuf,
+}
+
+impl UploadedAudio {
+    fn new(request_id: String) -> Self {
+        Self {
+            path: std::env::temp_dir().join(format!("macai-upload-{request_id}.wav")),
+        }
+    }
+}
+
+impl Drop for UploadedAudio {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 

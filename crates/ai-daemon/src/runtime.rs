@@ -12,12 +12,14 @@ use tokio::sync::{Mutex, RwLock};
 
 use ai_core::model::ModelSpec;
 use ai_core::provider::{
-    ChatProvider, ModelHandle, ProviderDescriptor, ProviderError, ProviderStatus,
+    ChatProvider, ModelHandle, Provider, ProviderDescriptor, ProviderError, ProviderStatus,
+    STTProvider, TTSProvider,
 };
-use ai_core::response::{LoadedModelInfo, RuntimeInfo};
+use ai_core::request::{SpeechRequest, TranscriptionRequest};
+use ai_core::response::{LoadedModelInfo, RuntimeInfo, SpeechResponse, TranscriptionResponse};
 use ai_core::AIError;
 
-use crate::providers::{LlamaCppProvider, MockProvider};
+use crate::providers::{LlamaCppProvider, MacOSSayProvider, MockProvider, WhisperCppProvider};
 
 /// 内存版模型注册表条目：模型规格 + 当前状态 + 使用时间。
 #[derive(Debug, Clone)]
@@ -30,7 +32,10 @@ pub struct RegistryEntry {
 
 pub struct Runtime {
     registry: RwLock<HashMap<String, RegistryEntry>>,
-    providers: HashMap<String, Arc<dyn ChatProvider>>,
+    providers: HashMap<String, Arc<dyn Provider>>,
+    chat_providers: HashMap<String, Arc<dyn ChatProvider>>,
+    stt_providers: HashMap<String, Arc<dyn STTProvider>>,
+    tts_providers: HashMap<String, Arc<dyn TTSProvider>>,
     handles: RwLock<HashMap<String, ModelHandle>>,
     model_leases: StdMutex<HashMap<String, u64>>,
     lifecycle_lock: Mutex<()>,
@@ -71,15 +76,32 @@ impl Drop for ModelLease {
 
 impl Runtime {
     pub fn new() -> Self {
-        let mut providers: HashMap<String, Arc<dyn ChatProvider>> = HashMap::new();
-        providers.insert("mock".to_string(), Arc::new(MockProvider));
-        providers.insert(
-            "llama.cpp".to_string(),
-            Arc::new(LlamaCppProvider::from_env()),
-        );
+        let mock = Arc::new(MockProvider);
+        let llama = Arc::new(LlamaCppProvider::from_env());
+        let whisper = Arc::new(WhisperCppProvider::from_env());
+        let macos_say = Arc::new(MacOSSayProvider::new());
+
+        let mut providers: HashMap<String, Arc<dyn Provider>> = HashMap::new();
+        providers.insert("mock".to_string(), mock.clone());
+        providers.insert("llama.cpp".to_string(), llama.clone());
+        providers.insert("whisper.cpp".to_string(), whisper.clone());
+        providers.insert("macos-say".to_string(), macos_say.clone());
+
+        let mut chat_providers: HashMap<String, Arc<dyn ChatProvider>> = HashMap::new();
+        chat_providers.insert("mock".to_string(), mock);
+        chat_providers.insert("llama.cpp".to_string(), llama);
+
+        let mut stt_providers: HashMap<String, Arc<dyn STTProvider>> = HashMap::new();
+        stt_providers.insert("whisper.cpp".to_string(), whisper);
+
+        let mut tts_providers: HashMap<String, Arc<dyn TTSProvider>> = HashMap::new();
+        tts_providers.insert("macos-say".to_string(), macos_say);
         Self {
             registry: RwLock::new(HashMap::new()),
             providers,
+            chat_providers,
+            stt_providers,
+            tts_providers,
             handles: RwLock::new(HashMap::new()),
             model_leases: StdMutex::new(HashMap::new()),
             lifecycle_lock: Mutex::new(()),
@@ -255,12 +277,73 @@ impl Runtime {
                 format!("model '{model_id}' not found"),
             )
         })?;
-        self.providers.get(&spec.provider).cloned().ok_or_else(|| {
+        self.chat_providers
+            .get(&spec.provider)
+            .cloned()
+            .ok_or_else(|| {
+                ProviderError::new(
+                    AIError::ProviderUnavailable,
+                    format!("provider '{}' does not support chat", spec.provider),
+                )
+            })
+    }
+
+    pub async fn transcribe(
+        self: &Arc<Self>,
+        request: TranscriptionRequest,
+    ) -> Result<TranscriptionResponse, ProviderError> {
+        let model_id = request.model.clone();
+        let _lease = self.model_lease(&model_id);
+        let _request = self.request_guard();
+        self.load_model(&model_id).await?;
+        let spec = self.get_model(&model_id).await.ok_or_else(|| {
             ProviderError::new(
-                AIError::ProviderUnavailable,
-                format!("provider '{}' is not registered", spec.provider),
+                AIError::ModelNotFound,
+                format!("model '{model_id}' not found"),
             )
-        })
+        })?;
+        let provider = self
+            .stt_providers
+            .get(&spec.provider)
+            .cloned()
+            .ok_or_else(|| {
+                ProviderError::new(
+                    AIError::ProviderUnavailable,
+                    format!("provider '{}' does not support STT", spec.provider),
+                )
+            })?;
+        let response = provider.transcribe(request).await?;
+        self.touch_model(&model_id).await;
+        Ok(response)
+    }
+
+    pub async fn synthesize(
+        self: &Arc<Self>,
+        request: SpeechRequest,
+    ) -> Result<SpeechResponse, ProviderError> {
+        let model_id = request.model.clone();
+        let _lease = self.model_lease(&model_id);
+        let _request = self.request_guard();
+        self.load_model(&model_id).await?;
+        let spec = self.get_model(&model_id).await.ok_or_else(|| {
+            ProviderError::new(
+                AIError::ModelNotFound,
+                format!("model '{model_id}' not found"),
+            )
+        })?;
+        let provider = self
+            .tts_providers
+            .get(&spec.provider)
+            .cloned()
+            .ok_or_else(|| {
+                ProviderError::new(
+                    AIError::ProviderUnavailable,
+                    format!("provider '{}' does not support TTS", spec.provider),
+                )
+            })?;
+        let response = provider.synthesize(request).await?;
+        self.touch_model(&model_id).await;
+        Ok(response)
     }
 
     pub async fn touch_model(&self, id: &str) {
@@ -456,13 +539,13 @@ mod tests {
     }
 
     #[test]
-    fn exposes_mock_and_llama_descriptors() {
+    fn exposes_all_provider_descriptors() {
         let runtime = Runtime::new();
         let ids: Vec<_> = runtime
             .provider_descriptors()
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect();
-        assert_eq!(ids, vec!["llama.cpp", "mock"]);
+        assert_eq!(ids, vec!["llama.cpp", "macos-say", "mock", "whisper.cpp"]);
     }
 }

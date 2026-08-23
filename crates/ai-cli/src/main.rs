@@ -49,6 +49,26 @@ enum Commands {
     Unload { model: String },
     /// 交互式聊天（文档 §18 Run）。
     Run { model: String },
+    /// 使用本地 STT 模型转写 PCM WAV。
+    Transcribe {
+        file: String,
+        #[arg(long, default_value = "whisper-base")]
+        model: String,
+        #[arg(long)]
+        language: Option<String>,
+    },
+    /// 使用本地 TTS Provider 生成 WAV。
+    Speak {
+        text: String,
+        #[arg(short, long, default_value = "speech.wav")]
+        output: String,
+        #[arg(long, default_value = "macos-say")]
+        model: String,
+        #[arg(long, default_value = "Tingting")]
+        voice: String,
+        #[arg(long, default_value_t = 1.0)]
+        speed: f64,
+    },
     /// 查看运行中的模型（文档 §18 Runtime）。
     Ps,
     /// 检查 API server；未运行时给出启动提示（文档 §18 Server）。
@@ -69,6 +89,18 @@ fn main() {
         } => cmd_load(&base, &path, id.as_deref(), context_length).map(|_| ()),
         Commands::Unload { model } => cmd_unload(&base, &model),
         Commands::Run { model } => cmd_run(&base, &model),
+        Commands::Transcribe {
+            file,
+            model,
+            language,
+        } => cmd_transcribe(&base, &file, &model, language.as_deref()),
+        Commands::Speak {
+            text,
+            output,
+            model,
+            voice,
+            speed,
+        } => cmd_speak(&base, &text, &output, &model, &voice, speed),
         Commands::Ps => cmd_ps(&base),
         Commands::Serve => cmd_serve(&base),
     };
@@ -135,6 +167,68 @@ fn http(method: &str, url: &str, body: Option<&str>) -> Result<(u16, String), St
     Ok((status, body))
 }
 
+fn http_binary(
+    method: &str,
+    url: &str,
+    content_type: &str,
+    body: &[u8],
+) -> Result<(u16, Vec<u8>), String> {
+    let rest = url
+        .strip_prefix("http://")
+        .ok_or_else(|| format!("unsupported url: {url}"))?;
+    let (host_port, path) = match rest.find('/') {
+        Some(index) => (&rest[..index], &rest[index..]),
+        None => (rest, "/"),
+    };
+    let mut stream =
+        TcpStream::connect(host_port).map_err(|error| format!("cannot connect: {error}"))?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(300)))
+        .ok();
+    let headers = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {host_port}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream
+        .write_all(headers.as_bytes())
+        .and_then(|_| stream.write_all(body))
+        .map_err(|error| format!("write failed: {error}"))?;
+
+    let mut reader = BufReader::new(stream);
+    let mut status_line = String::new();
+    reader
+        .read_line(&mut status_line)
+        .map_err(|error| format!("read failed: {error}"))?;
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|value| value.parse::<u16>().ok())
+        .ok_or_else(|| format!("bad status line: {status_line:?}"))?;
+    loop {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .map_err(|error| format!("read header failed: {error}"))?;
+        if line == "\r\n" || line == "\n" || line.is_empty() {
+            break;
+        }
+    }
+    let mut response = Vec::new();
+    reader
+        .read_to_end(&mut response)
+        .map_err(|error| format!("read body failed: {error}"))?;
+    Ok((status, response))
+}
+
+fn response_error(status: u16, body: &[u8]) -> String {
+    let value: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let message = value["error"]["message"]
+        .as_str()
+        .unwrap_or("unknown error");
+    let kind = value["error"]["type"].as_str().unwrap_or("error");
+    format!("{kind} (HTTP {status}): {message}")
+}
+
 fn post_json(base: &str, path: &str, body: &Value) -> Result<(u16, Value), String> {
     let (status, text) = http("POST", &format!("{base}{path}"), Some(&body.to_string()))?;
     let parsed: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
@@ -176,7 +270,7 @@ fn cmd_models(base: &str) -> Result<(), String> {
             println!(
                 "{:<12} {:<6} {}",
                 m["id"].as_str().unwrap_or("?"),
-                "llm",
+                m["type"].as_str().unwrap_or("?"),
                 m["owned_by"].as_str().unwrap_or("?")
             );
         }
@@ -302,6 +396,105 @@ fn cmd_unload(base: &str, model: &str) -> Result<(), String> {
         ));
     }
     println!("Unloaded {model}");
+    Ok(())
+}
+
+fn cmd_transcribe(
+    base: &str,
+    file: &str,
+    model: &str,
+    language: Option<&str>,
+) -> Result<(), String> {
+    let path = Path::new(file)
+        .canonicalize()
+        .map_err(|error| format!("cannot open audio '{file}': {error}"))?;
+    if path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("wav"))
+        != Some(true)
+    {
+        return Err("transcribe currently accepts .wav files".to_string());
+    }
+    let audio = std::fs::read(&path).map_err(|error| format!("cannot read audio: {error}"))?;
+    let boundary = format!(
+        "----macai-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
+    );
+    let mut body = Vec::new();
+    append_multipart_text(&mut body, &boundary, "model", model);
+    if let Some(language) = language {
+        append_multipart_text(&mut body, &boundary, "language", language);
+    }
+    append_multipart_text(&mut body, &boundary, "response_format", "json");
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(&audio);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let (status, response) = http_binary(
+        "POST",
+        &format!("{base}/v1/audio/transcriptions"),
+        &format!("multipart/form-data; boundary={boundary}"),
+        &body,
+    )?;
+    if status != 200 {
+        return Err(response_error(status, &response));
+    }
+    let value: Value = serde_json::from_slice(&response)
+        .map_err(|error| format!("invalid transcription response: {error}"))?;
+    println!("{}", value["text"].as_str().unwrap_or_default());
+    Ok(())
+}
+
+fn append_multipart_text(body: &mut Vec<u8>, boundary: &str, name: &str, value: &str) {
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+        )
+        .as_bytes(),
+    );
+}
+
+fn cmd_speak(
+    base: &str,
+    text: &str,
+    output: &str,
+    model: &str,
+    voice: &str,
+    speed: f64,
+) -> Result<(), String> {
+    let request = json!({
+        "model": model,
+        "input": text,
+        "voice": voice,
+        "format": "wav",
+        "speed": speed,
+    });
+    let bytes = request.to_string().into_bytes();
+    let (status, response) = http_binary(
+        "POST",
+        &format!("{base}/v1/audio/speech"),
+        "application/json",
+        &bytes,
+    )?;
+    if status != 200 {
+        return Err(response_error(status, &response));
+    }
+    if response.len() < 44 || &response[0..4] != b"RIFF" || &response[8..12] != b"WAVE" {
+        return Err("daemon returned invalid WAV data".to_string());
+    }
+    std::fs::write(output, &response)
+        .map_err(|error| format!("cannot write '{output}': {error}"))?;
+    println!("Wrote {} bytes to {output}", response.len());
     Ok(())
 }
 
