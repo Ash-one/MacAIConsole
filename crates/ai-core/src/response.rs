@@ -9,6 +9,8 @@ pub struct ModelEntry {
     pub object: String, // "model"
     pub created: u64,
     pub owned_by: String,
+    #[serde(rename = "type")]
+    pub model_type: String,
 }
 
 /// Chat 用量统计（文档 §46）。
@@ -79,6 +81,8 @@ pub struct TranscriptionResponse {
 pub struct SpeechResponse {
     pub content_type: String,
     pub bytes: u64,
+    #[serde(skip)]
+    pub audio: Vec<u8>,
 }
 
 /// GET /api/runtime 响应（文档 §17、§37）。

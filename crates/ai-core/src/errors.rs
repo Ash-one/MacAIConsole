@@ -13,6 +13,7 @@ pub enum AIError {
     InvalidRequest,
     DownloadFailed,
     BackendCrashed,
+    Timeout,
     Internal,
 }
 
@@ -26,6 +27,7 @@ impl AIError {
             AIError::InvalidRequest => "invalid_request",
             AIError::DownloadFailed => "download_failed",
             AIError::BackendCrashed => "backend_crashed",
+            AIError::Timeout => "timeout",
             AIError::Internal => "internal",
         }
     }
@@ -39,6 +41,7 @@ impl AIError {
             AIError::ModelLoadFailed => 500,
             AIError::DownloadFailed => 502,
             AIError::BackendCrashed => 502,
+            AIError::Timeout => 504,
             AIError::Internal => 500,
         }
     }
