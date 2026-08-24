@@ -93,6 +93,9 @@ pub struct RuntimeInfo {
     pub uptime_secs: u64,
     pub loaded_models: Vec<LoadedModelInfo>,
     pub active_requests: u64,
+    /// AI 内存预算（字节）；None 表示无法探测物理内存。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_budget: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

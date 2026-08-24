@@ -79,7 +79,11 @@ impl KokoroMlxProvider {
             }
         }
         // 工作目录为仓库根；找不到时向上探测两层，兼容不同启动方式。
-        for base in [PathBuf::from("."), PathBuf::from(".."), PathBuf::from("../..")] {
+        for base in [
+            PathBuf::from("."),
+            PathBuf::from(".."),
+            PathBuf::from("../.."),
+        ] {
             let candidate = base.join(&self.python);
             if candidate.is_file() {
                 return Some(candidate);
@@ -89,7 +93,11 @@ impl KokoroMlxProvider {
     }
 
     fn resolve_script(&self) -> Option<PathBuf> {
-        for base in [PathBuf::from("."), PathBuf::from(".."), PathBuf::from("../..")] {
+        for base in [
+            PathBuf::from("."),
+            PathBuf::from(".."),
+            PathBuf::from("../.."),
+        ] {
             let candidate = base.join(&self.script);
             if candidate.is_file() {
                 return Some(candidate.canonicalize().unwrap_or(candidate));
@@ -132,7 +140,10 @@ impl Provider for KokoroMlxProvider {
         let script_found = self.resolve_script().is_some();
         let resident = {
             let guard = self.state.lock().await;
-            guard.as_ref().map(|state| vec![state.model_id.clone()]).unwrap_or_default()
+            guard
+                .as_ref()
+                .map(|state| vec![state.model_id.clone()])
+                .unwrap_or_default()
         };
         let reason = if !python_found {
             Some("kokoro venv python not found".to_string())
@@ -204,7 +215,11 @@ impl Provider for KokoroMlxProvider {
 
         *self.state.lock().await = Some(KokoroState {
             model_id: model.id.clone(),
-            worker: WorkerProcess { child, stdin, stdout },
+            worker: WorkerProcess {
+                child,
+                stdin,
+                stdout,
+            },
         });
         Ok(ModelHandle {
             model_id: model.id.clone(),
@@ -360,7 +375,10 @@ impl TTSProvider for KokoroMlxProvider {
             ));
         }
         let wav_path = reply.wav.ok_or_else(|| {
-            ProviderError::new(AIError::BackendCrashed, "kokoro worker returned no audio path")
+            ProviderError::new(
+                AIError::BackendCrashed,
+                "kokoro worker returned no audio path",
+            )
         })?;
 
         let audio = tokio::fs::read(&wav_path).await.map_err(|error| {

@@ -19,12 +19,15 @@ struct RuntimeInfo: Decodable {
     var uptimeSecs: UInt64
     var activeRequests: UInt64
     var loadedModels: [LoadedModel]
+    /// AI 内存预算（字节）；daemon 无法探测时缺失。
+    var memoryBudget: UInt64?
 
     enum CodingKeys: String, CodingKey {
         case version, pid
         case uptimeSecs = "uptime_secs"
         case activeRequests = "active_requests"
         case loadedModels = "loaded_models"
+        case memoryBudget = "memory_budget"
     }
 }
 
