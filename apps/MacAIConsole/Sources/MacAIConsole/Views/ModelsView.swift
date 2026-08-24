@@ -7,7 +7,7 @@ struct ModelsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 24) {
                 if controller.phase != .online {
                     OfflineHint { controller.startDaemon() }
                 }
@@ -17,8 +17,9 @@ struct ModelsView: View {
                 registeredSection
                 repoSection
             }
-            .padding(20)
+            .padding(24)
         }
+        .background(Color(nsColor: .underPageBackgroundColor))
         .navigationTitle("模型管理")
         .toolbar {
             ToolbarItemGroup {
@@ -55,8 +56,13 @@ struct ModelsView: View {
         Set((controller.info?.loadedModels ?? []).map(\.id))
     }
 
-    /// 按类型分组展示顺序：llm → tts → stt，其余未知类型按字母序殿后。
-    private let typeOrder = ["llm", "tts", "stt"]
+    /// 已注册的模型 ID（daemon 注册表里有记录就算，不论是否加载）。
+    private var registeredIDs: Set<String> {
+        Set(controller.registeredModels.map(\.id))
+    }
+
+    /// 按类型分组展示顺序：llm → stt → tts，其余未知类型按字母序殿后。
+    private let typeOrder = ["llm", "stt", "tts"]
 
     private var groupedTypes: [String] {
         let present = Set(controller.registeredModels.map(\.modelType))
@@ -86,56 +92,61 @@ struct ModelsView: View {
     }
 
     private var registeredSection: some View {
-        GroupBox("运行时注册的模型") {
+        GroupBox {
             if controller.registeredModels.isEmpty {
                 Text(controller.phase == .online ? "注册表为空" : "守护进程离线，暂无数据")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 44)
             } else {
-                VStack(spacing: 0) {
+                VStack(spacing: 10) {
                     ForEach(groupedTypes, id: \.self) { type in
-                        typeHeader(type)
-                        ForEach(entries(ofType: type)) { entry in
-                            RegisteredModelRow(
-                                entry: entry,
-                                isLoaded: loadedIDs.contains(entry.id),
-                                isWorkerProcess: isWorker(entry)
-                            )
-                            if entry.id != entries(ofType: type).last?.id { Divider() }
+                        ModelTypeSection(type: type, title: typeLabel(type), count: entries(ofType: type).count) {
+                            ForEach(entries(ofType: type)) { entry in
+                                RegisteredModelRow(
+                                    entry: entry,
+                                    isLoaded: loadedIDs.contains(entry.id),
+                                    isWorkerProcess: isWorker(entry)
+                                )
+                                if entry.id != entries(ofType: type).last?.id { Divider().opacity(0.25) }
+                            }
                         }
-                        if type != groupedTypes.last { Divider() }
                     }
                 }
-                .padding(.horizontal, 4)
             }
+        } label: {
+            Text("模型注册 ID")
+                .font(.title3.weight(.semibold))
+                .padding(.bottom, 8)
         }
-    }
-
-    private func typeHeader(_ type: String) -> some View {
-        HStack(spacing: 6) {
-            ModelTypeIcon(type: type)
-            Text(typeLabel(type))
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Text("\(entries(ofType: type).count) 个")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.vertical, 6)
     }
 
     private var repoSection: some View {
-        GroupBox("模型仓库（Models/llm · tts · stt）") {
+        GroupBox {
             VStack(alignment: .leading, spacing: 0) {
-                Text("路径：\(ModelRepository.baseURL.path)")
-                    .font(.caption2)
+                HStack(spacing: 6) {
+                    Text("路径：\(ModelRepository.baseURL.path)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(ModelRepository.baseURL.path)
+                    Button {
+                        let pasteboard = NSPasteboard.general
+                        pasteboard.clearContents()
+                        pasteboard.setString(ModelRepository.baseURL.path, forType: .string)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.borderless)
                     .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 4)
+                    .help("复制完整路径")
+                    .padding(.trailing, 2)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 4)
+                .padding(.vertical, 4)
 
                 if repoModels.isEmpty {
                     VStack(spacing: 8) {
@@ -150,16 +161,22 @@ struct ModelsView: View {
                     }
                     .frame(maxWidth: .infinity, minHeight: 44)
                 } else {
-                    ForEach(ModelRepository.folderNames, id: \.self) { type in
-                        let entries = repoModels.filter { $0.modelType == type }
-                        if !entries.isEmpty {
-                            typeHeader(type)
-                            ForEach(entries) { model in
-                                RepoModelRow(model: model, isLoaded: loadedIDs.contains(model.modelID))
-                                if model.id != entries.last?.id { Divider() }
-                            }
-                            if type != ModelRepository.folderNames.last {
-                                Divider().padding(.vertical, 4)
+                    VStack(spacing: 10) {
+                        ForEach(ModelRepository.folderNames, id: \.self) { type in
+                            let entries = repoModels.filter { $0.modelType == type }
+                            if !entries.isEmpty {
+                                let allRegistered = entries.allSatisfy { registeredIDs.contains($0.modelID) }
+                                ModelTypeSection(type: type, title: typeLabel(type), count: entries.count, dimmed: allRegistered) {
+                                    ForEach(entries) { model in
+                                        RepoModelRow(
+                                            model: model,
+                                            // 仓库行只关心「是否已注册」，不同步展示运行时加载状态。
+                                            isLoaded: false,
+                                            isRegistered: registeredIDs.contains(model.modelID)
+                                        )
+                                        if model.id != entries.last?.id { Divider().opacity(0.25) }
+                                    }
+                                }
                             }
                         }
                     }
@@ -167,6 +184,68 @@ struct ModelsView: View {
             }
             .padding(.horizontal, 4)
             .padding(.bottom, 6)
+        } label: {
+            Text("模型仓库（Models/llm · tts · stt）")
+                .font(.title3.weight(.semibold))
+                .padding(.bottom, 8)
+        }
+    }
+}
+
+/// 可折叠的类型分组：LLM / STT / TTS。默认展开，chevron 随状态旋转。
+/// `dimmed` 为 true 时（仓库区该类型已全部注册）标题降灰，提示整组不重要。
+struct ModelTypeSection<Content: View>: View {
+    let type: String
+    let title: String
+    let count: Int
+    var dimmed: Bool = false
+    @ViewBuilder let content: () -> Content
+
+    @State private var isExpanded = true
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            content()
+                .padding(.leading, 24)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(dimmed ? .quaternary : .tertiary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                ModelTypeIcon(type: type)
+                    .opacity(dimmed ? 0.55 : 1)
+                Text(title)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(dimmed ? Color(nsColor: .secondaryLabelColor) : .primary)
+                Spacer(minLength: 8)
+                Text("\(count) 个")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.primary.opacity(0.06)))
+            }
+            // 折叠头与子条目行同高：与行内 padding 对齐，保证收起时占位一致。
+            .padding(.vertical, 10)
+            .padding(.horizontal, 6)
+            .contentShape(Rectangle())
+        }
+        .disclosureGroupStyle(PlainDisclosureStyle())
+    }
+}
+
+/// 无默认指示器的折叠样式：标题行整体可点，展开动画用系统 spring。
+struct PlainDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            configuration.label
+                .onTapGesture {
+                    withAnimation(.snappy) { configuration.isExpanded.toggle() }
+                }
+            if configuration.isExpanded {
+                configuration.content
+            }
         }
     }
 }
@@ -178,69 +257,94 @@ struct RegisteredModelRow: View {
     /// true 表示 Provider 为 worker 隔离：加载=拉起独立子进程，卸载=结束该进程。
     let isWorkerProcess: Bool
 
+    @State private var isHovering = false
+
     var body: some View {
-        HStack {
+        HStack(spacing: 10) {
             ModelTypeIcon(type: entry.modelType)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
                     Text(entry.id)
-                        .font(.body.weight(.medium))
+                        .font(.body.weight(.semibold))
                     if isWorkerProcess {
                         Text("独立进程")
-                            .font(.caption2)
-                            .padding(.horizontal, 6)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 8)
                             .padding(.vertical, 2)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.12)))
-                            .foregroundStyle(.secondary)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.10)))
                     }
                 }
                 Text(entry.ownedBy)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
             }
             Spacer(minLength: 12)
             if isLoaded {
-                Text(isWorkerProcess ? "运行中" : "已加载")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.green)
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(.green)
+                        .frame(width: 6, height: 6)
+                        .shadow(color: .green.opacity(0.7), radius: 2.5)
+                    Text(isWorkerProcess ? "运行中" : "已加载")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.green)
+                }
+                .help(isWorkerProcess ? "独立进程正在运行" : "模型已加载到内存")
                 if controller.busyModelIDs.contains(entry.id) {
-                    ProgressView().controlSize(.small)
+                    ProgressView()
                 } else {
-                    Button(isWorkerProcess ? "停止" : "卸载") {
+                    Button {
                         Task { await controller.unload(entry.id) }
+                    } label: {
+                        Image(systemName: isWorkerProcess ? "stop.fill" : "eject.fill")
+                            .font(.callout.weight(.semibold))
                     }
                     .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .tint(Color(nsColor: .secondaryLabelColor))
+                    .help(isWorkerProcess ? "停止独立进程" : "卸载")
                     .disabled(controller.phase != .online)
                 }
             } else {
                 if controller.busyModelIDs.contains(entry.id) {
-                    ProgressView().controlSize(.small)
+                    ProgressView()
                 } else {
-                    Button(isWorkerProcess ? "启动" : "加载") {
+                    Button {
                         Task { await controller.loadRegistered(entry.id) }
+                    } label: {
+                        Image(systemName: "play.fill")
+                            .font(.callout.weight(.semibold))
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+                    .help(isWorkerProcess ? "启动独立进程" : "加载")
                     .disabled(controller.phase != .online)
                 }
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 6)
+        .contentShape(Rectangle())
+        .background(isHovering ? Color.primary.opacity(0.05) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .onHover { isHovering = $0 }
+        .animation(.snappy(duration: 0.15), value: isHovering)
     }
 }
 
 /// 模型仓库中的一行：显示文件与大小，一键注册加载。
+/// 已注册（注册表里有该 ID）的行整行变灰，按钮切换为「重新注册」。
 /// 注册结果持久化在 daemon 的 SQLite 注册表，daemon 重启后自动恢复清单。
 /// llm 行可编辑上下文长度；提交后自动以新上下文重载（daemon 会替换驻留进程）。
 struct RepoModelRow: View {
     @Environment(DaemonController.self) private var controller
     let model: RepoModel
     let isLoaded: Bool
+    let isRegistered: Bool
 
     @State private var contextDraft = ""
     @State private var isReloading = false
     @State private var isPreviewing = false
+    @State private var isHovering = false
 
     private var isLLM: Bool { model.modelType == "llm" }
     private var isTTS: Bool { model.modelType == "tts" }
@@ -250,14 +354,16 @@ struct RepoModelRow: View {
     }
 
     var body: some View {
-        HStack {
+        HStack(spacing: 10) {
             ModelTypeIcon(type: model.modelType)
-            VStack(alignment: .leading, spacing: 2) {
+                .opacity(isRegistered ? 0.55 : 1)
+            VStack(alignment: .leading, spacing: 3) {
                 Text(model.fileName)
-                    .font(.body.weight(.medium))
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(isRegistered ? .secondary : .primary)
                 Text("\(Format.bytes(model.sizeBytes)) · Models/\(model.modelType)/")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isRegistered ? .quaternary : .tertiary)
                     .lineLimit(1)
             }
             Spacer(minLength: 12)
@@ -269,7 +375,13 @@ struct RepoModelRow: View {
             }
             loadControls
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 6)
+        .contentShape(Rectangle())
+        .background(isHovering ? Color.primary.opacity(0.05) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .onHover { isHovering = $0 }
+        .animation(.snappy(duration: 0.15), value: isHovering)
         .onAppear { contextDraft = Self.displayValue(ModelRepository.contextLength(for: model.modelID)) }
     }
 
@@ -392,25 +504,27 @@ struct RepoModelRow: View {
     @ViewBuilder
     private var loadControls: some View {
         if isLoaded && !contextChanged {
-            Text("已加载")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.green)
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(.green)
+                    .frame(width: 6, height: 6)
+                    .shadow(color: .green.opacity(0.7), radius: 2.5)
+                Text("已加载")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.green)
+            }
+            .help("模型已加载到内存")
         }
         if busy {
             ProgressView().controlSize(.small)
-        } else if isLoaded {
-            Button(isLLM ? "停止" : "卸载") {
-                Task { await controller.unload(model.modelID) }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(controller.phase != .online)
         } else {
-            Button("注册并加载") {
+            Button(isRegistered ? "重新注册" : "注册并加载") {
                 Task { await register() }
             }
             .buttonStyle(.bordered)
-            .controlSize(.small)
+            .tint(isRegistered ? Color(nsColor: .secondaryLabelColor) : Color.accentColor)
+            .font(.callout.weight(isRegistered ? .regular : .medium))
+            .help(isRegistered ? "以当前设置重新注册并加载" : "注册到运行时并立即加载")
             .disabled(controller.phase != .online)
         }
     }

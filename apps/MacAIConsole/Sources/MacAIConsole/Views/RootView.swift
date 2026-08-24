@@ -12,7 +12,7 @@ struct RootView: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $page) {
-                Label("运行状态", systemImage: "gauge.with.dotted.needle")
+                Label("运行状态", systemImage: "gauge")
                     .tag(Page.runtime)
                 Label("模型管理", systemImage: "shippingbox")
                     .tag(Page.models)

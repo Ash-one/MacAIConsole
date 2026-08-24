@@ -18,7 +18,7 @@ struct RepoModel: Identifiable, Hashable {
 }
 
 enum ModelRepository {
-    static let folderNames = ["llm", "tts", "stt"]
+    static let folderNames = ["llm", "stt", "tts"]
 
     static var baseURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
