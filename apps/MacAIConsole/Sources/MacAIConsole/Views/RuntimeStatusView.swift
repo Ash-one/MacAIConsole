@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RuntimeStatusView: View {
     @Environment(DaemonController.self) private var controller
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         ScrollView {
@@ -51,10 +52,10 @@ struct RuntimeStatusView: View {
             StatCard(title: "运行时长", value: info.map { Format.uptime($0.uptimeSecs) } ?? "—")
             StatCard(title: "活跃请求", value: info.map { "\($0.activeRequests)" } ?? "—")
             if let budget = info?.memoryBudget, budget > 0 {
-                StatCard(
-                    title: "内存预算",
-                    value: Format.bytes(budget)
-                )
+            MemoryBudgetCard(
+                value: Format.bytes(budget),
+                onEdit: { openSettings() }
+            )
             }
         }
     }
@@ -94,6 +95,32 @@ struct RuntimeStatusView: View {
                 }
                 .padding(.horizontal, 4)
             }
+        }
+    }
+}
+
+struct MemoryBudgetCard: View {
+    let value: String
+    let onEdit: () -> Void
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("内存预算")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Button("修改", action: onEdit)
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
+                Text(value)
+                    .font(.title3.weight(.semibold).monospacedDigit())
+                    .contentTransition(.numericText())
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(2)
         }
     }
 }
