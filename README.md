@@ -21,6 +21,7 @@ OpenAI ─┘                   └─> llama.cpp worker ─> Metal / GGUF
 - 普通 Chat Completion 与逐 token SSE streaming
 - WhisperCppProvider：本地 `whisper-cli` + Metal 离线转写
 - MacOSSayProvider：macOS `say` + `afconvert` 输出 16 kHz mono PCM WAV
+- KokoroMlxProvider：Kokoro-82M-zh 中文 TTS，常驻 Python worker（mlx-audio / Metal GPU）
 - OpenAI-compatible endpoints：
   - `GET /health`
   - `GET /v1/models`
@@ -242,7 +243,7 @@ Wrote 99824 bytes to .build/tts-stt-test.wav
 
 `ggml-base` 体积较小，示例重点验证完整链路。需要更高转写精度时，可通过同一下载脚本选择更大的 whisper.cpp 模型，并将 `AIWORK_WHISPER_MODEL` 指向对应 `.bin` 文件。
 
-TTS HTTP API：
+TTS HTTP API（macos-say 系统语音）：
 
 ```bash
 curl http://127.0.0.1:11435/v1/audio/speech \
@@ -266,6 +267,54 @@ curl http://127.0.0.1:11435/v1/audio/transcriptions \
   -F language=zh \
   -F response_format=json
 ```
+
+### Kokoro 中文 TTS（MLX，Metal GPU 加速）
+
+[1038lab/Kokoro-82M-zh-MLX](https://huggingface.co/1038lab/Kokoro-82M-zh-MLX) 提供 103 个声音
+（55 中文女声 zf_*、45 中文男声 zm_*、3 英文），由常驻 Python worker（mlx-audio）推理。
+
+一次性环境准备：
+
+```bash
+# Python venv + 依赖（Python 3.12）
+/opt/homebrew/bin/python3.12 -m venv .build/kokoro-venv
+.build/kokoro-venv/bin/pip install mlx-audio "misaki[zh]" phonemizer-fork espeakng-loader
+
+# 模型文件放入模型仓库的 tts/ 分区
+mkdir -p "$HOME/Library/Application Support/MacAIConsole/Models/tts/Kokoro-82M-zh-MLX/voices"
+cd "$HOME/Library/Application Support/MacAIConsole/Models/tts/Kokoro-82M-zh-MLX"
+curl -LO https://huggingface.co/1038lab/Kokoro-82M-zh-MLX/resolve/main/model.safetensors
+curl -LO https://huggingface.co/1038lab/Kokoro-82M-zh-MLX/resolve/main/config.json
+# 下载 voices/*.safetensors 到 voices/ 目录（103 个文件，每个约 0.5MB）
+```
+
+注册并加载（GUI「模型管理 → 添加模型」选类型 TTS，或直接调 API）：
+
+```bash
+curl http://127.0.0.1:11435/api/models/load \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "path": "'"$HOME"'/Library/Application Support/MacAIConsole/Models/tts/Kokoro-82M-zh-MLX",
+    "id": "kokoro-zh",
+    "model_type": "tts"
+  }'
+```
+
+合成中文语音（本机实测 RTF≈0.55，快于实时）：
+
+```bash
+curl http://127.0.0.1:11435/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "kokoro-zh",
+    "input": "主人你好，我是Kokoro中文语音合成。",
+    "voice": "zf_001",
+    "response_format": "wav"
+  }' \
+  -o kokoro.wav && afplay kokoro.wav
+```
+
+说明：`model_type` 决定 provider 路由——`llm`→llama.cpp（`.gguf`）、`stt`→whisper.cpp（`.bin`）、`tts`→kokoro-mlx（含 `model.safetensors` 的目录）。加载 = 拉起对应 worker 进程，卸载 = 结束该进程。
 
 ## HTTP API
 

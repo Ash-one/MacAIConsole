@@ -47,6 +47,8 @@ struct LoadModelRequest {
     path: String,
     id: Option<String>,
     name: Option<String>,
+    /// llm（默认）/ stt。llm → llama.cpp (.gguf)，stt → whisper.cpp (.bin)。
+    model_type: Option<String>,
     context_length: Option<u64>,
     keep_alive: Option<String>,
 }
@@ -201,10 +203,41 @@ async fn register_and_load_model(
             )
         }
     };
-    if path.extension().and_then(|value| value.to_str()) != Some("gguf") {
+    // 类型路由：stt → whisper.cpp (.bin)，tts → kokoro-mlx（模型目录），默认 llm → llama.cpp (.gguf)。
+    let model_type = match request.model_type.as_deref() {
+        Some("llm") | None => "llm",
+        Some("stt") => "stt",
+        Some("tts") => "tts",
+        Some(other) => {
+            return api_error(
+                AIError::InvalidRequest,
+                format!("unsupported model_type '{other}' (expected \"llm\", \"stt\" or \"tts\")"),
+            );
+        }
+    };
+    let expected_ext = match model_type {
+        "llm" => Some("gguf"),
+        "stt" => Some("bin"),
+        _ => None,
+    };
+    if let Some(expected_ext) = expected_ext {
+        if path.extension().and_then(|value| value.to_str()) != Some(expected_ext) {
+            return api_error(
+                AIError::InvalidRequest,
+                format!(
+                    "expected a .{expected_ext} model for type '{model_type}', got '{}'",
+                    path.display()
+                ),
+            );
+        }
+    }
+    if model_type == "tts" && !path.is_dir() {
         return api_error(
             AIError::InvalidRequest,
-            format!("expected a .gguf model, got '{}'", path.display()),
+            format!(
+                "expected a model directory containing model.safetensors for type 'tts', got '{}'",
+                path.display()
+            ),
         );
     }
 
@@ -229,17 +262,22 @@ async fn register_and_load_model(
             )
         }
     };
+    let (provider, format, keep_alive_default) = match model_type {
+        "llm" => ("llama.cpp", Some("gguf"), Some("5m")),
+        "stt" => ("whisper.cpp", Some("bin"), Some("always")),
+        _ => ("kokoro-mlx", None, Some("always")),
+    };
     let spec = ai_core::model::ModelSpec {
         id: id.clone(),
         name: request.name.unwrap_or_else(|| id.clone()),
-        model_type: "llm".to_string(),
-        provider: "llama.cpp".to_string(),
+        model_type: model_type.to_string(),
+        provider: provider.to_string(),
         source: None,
         path: Some(path.to_string_lossy().into_owned()),
-        format: Some("gguf".to_string()),
+        format: format.map(String::from),
         size_bytes: Some(metadata.len()),
         memory_estimate: Some(metadata.len()),
-        keep_alive: request.keep_alive.or_else(|| Some("5m".to_string())),
+        keep_alive: request.keep_alive.or_else(|| keep_alive_default.map(String::from)),
         context_length: request.context_length.or(Some(4096)),
     };
 
