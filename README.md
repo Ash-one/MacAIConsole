@@ -306,13 +306,17 @@ curl http://127.0.0.1:11435/api/models/load \
 curl http://127.0.0.1:11435/v1/audio/speech \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "kokoro-zh",
+    "model": "Kokoro-82M-zh-MLX",
     "input": "主人你好，我是Kokoro中文语音合成。",
     "voice": "zf_001",
     "response_format": "wav"
   }' \
   -o kokoro.wav && afplay kokoro.wav
 ```
+
+> 排错提示：请求失败时 daemon 返回 JSON 错误体，`curl -o` 会把它写进输出文件——
+> 若 `afplay` 报 AudioFileOpenURL failed，先 `cat kokoro.wav` 查看实际错误
+> （最常见是 model ID 与注册时不一致）。
 
 说明：`model_type` 决定 provider 路由——`llm`→llama.cpp（`.gguf`）、`stt`→whisper.cpp（`.bin`）、`tts`→kokoro-mlx（含 `model.safetensors` 的目录）。加载 = 拉起对应 worker 进程，卸载 = 结束该进程。
 
