@@ -50,6 +50,12 @@ struct RuntimeStatusView: View {
             StatCard(title: "PID", value: info.map { "\($0.pid)" } ?? "—")
             StatCard(title: "运行时长", value: info.map { Format.uptime($0.uptimeSecs) } ?? "—")
             StatCard(title: "活跃请求", value: info.map { "\($0.activeRequests)" } ?? "—")
+            if let budget = info?.memoryBudget, budget > 0 {
+                StatCard(
+                    title: "内存预算",
+                    value: Format.bytes(budget)
+                )
+            }
         }
     }
 

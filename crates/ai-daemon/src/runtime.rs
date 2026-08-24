@@ -645,6 +645,7 @@ impl Runtime {
             uptime_secs: self.started_at.elapsed().as_secs(),
             loaded_models,
             active_requests: self.active_requests.load(Ordering::SeqCst),
+            memory_budget: self.memory_budget,
         }
     }
 }

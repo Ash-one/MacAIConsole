@@ -230,7 +230,8 @@ struct RegisteredModelRow: View {
     }
 }
 
-/// 模型仓库中的一行：显示文件与大小，一键注册加载（daemon 注册表在内存，重启后从这里恢复）。
+/// 模型仓库中的一行：显示文件与大小，一键注册加载。
+/// 注册结果持久化在 daemon 的 SQLite 注册表，daemon 重启后自动恢复清单。
 /// llm 行可编辑上下文长度；提交后自动以新上下文重载（daemon 会替换驻留进程）。
 struct RepoModelRow: View {
     @Environment(DaemonController.self) private var controller
