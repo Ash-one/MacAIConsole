@@ -19,6 +19,28 @@ struct MenuBarContentView: View {
                 LabeledContent("运行时长", value: Format.uptime(info.uptimeSecs))
                 LabeledContent("活跃请求", value: "\(info.activeRequests)")
                 LabeledContent("已加载模型", value: "\(info.loadedModels.count)")
+
+                // 实时列出每个已加载模型：名称 + 运行状态（随 2s 轮询刷新）。
+                if !info.loadedModels.isEmpty {
+                    VStack(alignment: .leading, spacing: 5) {
+                        ForEach(info.loadedModels) { model in
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(model.state == "ready" ? Color.green : Color.orange)
+                                    .frame(width: 6, height: 6)
+                                Text(model.id)
+                                    .font(.callout.weight(.medium))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer(minLength: 8)
+                                Text(model.state == "ready" ? "就绪" : model.state)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .padding(.leading, 4)
+                }
             } else if controller.phase == .offline {
                 Text("aiworkd 未运行。启动后这里会显示实时状态。")
                     .font(.callout)
