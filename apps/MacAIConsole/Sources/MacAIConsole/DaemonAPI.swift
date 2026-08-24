@@ -57,7 +57,8 @@ struct ModelEntry: Decodable, Identifiable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id
         case ownedBy = "owned_by"
-        case modelType = "model_type"
+        // /v1/models 实际返回的字段名是 "type"（OpenAI 兼容格式）。
+        case modelType = "type"
     }
 }
 
