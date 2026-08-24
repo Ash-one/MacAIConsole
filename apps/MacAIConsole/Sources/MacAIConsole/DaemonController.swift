@@ -30,7 +30,7 @@ final class DaemonController {
     private var childProcess: Process?
     private var logHandle: FileHandle?
     private var stopDeadline: Date?
-
+    private var restartAfterStop = false
     // MARK: - 生命周期
 
     func bootstrapIfNeeded() {
@@ -81,6 +81,19 @@ final class DaemonController {
             kill(pid_t(pid), SIGTERM)
         } else if let child = childProcess, child.isRunning {
             child.terminate()
+        }
+    }
+
+    func restartDaemon() {
+        restartAfterStop = true
+        switch phase {
+        case .offline:
+            restartAfterStop = false
+            startDaemon()
+        case .online:
+            stopDaemon()
+        case .starting, .stopping:
+            break
         }
     }
 
@@ -146,7 +159,13 @@ final class DaemonController {
 
         case .stopping:
             if !(await api.isHealthy()) {
+                let shouldRestart = restartAfterStop
                 finishStop()
+                if shouldRestart {
+                    restartAfterStop = false
+                    startDaemon()
+                    return 0.4
+                }
                 return 1.0
             }
             if let deadline = stopDeadline, Date() >= deadline {
@@ -185,6 +204,11 @@ final class DaemonController {
 
         var environment = ProcessInfo.processInfo.environment
         environment["RUST_LOG"] = "info"
+        if let budget = AppSettings.parseMemoryBudget(AppSettings.memoryBudgetText) {
+            environment["AIWORKD_MEMORY_BUDGET"] = String(budget)
+        } else {
+            environment.removeValue(forKey: "AIWORKD_MEMORY_BUDGET")
+        }
         process.environment = environment
 
         // binary 位于 <仓库>/target/<配置>/aiworkd，工作目录定为仓库根
