@@ -320,6 +320,12 @@ curl http://127.0.0.1:11435/v1/audio/speech \
 
 说明：`model_type` 决定 provider 路由——`llm`→llama.cpp（`.gguf`）、`stt`→whisper.cpp（`.bin`）、`tts`→kokoro-mlx（含 `model.safetensors` 的目录）。加载 = 拉起对应 worker 进程，卸载 = 结束该进程。
 
+> 已知兼容性修复：mlx-audio 的 KokoroPipeline 调用 `misaki.zh.ZHG2P()` 时不带
+> `version` 参数，默认输出 IPA 音素（`tu↗ʂu→`），与 v1.1-zh 模型的注音符号 vocab
+> 不匹配——声调会被静默丢弃、中文听不清。`scripts/kokoro_worker.py` 启动时会
+> 把默认 version 钉为 `'1.1'`（与官方 kokoro 一致），输出 `ㄉㄨ2ㄕㄨ1…` 注音符号，
+> 100% 命中 vocab。若更新 mlx-audio 后中文异常，优先检查该 patch 是否仍生效。
+
 ## HTTP API
 
 非流式：
