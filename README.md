@@ -278,7 +278,7 @@ curl http://127.0.0.1:11435/v1/audio/transcriptions \
 ```bash
 # Python venv + 依赖（Python 3.12）
 /opt/homebrew/bin/python3.12 -m venv .build/kokoro-venv
-.build/kokoro-venv/bin/pip install mlx-audio "misaki[zh]" phonemizer-fork espeakng-loader
+.build/kokoro-venv/bin/pip install mlx-audio "misaki[zh]" "misaki[en]" phonemizer-fork espeakng-loader
 
 # 模型文件放入模型仓库的 tts/ 分区
 mkdir -p "$HOME/Library/Application Support/MacAIConsole/Models/tts/Kokoro-82M-zh-MLX/voices"
