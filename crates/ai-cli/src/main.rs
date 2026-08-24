@@ -47,6 +47,19 @@ enum Commands {
     },
     /// 卸载常驻模型并释放内存。
     Unload { model: String },
+    /// 从 HuggingFace 下载单文件到模型仓库并注册加载（文档 §20）。
+    Pull {
+        /// HF 仓库，如 Qwen/Qwen2.5-0.5B-Instruct-GGUF
+        repo: String,
+        /// 仓库内文件路径，如 qwen2.5-0.5b-instruct-q4_k_m.gguf
+        filename: String,
+        /// 模型类型：llm / stt / tts
+        #[arg(long, default_value = "llm")]
+        model_type: String,
+        /// 注册 ID；缺省用文件名去扩展名
+        #[arg(long)]
+        id: Option<String>,
+    },
     /// 交互式聊天（文档 §18 Run）。
     Run { model: String },
     /// 使用本地 STT 模型转写 PCM WAV。
@@ -88,6 +101,12 @@ fn main() {
             context_length,
         } => cmd_load(&base, &path, id.as_deref(), context_length).map(|_| ()),
         Commands::Unload { model } => cmd_unload(&base, &model),
+        Commands::Pull {
+            repo,
+            filename,
+            model_type,
+            id,
+        } => cmd_pull(&base, &repo, &filename, &model_type, id.as_deref()),
         Commands::Run { model } => cmd_run(&base, &model),
         Commands::Transcribe {
             file,
@@ -396,6 +415,41 @@ fn cmd_unload(base: &str, model: &str) -> Result<(), String> {
         ));
     }
     println!("Unloaded {model}");
+    Ok(())
+}
+
+/// ai pull：下载可能耗时数分钟。daemon 的 HTTP 读超时是 300s，大文件靠
+/// daemon 端流式写盘；CLI 侧提示进度由 daemon 日志承载。
+fn cmd_pull(
+    base: &str,
+    repo: &str,
+    filename: &str,
+    model_type: &str,
+    id: Option<&str>,
+) -> Result<(), String> {
+    println!("Pulling {repo}/{filename} (type={model_type}) …");
+    println!("（下载经 daemon 流式落盘，进度见 aiworkd 日志；大文件请耐心等待）");
+    let body = json!({
+        "repo": repo,
+        "filename": filename,
+        "model_type": model_type,
+        "id": id,
+    });
+    // 复用 http() 的 300s 读超时；超过则报错，.part 保留可重入续传。
+    let (status, response) = post_json(base, "/api/models/pull", &body)?;
+    if status != 200 {
+        let message = response["error"]["message"]
+            .as_str()
+            .unwrap_or("unknown error");
+        return Err(format!(
+            "{}: {message}",
+            response["error"]["type"].as_str().unwrap_or("error")
+        ));
+    }
+    let model_id = response["id"]
+        .as_str()
+        .ok_or_else(|| format!("invalid pull response: {response}"))?;
+    println!("Pulled and loaded {model_id}");
     Ok(())
 }
 

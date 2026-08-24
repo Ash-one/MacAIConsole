@@ -19,7 +19,9 @@ use ai_core::request::{SpeechRequest, TranscriptionRequest};
 use ai_core::response::{LoadedModelInfo, RuntimeInfo, SpeechResponse, TranscriptionResponse};
 use ai_core::AIError;
 
-use crate::providers::{KokoroMlxProvider, LlamaCppProvider, MockProvider, WhisperCppProvider};
+use crate::providers::{
+    KokoroMlxProvider, LlamaCppProvider, MacOSSayProvider, MockProvider, WhisperCppProvider,
+};
 use crate::registry::RegistryStore;
 use crate::scheduler;
 
@@ -124,22 +126,28 @@ impl Runtime {
         if let Some(budget) = memory_budget {
             tracing::info!(budget_gb = budget / (1024 * 1024 * 1024), "memory budget");
         }
+        let mock = Arc::new(MockProvider);
         let llama = Arc::new(LlamaCppProvider::from_env());
         let whisper = Arc::new(WhisperCppProvider::from_env());
+        let macos_say = Arc::new(MacOSSayProvider::new());
         let kokoro = Arc::new(KokoroMlxProvider::from_env());
 
         let mut providers: HashMap<String, Arc<dyn Provider>> = HashMap::new();
+        providers.insert("mock".to_string(), mock.clone());
         providers.insert("llama.cpp".to_string(), llama.clone());
         providers.insert("whisper.cpp".to_string(), whisper.clone());
+        providers.insert("macos-say".to_string(), macos_say.clone());
         providers.insert("kokoro-mlx".to_string(), kokoro.clone());
 
         let mut chat_providers: HashMap<String, Arc<dyn ChatProvider>> = HashMap::new();
+        chat_providers.insert("mock".to_string(), mock);
         chat_providers.insert("llama.cpp".to_string(), llama);
 
         let mut stt_providers: HashMap<String, Arc<dyn STTProvider>> = HashMap::new();
         stt_providers.insert("whisper.cpp".to_string(), whisper);
 
         let mut tts_providers: HashMap<String, Arc<dyn TTSProvider>> = HashMap::new();
+        tts_providers.insert("macos-say".to_string(), macos_say);
         tts_providers.insert("kokoro-mlx".to_string(), kokoro);
         Self {
             registry: RwLock::new(seed_entries(seed)),
@@ -691,10 +699,10 @@ mod tests {
             id: "mock-test".to_string(),
             name: "Mock".to_string(),
             model_type: "llm".to_string(),
-            provider: "llama.cpp".to_string(),
+            provider: "mock".to_string(),
             source: None,
             path: None,
-            format: Some("gguf".to_string()),
+            format: Some("mock".to_string()),
             size_bytes: Some(0),
             memory_estimate: Some(0),
             keep_alive: Some("always".to_string()),
@@ -772,7 +780,7 @@ mod tests {
             .collect();
         assert_eq!(
             ids,
-            vec!["kokoro-mlx", "llama.cpp", "whisper.cpp"]
+            vec!["kokoro-mlx", "llama.cpp", "macos-say", "mock", "whisper.cpp"]
         );
     }
 }
