@@ -19,7 +19,11 @@ use ai_core::request::{SpeechRequest, TranscriptionRequest};
 use ai_core::response::{LoadedModelInfo, RuntimeInfo, SpeechResponse, TranscriptionResponse};
 use ai_core::AIError;
 
-use crate::providers::{KokoroMlxProvider, LlamaCppProvider, MacOSSayProvider, MockProvider, WhisperCppProvider};
+use crate::providers::{
+    KokoroMlxProvider, LlamaCppProvider, MacOSSayProvider, MockProvider, WhisperCppProvider,
+};
+use crate::registry::RegistryStore;
+use crate::scheduler;
 
 /// 内存版模型注册表条目：模型规格 + 当前状态 + 使用时间。
 #[derive(Debug, Clone)]
@@ -32,6 +36,10 @@ pub struct RegistryEntry {
 
 pub struct Runtime {
     registry: RwLock<HashMap<String, RegistryEntry>>,
+    /// SQLite 持久层。None = 纯内存模式（单元测试）。
+    store: Option<RegistryStore>,
+    /// AI 可用内存预算（字节）；None 表示无法探测，跳过预算约束。
+    memory_budget: Option<u64>,
     providers: HashMap<String, Arc<dyn Provider>>,
     chat_providers: HashMap<String, Arc<dyn ChatProvider>>,
     stt_providers: HashMap<String, Arc<dyn STTProvider>>,
@@ -76,6 +84,42 @@ impl Drop for ModelLease {
 
 impl Runtime {
     pub fn new() -> Self {
+        Self::with_options_and_seed(None, Vec::new())
+    }
+
+    /// 生产构造：打开 SQLite 注册表并加载已注册模型；预算由 scheduler 计算。
+    /// 数据库打开失败时降级为内存模式并记录告警，daemon 仍可运行。
+    pub fn with_store(db_path: &std::path::Path) -> Self {
+        let store = match RegistryStore::open(db_path) {
+            Ok(store) => Some(store),
+            Err(error) => {
+                tracing::warn!(%error, "registry db unavailable, falling back to in-memory");
+                None
+            }
+        };
+        // 先在锁外把持久层读成普通 Vec，再在构造时注入初始 registry，
+        // 避免在 async 上下文里做阻塞锁操作。
+        let restored: Vec<(ModelSpec, Option<u64>)> = store
+            .as_ref()
+            .map(|store| store.load_all())
+            .unwrap_or_default();
+        let runtime = Self::with_options_and_seed(store, restored.clone());
+        if runtime.store.is_some() {
+            // 在锁外已算好的种子条目数，避免 async 上下文里做阻塞读（会 panic）。
+            let count = restored.len();
+            tracing::info!(count, "model registry restored from sqlite");
+        }
+        runtime
+    }
+
+    fn with_options_and_seed(
+        store: Option<RegistryStore>,
+        seed: Vec<(ModelSpec, Option<u64>)>,
+    ) -> Self {
+        let memory_budget = scheduler::memory_budget();
+        if let Some(budget) = memory_budget {
+            tracing::info!(budget_gb = budget / (1024 * 1024 * 1024), "memory budget");
+        }
         let mock = Arc::new(MockProvider);
         let llama = Arc::new(LlamaCppProvider::from_env());
         let whisper = Arc::new(WhisperCppProvider::from_env());
@@ -100,7 +144,9 @@ impl Runtime {
         tts_providers.insert("macos-say".to_string(), macos_say);
         tts_providers.insert("kokoro-mlx".to_string(), kokoro);
         Self {
-            registry: RwLock::new(HashMap::new()),
+            registry: RwLock::new(seed_entries(seed)),
+            store,
+            memory_budget,
             providers,
             chat_providers,
             stt_providers,
@@ -115,17 +161,26 @@ impl Runtime {
     }
 
     /// 注册一个模型。注册不等于常驻；初始状态始终为 unloaded。
+    /// 已存在时更新规格（保留状态与使用时间）。
     pub async fn register(&self, spec: ModelSpec) {
         let mut registry = self.registry.write().await;
-        registry.insert(
-            spec.id.clone(),
-            RegistryEntry {
-                spec,
-                state: "unloaded".to_string(),
-                loaded_at: None,
-                last_used_at: None,
-            },
-        );
+        match registry.get_mut(&spec.id) {
+            Some(entry) => entry.spec = spec.clone(),
+            None => {
+                registry.insert(
+                    spec.id.clone(),
+                    RegistryEntry {
+                        spec: spec.clone(),
+                        state: "unloaded".to_string(),
+                        loaded_at: None,
+                        last_used_at: None,
+                    },
+                );
+            }
+        }
+        if let Some(store) = &self.store {
+            store.upsert(&spec, unix_now(), None);
+        }
     }
 
     pub async fn get_model(&self, id: &str) -> Option<ModelSpec> {
@@ -177,6 +232,23 @@ impl Runtime {
         let spec = self.get_model(id).await.ok_or_else(|| {
             ProviderError::new(AIError::ModelNotFound, format!("model '{id}' not found"))
         })?;
+
+        // 内存预算检查（handoff §24）：预算不足先 LRU 逐出，仍不足则拒绝。
+        // 无 estimate 的小模型（mock 等）按 0 计，不受预算约束。
+        if self.memory_budget.is_some() {
+            let requested = spec.memory_estimate.unwrap_or(0);
+            if requested > 0 && !self.evict_for_memory(requested).await {
+                return Err(ProviderError::new(
+                    AIError::ProviderUnavailable,
+                    format!(
+                        "insufficient AI memory budget for model '{id}' \
+                         (need ~{} bytes after eviction)",
+                        requested
+                    ),
+                ));
+            }
+        }
+
         let provider = self.providers.get(&spec.provider).cloned().ok_or_else(|| {
             ProviderError::new(
                 AIError::ProviderUnavailable,
@@ -354,6 +426,9 @@ impl Runtime {
         if let Some(entry) = self.registry.write().await.get_mut(id) {
             entry.last_used_at = Some(now);
         }
+        if let Some(store) = &self.store {
+            store.touch(id, now);
+        }
     }
 
     async fn set_state(&self, id: &str, state: &str, loaded: bool) {
@@ -366,6 +441,9 @@ impl Runtime {
             } else if state == "unloaded" {
                 entry.loaded_at = None;
             }
+        }
+        if let Some(store) = &self.store {
+            store.set_state(id, state);
         }
     }
 
@@ -414,6 +492,132 @@ impl Runtime {
         }
     }
 
+    /// 当前常驻模型的内存占用合计（estimate；无 estimate 的按 0 计）。
+    async fn resident_memory_bytes(&self) -> u64 {
+        self.registry
+            .read()
+            .await
+            .values()
+            .filter(|entry| entry.state != "unloaded" && entry.state != "failed")
+            .filter_map(|entry| entry.spec.memory_estimate)
+            .sum()
+    }
+
+    /// LRU 逐出（handoff §24）：预算不足时按 last_used 升序逐出无 lease 的
+    /// 常驻模型，直到腾出 requested 字节。keep_alive=always 的不逐。
+    /// 必须在 lifecycle_lock 内调用。返回 true 表示已腾出足够空间。
+    async fn evict_for_memory(&self, requested: u64) -> bool {
+        let Some(budget) = self.memory_budget else {
+            return true; // 无法探测内存：跳过约束
+        };
+        let resident = self.resident_memory_bytes().await;
+        if resident.saturating_add(requested) <= budget {
+            return true;
+        }
+        let need = resident.saturating_add(requested) - budget;
+        tracing::info!(
+            need,
+            budget,
+            "memory budget exceeded; starting LRU eviction"
+        );
+
+        // 候选：常驻、非 busy、无 lease、keep_alive 非 always、不是目标模型本身。
+        let mut candidates: Vec<(String, Option<u64>)> = self
+            .registry
+            .read()
+            .await
+            .values()
+            .filter(|entry| {
+                matches!(
+                    entry.state.as_str(),
+                    "ready" | "idle" | "busy" | "loading" | "unloading"
+                ) && entry.state != "busy"
+                    && entry.spec.keep_alive.as_deref() != Some("always")
+            })
+            .map(|entry| (entry.spec.id.clone(), entry.last_used_at))
+            .collect();
+        candidates.sort_by_key(|(_, last_used)| (*last_used, std::cmp::Ordering::Greater));
+
+        let mut freed = 0u64;
+        for (id, _) in candidates {
+            if freed >= need {
+                break;
+            }
+            if self.active_model_leases(&id) > 0 {
+                continue;
+            }
+            let bytes = self
+                .registry
+                .read()
+                .await
+                .get(&id)
+                .and_then(|entry| entry.spec.memory_estimate)
+                .unwrap_or(0);
+            match self.unload_model(&id).await {
+                Ok(()) => {
+                    tracing::info!(model = %id, freed_bytes = bytes, "LRU evicted model");
+                    freed += bytes;
+                }
+                Err(error) => {
+                    tracing::warn!(model = %id, %error, "LRU eviction failed");
+                }
+            }
+        }
+        freed >= need
+    }
+
+    /// keep-alive reaper 的单次扫描（handoff §25）：卸载空闲超过 keep_alive
+    /// 且无活跃 lease 的常驻模型。"always" 与无法解析的值永不自动卸载。
+    pub async fn reap_idle_models(&self) {
+        let now = unix_now();
+        let expired: Vec<String> = self
+            .registry
+            .read()
+            .await
+            .values()
+            .filter(|entry| {
+                matches!(entry.state.as_str(), "ready" | "idle")
+                    && entry
+                        .spec
+                        .keep_alive
+                        .as_deref()
+                        .map(|value| scheduler::parse_keep_alive(Some(value)))
+                        .unwrap_or(None)
+                        .is_some_and(|ttl| {
+                            ttl == 0
+                                || entry
+                                    .last_used_at
+                                    .is_some_and(|last| now.saturating_sub(last) >= ttl)
+                        })
+            })
+            .map(|entry| entry.spec.id.clone())
+            .collect();
+
+        for id in expired {
+            if self.active_model_leases(&id) > 0 {
+                continue;
+            }
+            match self.unload_model(&id).await {
+                Ok(()) => tracing::info!(model = %id, "keep_alive expired; model unloaded"),
+                Err(error) => {
+                    tracing::warn!(model = %id, %error, "keep_alive unload failed")
+                }
+            }
+        }
+    }
+
+    /// 启动 keep-alive 后台任务。由 main 调用一次。
+    pub fn spawn_idle_reaper(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let runtime = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                ticker.tick().await;
+                runtime.reap_idle_models().await;
+            }
+        })
+    }
+
     pub async fn runtime_info(&self, version: &str) -> RuntimeInfo {
         let loaded_models = self
             .list_models()
@@ -459,6 +663,24 @@ fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
+}
+
+/// 把持久层恢复的 (spec, last_used) 播种进内存注册表；状态一律 unloaded，
+/// 因为 daemon 重启后没有任何 worker 进程存活。
+fn seed_entries(seed: Vec<(ModelSpec, Option<u64>)>) -> HashMap<String, RegistryEntry> {
+    let mut map = HashMap::new();
+    for (spec, last_used_at) in seed {
+        map.insert(
+            spec.id.clone(),
+            RegistryEntry {
+                spec,
+                state: "unloaded".to_string(),
+                loaded_at: None,
+                last_used_at,
+            },
+        );
+    }
+    map
 }
 
 #[cfg(test)]
@@ -549,6 +771,15 @@ mod tests {
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect();
-        assert_eq!(ids, vec!["llama.cpp", "macos-say", "mock", "whisper.cpp"]);
+        assert_eq!(
+            ids,
+            vec![
+                "kokoro-mlx",
+                "llama.cpp",
+                "macos-say",
+                "mock",
+                "whisper.cpp"
+            ]
+        );
     }
 }
