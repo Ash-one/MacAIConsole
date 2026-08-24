@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @AppStorage("aiworkdPath") private var daemonPath = ""
     @AppStorage("autoStartDaemon") private var autoStart = true
+    @AppStorage("memoryBudget") private var memoryBudget = ""
     @Environment(DaemonController.self) private var controller
 
     var body: some View {
@@ -16,6 +17,27 @@ struct SettingsView: View {
                 Toggle("启动应用时自动拉起守护进程", isOn: $autoStart)
                 LabeledContent("当前解析结果", value: resolvedText)
                 Button("打开日志文件夹") { revealLogs() }
+            }
+
+            Section("资源调度") {
+                HStack {
+                    TextField("自动（按物理内存计算）", text: $memoryBudget)
+                        .textFieldStyle(.roundedBorder)
+                    Text("例如 8G、8192M")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                LabeledContent("当前生效预算", value: Format.bytes(controller.info?.memoryBudget))
+                Text("留空使用自动策略：物理内存的 75%，且最多保留 8 GB 给系统。修改后需要重启 aiworkd 才会生效。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button {
+                    controller.restartDaemon()
+                } label: {
+                    Label("重启并应用内存预算", systemImage: "arrow.clockwise.circle")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(AppSettings.parseMemoryBudget(memoryBudget) == nil && !memoryBudget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
             Section("关于") {
