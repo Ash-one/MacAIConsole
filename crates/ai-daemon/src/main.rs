@@ -67,9 +67,6 @@ async fn main() {
         })
         .unwrap_or_else(|_| std::path::PathBuf::from("models.db"));
     let runtime = Arc::new(Runtime::with_store(&db_path));
-    runtime.register(mock_model()).await;
-    runtime.register(whisper_model()).await;
-    runtime.register(macos_say_model()).await;
     runtime.spawn_idle_reaper();
 
     let state = AppState {
@@ -97,58 +94,6 @@ async fn main() {
     tracing::info!(%addr, "aiworkd listening");
     println!("AI Runtime running at http://{addr}");
     axum::serve(listener, app).await.expect("server error");
-}
-
-fn mock_model() -> ai_core::model::ModelSpec {
-    ai_core::model::ModelSpec {
-        id: "mock".to_string(),
-        name: "Mock Model (echo)".to_string(),
-        model_type: "llm".to_string(),
-        provider: "mock".to_string(),
-        source: None,
-        path: None,
-        format: Some("mock".to_string()),
-        size_bytes: None,
-        memory_estimate: Some(0),
-        keep_alive: Some("always".to_string()),
-        context_length: Some(4096),
-    }
-}
-
-fn whisper_model() -> ai_core::model::ModelSpec {
-    let path = std::env::var("AIWORK_WHISPER_MODEL")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(".build/models/ggml-base.bin"));
-    let size = path.metadata().ok().map(|metadata| metadata.len());
-    ai_core::model::ModelSpec {
-        id: "whisper-base".to_string(),
-        name: "Whisper Base".to_string(),
-        model_type: "stt".to_string(),
-        provider: "whisper.cpp".to_string(),
-        source: None,
-        path: Some(path.to_string_lossy().into_owned()),
-        format: Some("ggml".to_string()),
-        size_bytes: size,
-        memory_estimate: size,
-        keep_alive: Some("always".to_string()),
-        context_length: None,
-    }
-}
-
-fn macos_say_model() -> ai_core::model::ModelSpec {
-    ai_core::model::ModelSpec {
-        id: "macos-say".to_string(),
-        name: "macOS System Speech".to_string(),
-        model_type: "tts".to_string(),
-        provider: "macos-say".to_string(),
-        source: None,
-        path: None,
-        format: Some("system".to_string()),
-        size_bytes: None,
-        memory_estimate: Some(0),
-        keep_alive: Some("always".to_string()),
-        context_length: None,
-    }
 }
 
 fn init_tracing() {
@@ -495,7 +440,7 @@ async fn audio_speech(
     Json(mut request): Json<SpeechRequest>,
 ) -> Response {
     if request.model.trim().is_empty() {
-        request.model = "macos-say".to_string();
+        request.model = "kokoro-mlx".to_string();
     }
     match state.runtime.synthesize(request).await {
         Ok(speech) => Response::builder()
