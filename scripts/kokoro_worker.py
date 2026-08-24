@@ -27,7 +27,30 @@ def _patch_misaki_zh_version() -> None:
     默认输出 IPA 音素（如 tu↗ʂu→），与 v1.1-zh 模型的注音符号 vocab
     （ㄅㄆㄇ 体系）不匹配——未知字符被 filter 静默丢弃，声调全部丢失。
     官方 kokoro 使用 `ZHG2P(version='1.1')`。这里把默认 version 钉为 '1.1'。
+
+    同时补两个缺口：
+    - 混入英文时需要 en_callable（官方同样传入），否则英文段被丢弃；
+      这里默认用 misaki 的 EN G2P 构造。
+    - misaki 未把 unk 参数存为实例属性，英文回退路径会 AttributeError，兜底补上。
     """
+
+    def _default_en_callable():
+        try:
+            from misaki import en as misaki_en
+
+            g2p = misaki_en.G2P(trf=False, british=False, fallback=None, unk="")
+
+            def en_callable(text):
+                _, tokens = g2p(text)
+                return "".join(
+                    (t.phonemes or "") + (" " if t.whitespace else "") for t in tokens
+                ).strip()
+
+            return en_callable
+        except Exception as error:  # noqa: BLE001
+            log(f"[kokoro-worker] en_callable unavailable: {error}")
+            return None
+
     try:
         from misaki import zh as misaki_zh
 
@@ -37,9 +60,11 @@ def _patch_misaki_zh_version() -> None:
             def __init__(self, version=None, en_callable=None, **kwargs):
                 super().__init__(
                     version="1.1" if version is None else version,
-                    en_callable=en_callable,
+                    en_callable=en_callable if en_callable else _default_en_callable(),
                     **kwargs,
                 )
+                if not hasattr(self, "unk"):
+                    self.unk = "❓"
 
         misaki_zh.ZHG2P = ZHG2PV11
         log("[kokoro-worker] misaki ZHG2P patched to version='1.1'")

@@ -207,4 +207,30 @@ struct DaemonAPI {
         let data = try await postJSON("api/models/\(id)/unload", body: nil, timeout: 30)
         return try JSONDecoder().decode(LoadResponse.self, from: data)
     }
+
+    /// POST /v1/audio/speech —— 返回 WAV 音频数据（试听用）。
+    func synthesizeSpeech(modelID: String, text: String, voice: String) async throws -> Data {
+        var request = URLRequest(url: baseURL.appendingPathComponent("v1/audio/speech"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 180
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "model": modelID,
+            "input": text,
+            "voice": voice,
+            "response_format": "wav",
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            if let detail = try? JSONDecoder().decode(APIErrorBody.self, from: data) {
+                throw DaemonError.http(status: http.statusCode, message: detail.error.message)
+            }
+            throw DaemonError.http(status: http.statusCode, message: "合成失败")
+        }
+        return data
+    }
 }
