@@ -239,8 +239,10 @@ struct RepoModelRow: View {
 
     @State private var contextDraft = ""
     @State private var isReloading = false
+    @State private var isPreviewing = false
 
     private var isLLM: Bool { model.modelType == "llm" }
+    private var isTTS: Bool { model.modelType == "tts" }
     /// daemon busyModelIDs 只覆盖注册表里已有的 id；仓库行自己再补一个重载中状态。
     private var busy: Bool {
         controller.busyModelIDs.contains(model.modelID) || isReloading
@@ -261,10 +263,57 @@ struct RepoModelRow: View {
             if isLLM {
                 contextEditor
             }
+            if isTTS && isLoaded {
+                previewButton
+            }
             loadControls
         }
         .padding(.vertical, 6)
         .onAppear { contextDraft = Self.displayValue(ModelRepository.contextLength(for: model.modelID)) }
+    }
+
+    /// TTS 试听：合成一句固定文本并立即播放。
+    private var previewButton: some View {
+        Button {
+            Task { await preview() }
+        } label: {
+            if isPreviewing {
+                ProgressView().controlSize(.small)
+            } else {
+                Label("试听", systemImage: "speaker.wave.2.fill")
+            }
+        }
+        .labelStyle(.titleAndIcon)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(isPreviewing || controller.phase != .online)
+        .help("合成一句示例文本并播放")
+    }
+
+    private func preview() async {
+        isPreviewing = true
+        defer { isPreviewing = false }
+        do {
+            let audio = try await controller.api.synthesizeSpeech(
+                modelID: model.modelID,
+                text: "你好，我是 Mac AI 的语音合成，很高兴为你朗读这段文字。",
+                voice: "zf_001"
+            )
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("macai-preview-\(UUID().uuidString).wav")
+            try audio.write(to: url)
+            defer { try? FileManager.default.removeItem(at: url) }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
+            process.arguments = [url.path]
+            try process.run()
+            process.waitUntilExit()
+            if process.terminationStatus != 0 {
+                controller.lastError = "播放失败（afplay 退出码 \(process.terminationStatus)）"
+            }
+        } catch {
+            controller.lastError = "试听失败：\(DaemonController.message(for: error))"
+        }
     }
 
     /// 存储值 → 显示文本：能被 1024 整除时用 K 记法（4096 → "4K"），否则显示原始数值。
