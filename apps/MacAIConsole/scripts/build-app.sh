@@ -16,8 +16,13 @@ APP="build/MacAIConsole.app"
 
 echo "==> 组装 ${APP}"
 rm -rf "${APP}"
-mkdir -p "${APP}/Contents/MacOS"
+mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 cp "${BIN}" "${APP}/Contents/MacOS/MacAIConsole"
+if [ -f resources/AppIcon.icns ]; then
+    cp resources/AppIcon.icns "${APP}/Contents/Resources/AppIcon.icns"
+else
+    echo "!! 缺少 resources/AppIcon.icns，应用将使用系统默认图标" >&2
+fi
 
 cat > "${APP}/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -40,6 +45,8 @@ cat > "${APP}/Contents/Info.plist" <<'PLIST'
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSPrincipalClass</key>
