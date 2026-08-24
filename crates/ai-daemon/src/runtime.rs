@@ -19,7 +19,7 @@ use ai_core::request::{SpeechRequest, TranscriptionRequest};
 use ai_core::response::{LoadedModelInfo, RuntimeInfo, SpeechResponse, TranscriptionResponse};
 use ai_core::AIError;
 
-use crate::providers::{LlamaCppProvider, MacOSSayProvider, MockProvider, WhisperCppProvider};
+use crate::providers::{KokoroMlxProvider, LlamaCppProvider, MacOSSayProvider, MockProvider, WhisperCppProvider};
 
 /// 内存版模型注册表条目：模型规格 + 当前状态 + 使用时间。
 #[derive(Debug, Clone)]
@@ -80,12 +80,14 @@ impl Runtime {
         let llama = Arc::new(LlamaCppProvider::from_env());
         let whisper = Arc::new(WhisperCppProvider::from_env());
         let macos_say = Arc::new(MacOSSayProvider::new());
+        let kokoro = Arc::new(KokoroMlxProvider::from_env());
 
         let mut providers: HashMap<String, Arc<dyn Provider>> = HashMap::new();
         providers.insert("mock".to_string(), mock.clone());
         providers.insert("llama.cpp".to_string(), llama.clone());
         providers.insert("whisper.cpp".to_string(), whisper.clone());
         providers.insert("macos-say".to_string(), macos_say.clone());
+        providers.insert("kokoro-mlx".to_string(), kokoro.clone());
 
         let mut chat_providers: HashMap<String, Arc<dyn ChatProvider>> = HashMap::new();
         chat_providers.insert("mock".to_string(), mock);
@@ -96,6 +98,7 @@ impl Runtime {
 
         let mut tts_providers: HashMap<String, Arc<dyn TTSProvider>> = HashMap::new();
         tts_providers.insert("macos-say".to_string(), macos_say);
+        tts_providers.insert("kokoro-mlx".to_string(), kokoro);
         Self {
             registry: RwLock::new(HashMap::new()),
             providers,
