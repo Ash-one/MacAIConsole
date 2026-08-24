@@ -83,14 +83,26 @@ impl Drop for ModelLease {
 }
 
 impl Runtime {
-    /// 纯内存构造，仅供单元测试：额外注入 mock provider，
-    /// 生产路径（with_store）只包含真实引擎。
+    /// 纯内存构造，仅供单元测试：额外注入 mock 与 macos-say 测试 provider。
     pub fn new() -> Self {
         let mut runtime = Self::with_options_and_seed(None, Vec::new());
-        let mock = Arc::new(MockProvider);
-        runtime.providers.insert("mock".to_string(), mock.clone());
-        runtime.chat_providers.insert("mock".to_string(), mock);
+        runtime.inject_test_providers();
         runtime
+    }
+
+    /// 注入测试用 provider（mock 回显、macos-say 系统 TTS）。
+    /// 它们不进入生产 providers 表——管理面（/api/providers、/v1/models）
+    /// 只展示真实引擎；macos-say 仅作为 `ai speak` 未指定模型时的兜底能力。
+    fn inject_test_providers(&mut self) {
+        let mock = Arc::new(MockProvider);
+        self.providers
+            .insert("mock".to_string(), mock.clone());
+        self.chat_providers.insert("mock".to_string(), mock);
+        let say = Arc::new(MacOSSayProvider::new());
+        self.providers
+            .insert("macos-say".to_string(), say.clone());
+        self.tts_providers
+            .insert("macos-say".to_string(), say);
     }
 
     /// 生产构造：打开 SQLite 注册表并加载已注册模型；预算由 scheduler 计算。
@@ -126,28 +138,24 @@ impl Runtime {
         if let Some(budget) = memory_budget {
             tracing::info!(budget_gb = budget / (1024 * 1024 * 1024), "memory budget");
         }
-        let mock = Arc::new(MockProvider);
+        // 生产构造只装配真实引擎；mock / macos-say 是测试能力，
+        // 由 new() 的 inject_test_providers 注入，不进生产 providers 表。
         let llama = Arc::new(LlamaCppProvider::from_env());
         let whisper = Arc::new(WhisperCppProvider::from_env());
-        let macos_say = Arc::new(MacOSSayProvider::new());
         let kokoro = Arc::new(KokoroMlxProvider::from_env());
 
         let mut providers: HashMap<String, Arc<dyn Provider>> = HashMap::new();
-        providers.insert("mock".to_string(), mock.clone());
         providers.insert("llama.cpp".to_string(), llama.clone());
         providers.insert("whisper.cpp".to_string(), whisper.clone());
-        providers.insert("macos-say".to_string(), macos_say.clone());
         providers.insert("kokoro-mlx".to_string(), kokoro.clone());
 
         let mut chat_providers: HashMap<String, Arc<dyn ChatProvider>> = HashMap::new();
-        chat_providers.insert("mock".to_string(), mock);
         chat_providers.insert("llama.cpp".to_string(), llama);
 
         let mut stt_providers: HashMap<String, Arc<dyn STTProvider>> = HashMap::new();
         stt_providers.insert("whisper.cpp".to_string(), whisper);
 
         let mut tts_providers: HashMap<String, Arc<dyn TTSProvider>> = HashMap::new();
-        tts_providers.insert("macos-say".to_string(), macos_say);
         tts_providers.insert("kokoro-mlx".to_string(), kokoro);
         Self {
             registry: RwLock::new(seed_entries(seed)),

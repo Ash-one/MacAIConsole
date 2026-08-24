@@ -75,9 +75,9 @@ enum Commands {
         text: String,
         #[arg(short, long, default_value = "speech.wav")]
         output: String,
-        #[arg(long, default_value = "macos-say")]
+        #[arg(long, default_value = "")]
         model: String,
-        #[arg(long, default_value = "Tingting")]
+        #[arg(long, default_value = "zf_001")]
         voice: String,
         #[arg(long, default_value_t = 1.0)]
         speed: f64,
@@ -526,8 +526,29 @@ fn cmd_speak(
     voice: &str,
     speed: f64,
 ) -> Result<(), String> {
+    // 未指定模型时自动选第一个可用的 TTS 模型（管理面已不含测试 provider）。
+    let resolved = if model.is_empty() {
+        let (status, body) = get_json(base, "/v1/models")?;
+        if status != 200 {
+            return Err(format!("cannot list models (HTTP {status})"));
+        }
+        let found = body["data"]
+            .as_array()
+            .and_then(|models| {
+                models
+                    .iter()
+                    .find(|m| m["type"] == "tts")
+                    .and_then(|m| m["id"].as_str())
+            })
+            .ok_or_else(|| "no TTS model available; load one with 'ai pull' first")?
+            .to_string();
+        println!("Using TTS model: {found}");
+        found
+    } else {
+        model.to_string()
+    };
     let request = json!({
-        "model": model,
+        "model": resolved,
         "input": text,
         "voice": voice,
         "format": "wav",
