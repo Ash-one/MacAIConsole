@@ -20,7 +20,35 @@ def log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
+def _patch_misaki_zh_version() -> None:
+    """修复 mlx-audio kokoro 中文 G2P 的 vocab 错位。
+
+    mlx-audio 0.5.0 的 KokoroPipeline 调用 `ZHG2P()` 时不带 version 参数，
+    默认输出 IPA 音素（如 tu↗ʂu→），与 v1.1-zh 模型的注音符号 vocab
+    （ㄅㄆㄇ 体系）不匹配——未知字符被 filter 静默丢弃，声调全部丢失。
+    官方 kokoro 使用 `ZHG2P(version='1.1')`。这里把默认 version 钉为 '1.1'。
+    """
+    try:
+        from misaki import zh as misaki_zh
+
+        original = misaki_zh.ZHG2P
+
+        class ZHG2PV11(original):
+            def __init__(self, version=None, en_callable=None, **kwargs):
+                super().__init__(
+                    version="1.1" if version is None else version,
+                    en_callable=en_callable,
+                    **kwargs,
+                )
+
+        misaki_zh.ZHG2P = ZHG2PV11
+        log("[kokoro-worker] misaki ZHG2P patched to version='1.1'")
+    except Exception as error:  # noqa: BLE001
+        log(f"[kokoro-worker] misaki zh patch failed: {error}")
+
+
 def main() -> None:
+    _patch_misaki_zh_version()
     model_dir = sys.argv[sys.argv.index("--model") + 1]
 
     log(f"[kokoro-worker] loading model from {model_dir}")
