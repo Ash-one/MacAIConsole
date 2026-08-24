@@ -37,8 +37,12 @@ def _patch_misaki_zh_version() -> None:
     def _default_en_callable():
         try:
             from misaki import en as misaki_en
+            from misaki import espeak
 
-            g2p = misaki_en.G2P(trf=False, british=False, fallback=None, unk="")
+            # espeak fallback：词典查不到的 OOV 词（如 Kokoro、Mio）用
+            # espeak 规则转音素；传 None 会让这类词静默输出空音素。
+            fallback = espeak.EspeakFallback(british=False)
+            g2p = misaki_en.G2P(trf=False, british=False, fallback=fallback, unk="")
 
             def en_callable(text):
                 _, tokens = g2p(text)
