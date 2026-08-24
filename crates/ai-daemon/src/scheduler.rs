@@ -1,0 +1,82 @@
+//! 内存预算与模型调度（handoff §22–§26）。
+//!
+//! - Budget：`min(ram * 0.75, ram - 8GB)`，`AIWORKD_MEMORY_BUDGET` 可覆盖（字节）。
+//! - LRU：加载前检查预算，不足时按 last_used 升序逐出无 lease 的 idle 模型。
+//! - Keep-alive reaper：后台周期扫描，到期且空闲的常驻模型自动卸载。
+
+use sysinfo::System;
+
+/// 解析 keep_alive 字符串为秒；None 表示永不自动卸载（"always" / 无法解析时从宽处理）。
+pub fn parse_keep_alive(value: Option<&str>) -> Option<u64> {
+    let raw = value.map(str::trim)?;
+    if raw.is_empty() || raw == "always" || raw == "-1" {
+        return None;
+    }
+    if raw == "0" {
+        return Some(0);
+    }
+    // 纯数字：按秒解析
+    if let Ok(secs) = raw.parse::<u64>() {
+        return Some(secs);
+    }
+    // 带单位后缀：s/m/h/d
+    let (num, unit) = raw.split_at(raw.len() - 1);
+    let multiplier = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        "d" => 86400,
+        _ => return None,
+    };
+    num.trim().parse::<u64>().ok().map(|n| n * multiplier)
+}
+
+/// 物理内存字节数。读取失败返回 None，调用方跳过预算约束。
+pub fn total_memory_bytes() -> Option<u64> {
+    let mut system = System::new();
+    system.refresh_memory();
+    let total = system.total_memory();
+    (total > 0).then_some(total)
+}
+
+/// AI 内存预算（handoff §23）。环境变量 `AIWORKD_MEMORY_BUDGET`（字节）优先。
+pub fn memory_budget() -> Option<u64> {
+    if let Ok(raw) = std::env::var("AIWORKD_MEMORY_BUDGET") {
+        if let Ok(bytes) = raw.trim().parse::<u64>() {
+            return Some(bytes);
+        }
+    }
+    total_memory_bytes()
+        .map(|total| (total * 3 / 4).min(total.saturating_sub(8 * 1024 * 1024 * 1024)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keep_alive_parsing() {
+        assert_eq!(parse_keep_alive(Some("always")), None);
+        assert_eq!(parse_keep_alive(None), None);
+        assert_eq!(parse_keep_alive(Some("")), None);
+        assert_eq!(parse_keep_alive(Some("0")), Some(0));
+        assert_eq!(parse_keep_alive(Some("5m")), Some(300));
+        assert_eq!(parse_keep_alive(Some("30m")), Some(1800));
+        assert_eq!(parse_keep_alive(Some("2h")), Some(7200));
+        assert_eq!(parse_keep_alive(Some("90")), Some(90));
+        assert_eq!(parse_keep_alive(Some("1d")), Some(86400));
+    }
+
+    #[test]
+    fn budget_is_min_of_75pct_and_ram_minus_8g() {
+        // 32GB 机器：min(24G, 24G) = 24G
+        let total: u64 = 32 * 1024 * 1024 * 1024;
+        let expected = (total * 3 / 4).min(total - 8 * 1024 * 1024 * 1024);
+        assert_eq!(expected, 24 * 1024 * 1024 * 1024);
+        // 8GB 机器：min(6G, 0) = 0 —— 预算被钳到 0，任何模型都放不下，
+        // 由调用方决定是否豁免（小模型仍应可运行，见 runtime 的豁免逻辑）。
+        let small: u64 = 8 * 1024 * 1024 * 1024;
+        let expected_small = (small * 3 / 4).min(small.saturating_sub(8 * 1024 * 1024 * 1024));
+        assert_eq!(expected_small, 0);
+    }
+}

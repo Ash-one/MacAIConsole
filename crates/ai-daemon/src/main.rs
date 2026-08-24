@@ -4,7 +4,9 @@
 //! load/unload。默认只绑定 127.0.0.1:11435。
 
 mod providers;
+mod registry;
 mod runtime;
+mod scheduler;
 
 use std::path::{Path as FilePath, PathBuf};
 use std::sync::Arc;
@@ -57,10 +59,18 @@ struct LoadModelRequest {
 async fn main() {
     init_tracing();
 
-    let runtime = Arc::new(Runtime::new());
+    // 注册表数据库与 GUI 模型仓库同根（~/Library/Application Support/MacAIConsole）。
+    let db_path = std::env::var("HOME")
+        .map(|home| {
+            std::path::PathBuf::from(home)
+                .join("Library/Application Support/MacAIConsole/models.db")
+        })
+        .unwrap_or_else(|_| std::path::PathBuf::from("models.db"));
+    let runtime = Arc::new(Runtime::with_store(&db_path));
     runtime.register(mock_model()).await;
     runtime.register(whisper_model()).await;
     runtime.register(macos_say_model()).await;
+    runtime.spawn_idle_reaper();
 
     let state = AppState {
         runtime: Arc::clone(&runtime),
@@ -277,7 +287,9 @@ async fn register_and_load_model(
         format: format.map(String::from),
         size_bytes: Some(metadata.len()),
         memory_estimate: Some(metadata.len()),
-        keep_alive: request.keep_alive.or_else(|| keep_alive_default.map(String::from)),
+        keep_alive: request
+            .keep_alive
+            .or_else(|| keep_alive_default.map(String::from)),
         context_length: request.context_length.or(Some(4096)),
     };
 
