@@ -8,24 +8,26 @@
 
 ```text
 ai CLI ─┐
-        ├─ HTTP ─> aiworkd ─┬─> MockProvider
-OpenAI ─┘                   └─> llama.cpp worker ─> Metal / GGUF
+        ├─ HTTP ─> aiworkd ─┬─> llama.cpp worker  ─> Metal / GGUF
+OpenAI ─┘                   ├─> whisper.cpp worker ─> Metal 离线转写
+                            ├─> kokoro-mlx worker ─> mlx-audio / 中文 TTS
+MacAIConsole ────────────── └─> SQLite model registry / 内存调度
 ```
 
 ## 当前实现
 
 - Rust workspace：`ai-core`、`ai-daemon`、`ai-cli`
 - `aiworkd` 默认只监听 `127.0.0.1:11435`
-- Provider Registry 与统一 `ProviderDescriptor` / `ProviderStatus`
-- MockProvider：内置回显测试路径
-- LlamaCppProvider：管理持久 `llama-server` 子进程
-- GGUF load / unload 与 Apple Silicon Metal offload
-- 模型 lease / busy guard：推理期间 unload 返回 503，流结束或断开后自动释放
-- stale handle 自恢复：worker 崩溃后下一次请求自动重建 `llama-server`
-- 普通 Chat Completion 与逐 token SSE streaming
+- Provider Registry 与统一 `ProviderDescriptor` / `ProviderStatus`（管理面只暴露真实引擎；mock/macos-say 仅作测试能力）
+- LlamaCppProvider：管理持久 `llama-server` 子进程，GGUF load/unload 与 Metal offload
 - WhisperCppProvider：本地 `whisper-cli` + Metal 离线转写
-- MacOSSayProvider：macOS `say` + `afconvert` 输出 16 kHz mono PCM WAV
-- KokoroMlxProvider：Kokoro-82M-zh 中文 TTS，常驻 Python worker（mlx-audio / Metal GPU）
+- KokoroMlxProvider：Kokoro-82M-zh 中文 TTS，常驻 Python worker（mlx-audio / Metal GPU），中英混说与 OOV 专名已修复
+- MacOSSayProvider：macOS `say` 兜底 TTS（测试能力，不进生产注册表）
+- **SQLite 模型注册表**：daemon 重启自动恢复模型清单（`~/Library/Application Support/MacAIConsole/models.db`）
+- **内存调度**：AI 预算 `min(ram×0.75, ram−8GB)` 可配置；预算不足按 LRU 逐出空闲模型；keep_alive 到期后台 reaper 自动卸载
+- 模型 lease / busy guard：推理期间 unload 返回 503，流结束或断开后自动释放
+- stale handle 自恢复：worker 崩溃后下一次请求自动重建
+- 普通 Chat Completion 与逐 token SSE streaming
 - OpenAI-compatible endpoints：
   - `GET /health`
   - `GET /v1/models`
@@ -33,14 +35,15 @@ OpenAI ─┘                   └─> llama.cpp worker ─> Metal / GGUF
   - `POST /v1/audio/transcriptions`
   - `POST /v1/audio/speech`
 - Runtime 管理 endpoints：
-  - `GET /api/runtime`
+  - `GET /api/runtime`（含 memory_budget）
   - `GET /api/providers`
-  - `POST /api/models/load`
+  - `POST /api/models/load`（model_type 路由 llm/stt/tts）
+  - `POST /api/models/pull`（HuggingFace 单文件下载，断点续传）
   - `POST /api/models/{id}/load`
   - `POST /api/models/{id}/unload`
-- 统一 API / Provider 错误结构
-- 活跃请求计数；流结束或客户端断开时自动释放
-- CLI：`status`、`list`、`chat`、`load`、`unload`、`run`、`transcribe`、`speak`、`ps`、`serve`
+- 统一 API / Provider 错误结构；活跃请求计数，流结束或客户端断开时自动释放
+- CLI：`status`、`list`、`pull`、`chat`、`load`、`unload`、`run`、`transcribe`、`speak`、`ps`、`serve`
+- **MacAIConsole**（`apps/MacAIConsole`）：SwiftUI 原生 GUI——运行状态页（含内存预算）、模型管理页（llm/tts/stt 分组、仓库扫描、上下文长度 K 单位热调、TTS 试听）、菜单栏状态摘要、GUI 掌管 daemon 生命周期
 
 ## 构建与验证
 
@@ -360,6 +363,8 @@ curl --no-buffer http://127.0.0.1:11435/v1/chat/completions \
 
 ## 当前边界
 
-当前版本完成真实 llama.cpp Chat、whisper.cpp 离线 STT 与 macOS 系统 TTS 的端到端路径。SQLite model registry、Hugging Face 自动模型管理、MLX Provider、MLX-Audio 高质量 TTS、实时 STT/VAD、内存预算/LRU/keep-alive 和 SwiftUI GUI 在后续里程碑实现。
+当前版本已完成 handoff 的 Milestone 1（Runtime 架构）与 Milestone 2（SQLite model registry、`ai pull` HuggingFace 下载、内存预算/LRU/keep-alive、busy guard），以及 Milestone 3 的一部分：whisper.cpp 离线 STT 与 MLX-Audio 高质量中文 TTS（Kokoro-82M-zh）。GUI（MacAIConsole）已提供运行状态、模型管理、TTS 试听与菜单栏摘要。
+
+尚未实现：MLX LLM Provider、LLM/STT/TTS benchmark 框架、long-running job metadata 与有界事件回放、GUI Chat/Speech 页面、实时 STT/VAD/streaming TTS。
 
 完整产品与架构说明见 [`handoff.md`](handoff.md)。
