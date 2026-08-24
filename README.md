@@ -1,5 +1,9 @@
 # MacAI Workbench Runtime
 
+<p align="center">
+  <img src="logo.png" alt="MacAI logo" width="320">
+</p>
+
 这是 `handoff.md` 中 Local AI Runtime 架构的可运行实现。SwiftUI、CLI 与 OpenAI-compatible 客户端最终都连接同一个 Rust daemon：
 
 ```text
