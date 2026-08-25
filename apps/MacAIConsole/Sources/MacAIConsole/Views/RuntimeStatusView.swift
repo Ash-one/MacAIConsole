@@ -237,6 +237,48 @@ struct ModelRow: View {
         .animation(.snappy(duration: 0.15), value: isHovering)
         .onTapGesture(perform: onSelect)
         .help("点击打开模型设置")
+        .contextMenu {
+            Button {
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(usageExample, forType: .string)
+            } label: {
+                Label("拷贝使用示例", systemImage: "doc.on.doc")
+            }
+            .help("复制调用该模型的 curl 示例")
+
+            Button {
+                onSelect()
+            } label: {
+                Label("详细设置…", systemImage: "slider.horizontal.3")
+            }
+        }
+    }
+
+    /// 按模型类型生成的 curl 调用示例。
+    private var usageExample: String {
+        let base = controller.api.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        switch modelType {
+        case "stt":
+            return """
+            curl \(base)/v1/audio/transcriptions \\
+              -F "file=@audio.wav" \\
+              -F "model=\(model.id)"
+            """
+        case "tts":
+            return """
+            curl \(base)/v1/audio/speech \\
+              -H "Content-Type: application/json" \\
+              -d '{"model": "\(model.id)", "input": "你好，这是一段试听文本。"}' \\
+              -o speech.wav
+            """
+        default:
+            return """
+            curl \(base)/v1/chat/completions \\
+              -H "Content-Type: application/json" \\
+              -d '{"model": "\(model.id)", "messages": [{"role": "user", "content": "你好"}]}'
+            """
+        }
     }
 
     private var subtitle: String {
