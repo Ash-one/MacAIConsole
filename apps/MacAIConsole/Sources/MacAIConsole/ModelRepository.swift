@@ -59,9 +59,14 @@ enum ModelRepository {
         return models
     }
 
-    /// 把外部文件拷入对应类型的文件夹。同名文件直接覆盖（视为更新）。
+    /// 把外部模型资源拷入对应类型的文件夹。同名资源直接覆盖（视为更新）。
     static func importFile(at sourceURL: URL, type: String) throws -> URL {
-        let dest = folder(for: type).appendingPathComponent(sourceURL.lastPathComponent)
+        try importResource(at: sourceURL, type: type, destinationName: sourceURL.lastPathComponent)
+    }
+
+    /// 导入文件或目录，可为 Core ML 的 .mlmodelc 编译模型指定目标名称。
+    static func importResource(at sourceURL: URL, type: String, destinationName: String) throws -> URL {
+        let dest = folder(for: type).appendingPathComponent(destinationName)
         let fm = FileManager.default
         try fm.createDirectory(at: folder(for: type), withIntermediateDirectories: true)
         if fm.fileExists(atPath: dest.path) {
