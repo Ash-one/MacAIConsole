@@ -85,6 +85,9 @@ async fn main() {
         .route("/api/models/pull", post(pull_model))
         .route("/api/models/{id}/load", post(load_registered_model))
         .route("/api/models/{id}/unload", post(unload_model))
+        .route("/api/models/{id}/keep-alive", post(set_model_keep_alive))
+        .route("/api/models/{id}/voice", post(set_model_voice))
+        .route("/api/models/{id}/voices", get(list_model_voices))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .with_state(state);
 
@@ -401,6 +404,7 @@ async fn register_and_load_model(
             .keep_alive
             .or_else(|| keep_alive_default.map(String::from)),
         context_length: request.context_length.or(Some(4096)),
+        default_voice: None,
     };
 
     match state.runtime.register_and_load(spec).await {
@@ -437,6 +441,76 @@ async fn unload_model(State(state): State<AppState>, AxumPath(id): AxumPath<Stri
         Ok(()) => Json(json!({"id": id, "state": "unloaded"})).into_response(),
         Err(error) => provider_error(error),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct SetKeepAliveRequest {
+    /// "always" / "-1" / "0" / "5m" / "30m" / 纯数字秒。缺省视为 always。
+    keep_alive: Option<String>,
+}
+
+async fn set_model_keep_alive(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<SetKeepAliveRequest>,
+) -> Response {
+    let keep_alive = req.keep_alive.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    if let Some(value) = &keep_alive {
+        if value != "always" && value != "-1" && scheduler::parse_keep_alive(Some(value)).is_none()
+        {
+            return api_error(
+                AIError::InvalidRequest,
+                format!("invalid keep_alive '{value}': use e.g. 0 / 5m / 30m / 2h / always"),
+            );
+        }
+    }
+    if state.runtime.set_keep_alive(&id, keep_alive.clone()).await {
+        Json(json!({"id": id, "keep_alive": keep_alive})).into_response()
+    } else {
+        api_error(AIError::ModelNotFound, format!("model '{id}' not found"))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SetVoiceRequest {
+    voice: String,
+}
+
+/// 设置 TTS 模型的默认音色。空字符串清除（回到 provider 内置缺省 zf_001）。
+async fn set_model_voice(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<SetVoiceRequest>,
+) -> Response {
+    let voice = req.voice.trim().to_string();
+    let voice = (!voice.is_empty()).then_some(voice);
+    if state.runtime.set_default_voice(&id, voice.clone()).await {
+        Json(json!({"id": id, "default_voice": voice})).into_response()
+    } else {
+        api_error(AIError::ModelNotFound, format!("model '{id}' not found"))
+    }
+}
+
+/// 列出 TTS 模型可用的音色：扫描模型目录下 voices/*.safetensors。
+async fn list_model_voices(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
+    let Some(spec) = state.runtime.get_model(&id).await else {
+        return api_error(AIError::ModelNotFound, format!("model '{id}' not found"));
+    };
+    let mut voices: Vec<String> = Vec::new();
+    if let Some(path) = &spec.path {
+        let dir = FilePath::new(path).join("voices");
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if let Some(stem) = name.strip_suffix(".safetensors") {
+                    voices.push(stem.to_string());
+                }
+            }
+        }
+    }
+    voices.sort();
+    Json(json!({"id": id, "voices": voices, "default_voice": spec.default_voice}))
+        .into_response()
 }
 
 async fn chat_completions(State(state): State<AppState>, Json(req): Json<ChatRequest>) -> Response {

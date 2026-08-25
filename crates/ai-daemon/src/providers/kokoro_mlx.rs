@@ -55,6 +55,8 @@ pub struct KokoroMlxProvider {
     state: Mutex<Option<KokoroState>>,
     python: PathBuf,
     script: PathBuf,
+    /// 当前驻留模型的默认音色（load 时从 spec 读取，set_default_voice 时同步）。
+    default_voice: Mutex<Option<String>>,
 }
 
 struct KokoroState {
@@ -68,6 +70,7 @@ impl KokoroMlxProvider {
             state: Mutex::new(None),
             python: PathBuf::from(".build/kokoro-venv/bin/python"),
             script: PathBuf::from("scripts/kokoro_worker.py"),
+            default_voice: Mutex::new(None),
         }
     }
 
@@ -221,6 +224,7 @@ impl Provider for KokoroMlxProvider {
                 stdout,
             },
         });
+        *self.default_voice.lock().await = model.default_voice.clone();
         Ok(ModelHandle {
             model_id: model.id.clone(),
             provider_id: self.id().to_string(),
@@ -244,6 +248,7 @@ impl Provider for KokoroMlxProvider {
                     }
                 }
             }
+            *self.default_voice.lock().await = None;
         } else if let Some(state) = guard.as_ref() {
             let resident = state.model_id.clone();
             return Err(ProviderError::new(
@@ -295,12 +300,14 @@ impl TTSProvider for KokoroMlxProvider {
                 "speech speed must be between 0.25 and 4.0",
             ));
         }
+        let default_voice_guard = self.default_voice.lock().await;
         let voice = request
             .voice
             .as_deref()
-            .filter(|value| !value.trim().is_empty())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .or(default_voice_guard.as_deref())
             .unwrap_or("zf_001");
-
         let request_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
         let payload = serde_json::json!({
             "id": request_id,

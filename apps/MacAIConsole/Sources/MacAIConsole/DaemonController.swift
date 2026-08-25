@@ -132,6 +132,31 @@ final class DaemonController {
         }
     }
 
+    /// 调整 keep_alive 策略：只改注册表，进程保持常驻，reaper 按新值执行。
+    func setKeepAlive(_ id: String, keepAlive: String?) async {
+        do {
+            try await api.setKeepAlive(id, keepAlive: keepAlive)
+            try await refresh()
+        } catch {
+            lastError = "策略修改失败：\(Self.message(for: error))"
+        }
+    }
+
+    /// 修改 TTS 默认音色，只改策略，不重载 worker。
+    func setVoice(_ id: String, voice: String) async {
+        do {
+            try await api.setVoice(id, voice: voice)
+            try await refresh()
+        } catch {
+            lastError = "音色修改失败：\(Self.message(for: error))"
+        }
+    }
+
+    /// 获取 TTS 模型的音色列表。
+    func voices(for id: String) async throws -> VoiceResponse {
+        try await api.voices(id)
+    }
+
     func registerAndLoad(path: String, id: String, contextLength: Int, keepAlive: String?, modelType: String? = nil) async throws {
         _ = try await api.registerAndLoad(path: path, id: id, name: nil, contextLength: contextLength, keepAlive: keepAlive, modelType: modelType)
         try await refresh()
