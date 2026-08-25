@@ -3,19 +3,20 @@
 //! 对外提供 OpenAI-compatible chat API；管理面提供 Provider 状态与模型
 //! load/unload。默认只绑定 127.0.0.1:11435。
 
-mod providers;
 mod process_memory;
+mod providers;
 mod pull;
 mod registry;
 mod runtime;
 mod scheduler;
+mod tasks;
 
 use std::path::{Path as FilePath, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Multipart, Path as AxumPath, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -31,6 +32,7 @@ use ai_core::request::{ChatRequest, SpeechRequest, TranscriptionRequest};
 use ai_core::response::ModelEntry;
 
 use crate::runtime::Runtime;
+use crate::tasks::{chat_request_detail, speech_request_detail, transcription_request_detail};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -81,6 +83,8 @@ async fn main() {
         .route("/v1/audio/transcriptions", post(audio_transcriptions))
         .route("/v1/audio/speech", post(audio_speech))
         .route("/api/runtime", get(runtime_info))
+        .route("/api/tasks", get(list_tasks))
+        .route("/api/tasks/{id}", get(task_detail))
         .route("/api/providers", get(provider_statuses))
         .route("/api/models/load", post(register_and_load_model))
         .route("/api/models/pull", post(pull_model))
@@ -160,6 +164,30 @@ async fn list_models(State(state): State<AppState>) -> Json<Value> {
 
 async fn runtime_info(State(state): State<AppState>) -> Json<ai_core::response::RuntimeInfo> {
     Json(state.runtime.runtime_info(VERSION).await)
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TaskListQuery {
+    completed_limit: Option<usize>,
+}
+
+async fn list_tasks(
+    State(state): State<AppState>,
+    Query(query): Query<TaskListQuery>,
+) -> Json<ai_core::response::TaskListResponse> {
+    Json(
+        state
+            .runtime
+            .tasks()
+            .list(query.completed_limit.unwrap_or(100)),
+    )
+}
+
+async fn task_detail(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
+    match state.runtime.tasks().get(&id) {
+        Some(detail) => Json(detail).into_response(),
+        None => api_error(AIError::TaskNotFound, format!("task '{id}' not found")),
+    }
 }
 
 async fn provider_statuses(State(state): State<AppState>) -> Json<Value> {
@@ -468,7 +496,10 @@ async fn unload_model(State(state): State<AppState>, AxumPath(id): AxumPath<Stri
 
 /// DELETE /api/models/{id} —— 从注册表删除模型（已加载时先卸载 worker）。
 /// 只移除注册记录，模型文件保留在磁盘上。
-async fn unregister_model(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
+async fn unregister_model(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
     match state.runtime.unregister_model(&id).await {
         Ok(()) => Json(json!({"id": id, "deleted": true})).into_response(),
         Err(error) => provider_error(error),
@@ -503,7 +534,10 @@ async fn set_model_keep_alive(
     AxumPath(id): AxumPath<String>,
     Json(req): Json<SetKeepAliveRequest>,
 ) -> Response {
-    let keep_alive = req.keep_alive.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    let keep_alive = req
+        .keep_alive
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
     if let Some(value) = &keep_alive {
         if value != "always" && value != "-1" && scheduler::parse_keep_alive(Some(value)).is_none()
         {
@@ -541,7 +575,10 @@ async fn set_model_voice(
 }
 
 /// 列出 TTS 模型可用的音色：扫描模型目录下 voices/*.safetensors。
-async fn list_model_voices(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
+async fn list_model_voices(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
     let Some(spec) = state.runtime.get_model(&id).await else {
         return api_error(AIError::ModelNotFound, format!("model '{id}' not found"));
     };
@@ -558,51 +595,91 @@ async fn list_model_voices(State(state): State<AppState>, AxumPath(id): AxumPath
         }
     }
     voices.sort();
-    Json(json!({"id": id, "voices": voices, "default_voice": spec.default_voice}))
-        .into_response()
+    Json(json!({"id": id, "voices": voices, "default_voice": spec.default_voice})).into_response()
 }
 
 async fn chat_completions(State(state): State<AppState>, Json(req): Json<ChatRequest>) -> Response {
-    let request_id = state.runtime.next_request_id();
+    let task = state
+        .runtime
+        .start_task("chat", req.model.clone(), chat_request_detail(&req));
+    let request_id = task.id().to_string();
     tracing::info!(%request_id, model = %req.model, stream = req.stream, "chat request");
 
     let model_id = req.model.clone();
     let model_lease = state.runtime.model_lease(&model_id);
     let provider = match state.runtime.chat_provider(&model_id).await {
         Ok(provider) => provider,
-        Err(error) => return provider_error(error),
+        Err(error) => {
+            task.fail(error.message.clone());
+            return provider_error(error);
+        }
     };
+    if let Some(spec) = state.runtime.get_model(&model_id).await {
+        task.set_provider(Some(spec.provider));
+    }
     state.runtime.touch_model(&model_id).await;
-    let request_guard = state.runtime.request_guard();
 
     if req.stream {
         match provider.chat_stream(req).await {
             Ok(stream) => {
-                let chunks = stream.map(move |result| {
-                    let _request_guard = &request_guard;
-                    let _model_lease = &model_lease;
-                    let event = match result {
-                        Ok(chunk) => Event::default().json_data(chunk).unwrap(),
-                        Err(error) => Event::default()
-                            .event("error")
-                            .json_data(ApiErrorBody::new(error.kind, error.message))
-                            .unwrap(),
-                    };
-                    Ok::<_, std::convert::Infallible>(event)
-                });
-                let done = futures::stream::once(async {
-                    Ok::<_, std::convert::Infallible>(Event::default().data("[DONE]"))
-                });
-                let sse = Sse::new(chunks.chain(done))
+                let response_stream = async_stream::stream! {
+                    let _model_lease = model_lease;
+                    futures::pin_mut!(stream);
+                    while let Some(result) = stream.next().await {
+                        match result {
+                            Ok(chunk) => {
+                                for choice in &chunk.choices {
+                                    if let Some(content) = choice.delta.content.as_deref() {
+                                        task.append_output(content);
+                                    }
+                                    if choice.finish_reason.is_some() {
+                                        task.set_finish_reason(choice.finish_reason.clone());
+                                    }
+                                }
+                                let event = Event::default().json_data(&chunk).unwrap();
+                                yield Ok::<_, std::convert::Infallible>(event);
+                            }
+                            Err(error) => {
+                                task.fail(error.message.clone());
+                                let event = Event::default()
+                                    .event("error")
+                                    .json_data(ApiErrorBody::new(error.kind, error.message))
+                                    .unwrap();
+                                yield Ok::<_, std::convert::Infallible>(event);
+                                return;
+                            }
+                        }
+                    }
+                    task.succeed_current();
+                    yield Ok::<_, std::convert::Infallible>(Event::default().data("[DONE]"));
+                };
+                let sse = Sse::new(response_stream)
                     .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)));
                 (StatusCode::OK, sse).into_response()
             }
-            Err(error) => provider_error(error),
+            Err(error) => {
+                task.fail(error.message.clone());
+                provider_error(error)
+            }
         }
     } else {
         match provider.chat(req).await {
-            Ok(response) => Json(response).into_response(),
-            Err(error) => provider_error(error),
+            Ok(response) => {
+                let choice = response.choices.first();
+                task.succeed(ai_core::response::TaskResultDetail {
+                    output_text: choice.map(|choice| choice.message.content.clone()),
+                    finish_reason: choice.and_then(|choice| choice.finish_reason.clone()),
+                    prompt_tokens: Some(response.usage.prompt_tokens),
+                    completion_tokens: Some(response.usage.completion_tokens),
+                    total_tokens: Some(response.usage.total_tokens),
+                    ..ai_core::response::TaskResultDetail::default()
+                });
+                Json(response).into_response()
+            }
+            Err(error) => {
+                task.fail(error.message.clone());
+                provider_error(error)
+            }
         }
     }
 }
@@ -651,7 +728,11 @@ async fn audio_transcriptions(State(state): State<AppState>, mut multipart: Mult
                 if bytes.is_empty() {
                     return api_error(AIError::InvalidRequest, "uploaded audio is empty");
                 }
-                let uploaded = UploadedAudio::new(state.runtime.next_request_id());
+                let uploaded = UploadedAudio::new(
+                    state.runtime.next_request_id(),
+                    file_name,
+                    bytes.len() as u64,
+                );
                 if let Err(error) = tokio::fs::write(&uploaded.path, &bytes).await {
                     return api_error(
                         AIError::Internal,
@@ -712,7 +793,16 @@ async fn audio_transcriptions(State(state): State<AppState>, mut multipart: Mult
         language,
         response_format: Some(response_format.clone()),
     };
-    match state.runtime.transcribe(request).await {
+    let task = state.runtime.start_task(
+        "stt",
+        request.model.clone(),
+        transcription_request_detail(
+            &request,
+            Some(upload.file_name.clone()),
+            Some(upload.file_size_bytes),
+        ),
+    );
+    match state.runtime.transcribe(request, task).await {
         Ok(response) if response_format == "text" => (
             [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
             response.text,
@@ -730,7 +820,12 @@ async fn audio_speech(
     if request.model.trim().is_empty() {
         request.model = "kokoro-mlx".to_string();
     }
-    match state.runtime.synthesize(request).await {
+    let task = state.runtime.start_task(
+        "tts",
+        request.model.clone(),
+        speech_request_detail(&request),
+    );
+    match state.runtime.synthesize(request, task).await {
         Ok(speech) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, speech.content_type)
@@ -743,12 +838,16 @@ async fn audio_speech(
 
 struct UploadedAudio {
     path: PathBuf,
+    file_name: String,
+    file_size_bytes: u64,
 }
 
 impl UploadedAudio {
-    fn new(request_id: String) -> Self {
+    fn new(request_id: String, file_name: String, file_size_bytes: u64) -> Self {
         Self {
             path: std::env::temp_dir().join(format!("macai-upload-{request_id}.wav")),
+            file_name,
+            file_size_bytes,
         }
     }
 }
@@ -785,5 +884,165 @@ mod tests {
         assert!(valid_model_id("SmolLM2-135M.Q4_K_M"));
         assert!(!valid_model_id("../model"));
         assert!(!valid_model_id("model name"));
+    }
+
+    fn mock_model() -> ai_core::model::ModelSpec {
+        ai_core::model::ModelSpec {
+            id: "mock-task".to_string(),
+            name: "Mock task model".to_string(),
+            model_type: "llm".to_string(),
+            provider: "mock".to_string(),
+            source: None,
+            path: None,
+            format: Some("mock".to_string()),
+            size_bytes: Some(0),
+            memory_estimate: Some(0),
+            keep_alive: Some("always".to_string()),
+            context_length: Some(4096),
+            default_voice: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn non_stream_chat_records_result_and_usage() {
+        let runtime = Arc::new(Runtime::new());
+        runtime.register(mock_model()).await;
+        let request = ChatRequest {
+            model: "mock-task".to_string(),
+            messages: vec![ai_core::request::ChatMessage {
+                role: "user".to_string(),
+                content: "hello task".to_string(),
+            }],
+            stream: false,
+            temperature: Some(0.2),
+            max_tokens: Some(32),
+        };
+
+        let response = chat_completions(
+            State(AppState {
+                runtime: runtime.clone(),
+            }),
+            Json(request),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let list = runtime.tasks().list(100);
+        assert_eq!(list.running.len(), 0);
+        assert_eq!(list.completed.len(), 1);
+        assert_eq!(list.completed[0].status, "succeeded");
+        let detail = runtime.tasks().get(&list.completed[0].id).unwrap();
+        assert_eq!(detail.result.output_text.as_deref(), Some("hello task"));
+        assert_eq!(detail.result.total_tokens, Some(20));
+        assert_eq!(detail.request.temperature, Some(0.2));
+        assert_eq!(detail.request.max_tokens, Some(32));
+    }
+
+    #[tokio::test]
+    async fn stream_chat_finishes_task_and_releases_active_count() {
+        let runtime = Arc::new(Runtime::new());
+        runtime.register(mock_model()).await;
+        let response = chat_completions(
+            State(AppState {
+                runtime: runtime.clone(),
+            }),
+            Json(ChatRequest {
+                model: "mock-task".to_string(),
+                messages: vec![ai_core::request::ChatMessage {
+                    role: "user".to_string(),
+                    content: "stream me".to_string(),
+                }],
+                stream: true,
+                temperature: None,
+                max_tokens: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(runtime.tasks().running_count(), 1);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("[DONE]"));
+        assert_eq!(runtime.tasks().running_count(), 0);
+        let list = runtime.tasks().list(100);
+        assert_eq!(list.completed[0].status, "succeeded");
+        let detail = runtime.tasks().get(&list.completed[0].id).unwrap();
+        assert_eq!(detail.result.output_text.as_deref(), Some("stream me"));
+    }
+
+    #[tokio::test]
+    async fn dropping_stream_response_marks_task_cancelled() {
+        let runtime = Arc::new(Runtime::new());
+        runtime.register(mock_model()).await;
+        let response = chat_completions(
+            State(AppState {
+                runtime: runtime.clone(),
+            }),
+            Json(ChatRequest {
+                model: "mock-task".to_string(),
+                messages: vec![ai_core::request::ChatMessage {
+                    role: "user".to_string(),
+                    content: "cancel me".to_string(),
+                }],
+                stream: true,
+                temperature: None,
+                max_tokens: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(runtime.tasks().running_count(), 1);
+        drop(response);
+        tokio::task::yield_now().await;
+        assert_eq!(runtime.tasks().running_count(), 0);
+        let list = runtime.tasks().list(100);
+        assert_eq!(list.completed[0].status, "cancelled");
+        assert_eq!(list.completed[0].error.as_deref(), Some("客户端连接已中断"));
+    }
+
+    #[tokio::test]
+    async fn valid_chat_for_missing_model_records_failed_task() {
+        let runtime = Arc::new(Runtime::new());
+        let response = chat_completions(
+            State(AppState {
+                runtime: runtime.clone(),
+            }),
+            Json(ChatRequest {
+                model: "missing-task-model".to_string(),
+                messages: vec![ai_core::request::ChatMessage {
+                    role: "user".to_string(),
+                    content: "will fail".to_string(),
+                }],
+                stream: false,
+                temperature: None,
+                max_tokens: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(runtime.tasks().running_count(), 0);
+        let list = runtime.tasks().list(100);
+        assert_eq!(list.completed.len(), 1);
+        assert_eq!(list.completed[0].status, "failed");
+        assert!(list.completed[0]
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn task_detail_for_unknown_id_is_standard_not_found() {
+        let response = task_detail(
+            State(AppState {
+                runtime: Arc::new(Runtime::new()),
+            }),
+            AxumPath("missing-task".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

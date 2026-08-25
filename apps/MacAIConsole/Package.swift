@@ -10,6 +10,11 @@ let package = Package(
         .executableTarget(
             name: "MacAIConsole",
             path: "Sources/MacAIConsole"
+        ),
+        .testTarget(
+            name: "MacAIConsoleTests",
+            dependencies: ["MacAIConsole"],
+            path: "Tests/MacAIConsoleTests"
         )
     ]
 )

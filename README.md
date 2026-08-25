@@ -27,6 +27,7 @@ MacAIConsole ────────────── └─> SQLite model reg
 - **内存调度**：AI 预算 `min(ram×0.75, ram−8GB)` 可配置；预算不足按 LRU 逐出空闲模型；keep_alive 到期后台 reaper 自动卸载
 - **worker 驻留内存统计**：`/api/runtime` 的 loaded_models 带真实 RSS（`memory_usage_bytes`）与加速策略（`effective_device`：coreml / metal / gpu）
 - 模型 lease / busy guard：推理期间 unload 返回 503，流结束或断开后自动释放
+- **有界任务历史**：Chat / STT / TTS 统一记录运行中、成功、失败和客户端中断任务；仅保留当前 daemon 会话最近 100 条终态记录，文本上限 64 KiB，不保存原始音频
 - stale handle 自恢复：worker 崩溃后下一次请求自动重建
 - daemon SIGTERM 优雅关闭：卸载所有 worker 后退出
 - 普通 Chat Completion 与逐 token SSE streaming
@@ -38,6 +39,8 @@ MacAIConsole ────────────── └─> SQLite model reg
   - `POST /v1/audio/speech`
 - Runtime 管理 endpoints：
   - `GET /api/runtime`（含 memory_budget、memory_total/used、loaded_models）
+  - `GET /api/tasks?completed_limit=100`（运行中任务与最近终态摘要）
+  - `GET /api/tasks/{id}`（任务输入、输出、耗时和错误详情）
   - `GET /api/providers`
   - `POST /api/models/load`（model_type 路由 llm/stt/tts）
   - `POST /api/models/pull`（HuggingFace 单文件下载，断点续传）
@@ -45,7 +48,7 @@ MacAIConsole ────────────── └─> SQLite model reg
   - `POST /api/models/{id}/unload`
 - 统一 API / Provider 错误结构；活跃请求计数，流结束或客户端断开时自动释放
 - CLI：`status`、`list`、`pull`、`chat`、`load`、`unload`、`run`、`transcribe`、`speak`、`ps`、`serve`
-- **MacAIConsole**（`apps/MacAIConsole`）：SwiftUI 原生 GUI——运行状态页（内存预算、系统内存压力条、Running Models 带加速策略 tag 与驻留内存、模型详细设置页：keep_alive / 上下文 K 单位热调 / TTS 默认音色与试听）、模型管理页（llm/tts/stt 分组、仓库扫描、模型改名、右键拷贝 curl 使用示例、STT 附加 .mlmodelc 导入）、菜单栏状态摘要、GUI 掌管 daemon 生命周期
+- **MacAIConsole**（`apps/MacAIConsole`）：SwiftUI 原生 GUI——运行状态页（内存预算、系统内存压力条、Running Models 带加速策略 tag 与驻留内存、模型详细设置页：keep_alive / 上下文 K 单位热调 / TTS 默认音色与试听）、任务记录页（运行中/最近完成列表、详情 sheet、流式输出轮询）、模型管理页（llm/tts/stt 分组、仓库扫描、模型改名、右键拷贝 curl 使用示例、STT 附加 .mlmodelc 导入）、菜单栏状态摘要、GUI 掌管 daemon 生命周期
 
 ## 构建与验证
 
@@ -384,8 +387,8 @@ curl --no-buffer http://127.0.0.1:11435/v1/chat/completions \
 
 - **MLX LLM Provider**（Phase 3）与 **MLX-native ASR**（mlx-whisper / parakeet-mlx，Phase 5）——LLM 仅 llama.cpp，ASR 仅 whisper.cpp
 - **LLM / STT / TTS benchmark 框架**（handoff §28-30）——MLX vs llama.cpp 决策尚未有数据支撑
-- **long-running job metadata 与有界事件回放**（Phase 6 剩余）——per-device job queue 的完整语义与 `after_seq` 重连
-- **GUI Chat / Speech 页面**（Phase 7 剩余）——目前 GUI 是运行状态 + 模型管理，无对话页
+- **跨设备队列与事件回放**（Phase 6 剩余）——目前任务历史仅覆盖本 daemon 会话，不提供排队位置、进度百分比或断线后的事件重放
+- **GUI Chat / Speech 页面**（Phase 7 剩余）——目前 GUI 是运行状态 + 任务记录 + 模型管理，无对话页
 - **实时 STT / VAD / streaming TTS**（Phase 8）——sherpa-onnx 与流式音频链路未接入
 
 更远的 Future Capabilities（VLM、Embedding、Reranker、Image/Video generation、Agent Runtime、MCP、Realtime conversation、Remote GPU workers）见 handoff §57，均未开始。

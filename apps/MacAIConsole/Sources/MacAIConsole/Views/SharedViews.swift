@@ -158,7 +158,7 @@ struct OfflineHint: View {
                     .foregroundStyle(.orange)
                 Text("守护进程未运行")
                     .font(.headline)
-                Text("模型管理需要 aiworkd 在线。也可以在「设置」中开启随应用自动启动。")
+                Text("此页面需要 aiworkd 在线。也可以在「设置」中开启随应用自动启动。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

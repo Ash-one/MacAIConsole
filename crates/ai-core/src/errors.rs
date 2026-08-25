@@ -7,6 +7,7 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AIError {
     ModelNotFound,
+    TaskNotFound,
     ModelLoadFailed,
     ProviderUnavailable,
     OutOfMemory,
@@ -21,6 +22,7 @@ impl AIError {
     pub fn as_str(&self) -> &'static str {
         match self {
             AIError::ModelNotFound => "model_not_found",
+            AIError::TaskNotFound => "task_not_found",
             AIError::ModelLoadFailed => "model_load_failed",
             AIError::ProviderUnavailable => "provider_unavailable",
             AIError::OutOfMemory => "out_of_memory",
@@ -34,7 +36,7 @@ impl AIError {
 
     pub fn http_status(&self) -> u16 {
         match self {
-            AIError::ModelNotFound => 404,
+            AIError::ModelNotFound | AIError::TaskNotFound => 404,
             AIError::InvalidRequest => 400,
             AIError::OutOfMemory => 503,
             AIError::ProviderUnavailable => 503,

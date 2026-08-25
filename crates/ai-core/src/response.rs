@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::request::ChatMessage;
+
 /// GET /v1/models 中的模型条目。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelEntry {
@@ -86,6 +88,120 @@ pub struct SpeechResponse {
     pub bytes: u64,
     #[serde(skip)]
     pub audio: Vec<u8>,
+}
+
+/// 任务列表中的轻量摘要。时间戳统一使用 Unix 毫秒。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskSummary {
+    pub id: String,
+    /// chat / stt / tts；保留字符串以便未来扩展而不破坏客户端解码。
+    pub kind: String,
+    /// running / succeeded / failed / cancelled；保留字符串以便未来扩展。
+    pub status: String,
+    pub model: String,
+    pub provider: Option<String>,
+    pub input_preview: String,
+    pub started_at_ms: u64,
+    pub completed_at_ms: Option<u64>,
+    pub duration_ms: Option<u64>,
+    pub error: Option<String>,
+}
+
+/// 任务详情中的请求信息。音频本体和临时文件路径永远不进入该结构。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TaskRequestDetail {
+    #[serde(default)]
+    pub messages: Vec<ChatMessage>,
+    pub input_text: Option<String>,
+    pub file_name: Option<String>,
+    pub file_size_bytes: Option<u64>,
+    pub language: Option<String>,
+    pub voice: Option<String>,
+    pub format: Option<String>,
+    pub speed: Option<f64>,
+    pub stream: Option<bool>,
+    pub temperature: Option<f64>,
+    pub max_tokens: Option<u64>,
+}
+
+/// 任务详情中的结果信息。TTS 只记录元数据，不保存音频字节。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TaskResultDetail {
+    pub output_text: Option<String>,
+    pub language: Option<String>,
+    pub finish_reason: Option<String>,
+    pub prompt_tokens: Option<u64>,
+    pub completion_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub content_type: Option<String>,
+    pub byte_count: Option<u64>,
+}
+
+/// GET /api/tasks/{id} 的完整任务记录。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskDetail {
+    pub id: String,
+    pub kind: String,
+    pub status: String,
+    pub model: String,
+    pub provider: Option<String>,
+    pub started_at_ms: u64,
+    pub completed_at_ms: Option<u64>,
+    pub duration_ms: Option<u64>,
+    pub request: TaskRequestDetail,
+    pub result: TaskResultDetail,
+    pub request_truncated: bool,
+    pub result_truncated: bool,
+    pub error: Option<String>,
+}
+
+impl TaskDetail {
+    pub fn summary(&self) -> TaskSummary {
+        TaskSummary {
+            id: self.id.clone(),
+            kind: self.kind.clone(),
+            status: self.status.clone(),
+            model: self.model.clone(),
+            provider: self.provider.clone(),
+            input_preview: task_input_preview(&self.kind, &self.request),
+            started_at_ms: self.started_at_ms,
+            completed_at_ms: self.completed_at_ms,
+            duration_ms: self.duration_ms,
+            error: self.error.clone(),
+        }
+    }
+}
+
+fn task_input_preview(kind: &str, request: &TaskRequestDetail) -> String {
+    let text = match kind {
+        "chat" => request
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == "user")
+            .or_else(|| request.messages.last())
+            .map(|message| message.content.as_str())
+            .unwrap_or(""),
+        "stt" => request.file_name.as_deref().unwrap_or(""),
+        "tts" => request.input_text.as_deref().unwrap_or(""),
+        _ => request
+            .input_text
+            .as_deref()
+            .or_else(|| request.file_name.as_deref())
+            .unwrap_or(""),
+    };
+    let mut preview: String = text.chars().take(117).collect();
+    if text.chars().count() > 117 {
+        preview.push('…');
+    }
+    preview
+}
+
+/// GET /api/tasks 的响应。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskListResponse {
+    pub running: Vec<TaskSummary>,
+    pub completed: Vec<TaskSummary>,
 }
 
 /// GET /api/runtime 响应（文档 §17、§37）。

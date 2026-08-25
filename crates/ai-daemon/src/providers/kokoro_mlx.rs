@@ -279,11 +279,7 @@ impl Provider for KokoroMlxProvider {
     }
 
     async fn effective_device(&self) -> Option<String> {
-        self.state
-            .lock()
-            .await
-            .as_ref()
-            .map(|_| "gpu".to_string())
+        self.state.lock().await.as_ref().map(|_| "gpu".to_string())
     }
 }
 

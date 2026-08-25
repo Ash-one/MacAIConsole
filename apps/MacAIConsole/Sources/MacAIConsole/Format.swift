@@ -35,4 +35,37 @@ enum Format {
         let date = Date(timeIntervalSince1970: TimeInterval(unixSeconds))
         return relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
+
+    static func relativeTime(milliseconds: UInt64?) -> String {
+        guard let milliseconds, milliseconds > 0 else { return "—" }
+        let date = Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1_000.0)
+        return relativeFormatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    static func absoluteTime(milliseconds: UInt64?) -> String {
+        guard let milliseconds, milliseconds > 0 else { return "—" }
+        let date = Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1_000.0)
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    static func duration(milliseconds: UInt64?) -> String {
+        guard let milliseconds else { return "—" }
+        return duration(milliseconds: milliseconds)
+    }
+
+    static func runningDuration(startedAtMs: UInt64) -> String {
+        let now = UInt64(max(Date().timeIntervalSince1970 * 1_000.0, 0))
+        return duration(milliseconds: now >= startedAtMs ? now - startedAtMs : 0)
+    }
+
+    private static func duration(milliseconds: UInt64) -> String {
+        if milliseconds < 1_000 { return "\(milliseconds) ms" }
+        if milliseconds < 60_000 {
+            return String(format: "%.1f 秒", Double(milliseconds) / 1_000.0)
+        }
+        let totalSeconds = milliseconds / 1_000
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return "\(minutes) 分 \(seconds) 秒"
+    }
 }
