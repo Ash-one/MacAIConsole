@@ -3,6 +3,7 @@ import SwiftUI
 struct RuntimeStatusView: View {
     @Environment(DaemonController.self) private var controller
     @Environment(\.openSettings) private var openSettings
+    @State private var selectedModel: LoadedModel?
 
     var body: some View {
         ScrollView {
@@ -18,6 +19,10 @@ struct RuntimeStatusView: View {
             .padding(20)
         }
         .navigationTitle("运行状态")
+        .sheet(item: $selectedModel) { model in
+            RunningModelSettingsView(model: model)
+                .environment(controller)
+        }
     }
 
     private var headerCard: some View {
@@ -61,11 +66,13 @@ struct RuntimeStatusView: View {
     }
 
     private var loadedModelsSection: some View {
-        GroupBox("加载中的模型") {
+        GroupBox {
             if let models = controller.info?.loadedModels, !models.isEmpty {
                 VStack(spacing: 0) {
                     ForEach(models) { model in
-                        ModelRow(model: model)
+                        ModelRow(model: model) {
+                            selectedModel = model
+                        }
                         if model.id != models.last?.id { Divider() }
                     }
                 }
@@ -76,6 +83,10 @@ struct RuntimeStatusView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
+        } label: {
+            Text("Running Models")
+                .font(.title3.weight(.semibold))
+                .padding(.bottom, 8)
         }
     }
 
@@ -128,6 +139,9 @@ struct MemoryBudgetCard: View {
 struct ModelRow: View {
     @Environment(DaemonController.self) private var controller
     let model: LoadedModel
+    let onSelect: () -> Void
+
+    @State private var isHovering = false
 
     var body: some View {
         HStack {
@@ -150,16 +164,155 @@ struct ModelRow: View {
                 .disabled(controller.phase != .online)
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 6)
+        .contentShape(Rectangle())
+        .background(isHovering ? Color.primary.opacity(0.05) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .onHover { isHovering = $0 }
+        .animation(.snappy(duration: 0.15), value: isHovering)
+        .onTapGesture(perform: onSelect)
+        .help("点击打开模型设置")
     }
 
     private var subtitle: String {
         var parts = [model.provider]
         if model.state != "ready" { parts.append("状态：\(model.state)") }
         if let memory = model.memoryEstimate, memory > 0 { parts.append(Format.bytes(memory)) }
-        if let keepAlive = model.keepAlive, !keepAlive.isEmpty { parts.append("keep_alive：\(keepAlive)") }
         parts.append("\(Format.relativeTime(model.loadedAt))加载")
         return parts.joined(separator: " · ")
+    }
+}
+
+struct RunningModelSettingsView: View {
+    @Environment(DaemonController.self) private var controller
+    @Environment(\.dismiss) private var dismiss
+    let model: LoadedModel
+
+    @State private var keepAlive: String
+    @State private var voice: String
+    @State private var voices: [String] = []
+    @State private var voicesLoaded = false
+
+    private struct KeepAliveChoice: Identifiable {
+        let label: String
+        let value: String
+        var id: String { value }
+    }
+
+    private let keepAliveChoices = [
+        KeepAliveChoice(label: "1min", value: "1m"),
+        KeepAliveChoice(label: "5min", value: "5m"),
+        KeepAliveChoice(label: "10min", value: "10m"),
+        KeepAliveChoice(label: "30min", value: "30m"),
+        KeepAliveChoice(label: "60min", value: "60m"),
+        KeepAliveChoice(label: "120min", value: "120m"),
+        KeepAliveChoice(label: "始终", value: "always"),
+    ]
+
+    init(model: LoadedModel) {
+        self.model = model
+        _keepAlive = State(initialValue: model.keepAlive?.isEmpty == false ? model.keepAlive! : "always")
+        _voice = State(initialValue: model.defaultVoice?.isEmpty == false ? model.defaultVoice! : "zf_001")
+    }
+
+    private var modelType: String {
+        if let type = model.modelType, !type.isEmpty { return type }
+        if model.provider == "kokoro-mlx" { return "tts" }
+        if model.provider == "whisper.cpp" { return "stt" }
+        return "llm"
+    }
+
+    private var typeLabel: String {
+        switch modelType {
+        case "llm": "LLM"
+        case "stt": "STT"
+        case "tts": "TTS"
+        default: modelType.uppercased()
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+            Form {
+                Section("运行策略") {
+                    Picker("保持时间", selection: $keepAlive) {
+                        ForEach(keepAliveChoices) { choice in
+                            Text(choice.label).tag(choice.value)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .onChange(of: keepAlive) { _, value in
+                        Task { await controller.setKeepAlive(model.id, keepAlive: value) }
+                    }
+                }
+
+                if modelType == "tts" {
+                    Section("语音") {
+                        if voices.isEmpty {
+                            HStack {
+                                Text(voicesLoaded ? "未找到可用音色" : "正在读取音色…")
+                                    .foregroundStyle(.secondary)
+                                if !voicesLoaded { ProgressView().controlSize(.small) }
+                            }
+                        } else {
+                            Picker("模型音色", selection: $voice) {
+                                ForEach(voices, id: \.self) { item in
+                                    Text(item).tag(item)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .onChange(of: voice) { _, value in
+                                Task { await controller.setVoice(model.id, voice: value) }
+                            }
+                        }
+                    }
+                }
+            }
+            .formStyle(.grouped)
+        }
+        .frame(minWidth: 420, minHeight: modelType == "tts" ? 300 : 250)
+        .navigationTitle("模型设置")
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("完成") { dismiss() }
+            }
+        }
+        .task(id: model.id) {
+            guard modelType == "tts", !voicesLoaded else { return }
+            defer { voicesLoaded = true }
+            if let response = try? await controller.voices(for: model.id) {
+                voices = response.voices
+                if let defaultVoice = response.defaultVoice, !defaultVoice.isEmpty {
+                    voice = defaultVoice
+                }
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ModelTypeIcon(type: modelType)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(model.id)
+                    .font(.title2.weight(.semibold))
+                Text("\(typeLabel) · \(model.provider)")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(model.state == "ready" ? Color.green : Color.orange)
+                        .frame(width: 7, height: 7)
+                    Text(model.state == "ready" ? "运行中" : model.state)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(model.state == "ready" ? .green : .orange)
+                }
+            }
+            Spacer()
+        }
+        .padding(20)
     }
 }
 

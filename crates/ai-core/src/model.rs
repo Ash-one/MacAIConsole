@@ -20,6 +20,9 @@ pub struct ModelSpec {
     /// keep_alive 语义：0 / 5m / 30m / always
     pub keep_alive: Option<String>,
     pub context_length: Option<u64>,
+    /// TTS 默认音色（如 zf_001）。None 时 provider 用自己的内置缺省。
+    #[serde(default)]
+    pub default_voice: Option<String>,
 }
 
 impl ModelSpec {
@@ -104,6 +107,7 @@ mod tests {
             memory_estimate: Some(0),
             keep_alive: Some("always".to_string()),
             context_length: Some(4096),
+            default_voice: None,
         };
 
         assert_eq!(spec.keep_alive_secs(), None);

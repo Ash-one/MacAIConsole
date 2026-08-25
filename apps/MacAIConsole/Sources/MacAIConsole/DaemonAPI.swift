@@ -39,6 +39,8 @@ struct LoadedModel: Decodable, Identifiable, Hashable {
     var keepAlive: String?
     var loadedAt: UInt64?
     var lastUsedAt: UInt64?
+    var modelType: String?
+    var defaultVoice: String?
 
     enum CodingKeys: String, CodingKey {
         case id, provider, state
@@ -46,6 +48,18 @@ struct LoadedModel: Decodable, Identifiable, Hashable {
         case keepAlive = "keep_alive"
         case loadedAt = "loaded_at"
         case lastUsedAt = "last_used_at"
+        case modelType = "model_type"
+        case defaultVoice = "default_voice"
+    }
+}
+
+struct VoiceResponse: Decodable {
+    var voices: [String]
+    var defaultVoice: String?
+
+    enum CodingKeys: String, CodingKey {
+        case voices
+        case defaultVoice = "default_voice"
     }
 }
 
@@ -210,6 +224,23 @@ struct DaemonAPI {
     func unload(_ id: String) async throws -> LoadResponse {
         let data = try await postJSON("api/models/\(id)/unload", body: nil, timeout: 30)
         return try JSONDecoder().decode(LoadResponse.self, from: data)
+    }
+
+    /// POST /api/models/{id}/keep-alive —— 只改策略，进程保持常驻。
+    func setKeepAlive(_ id: String, keepAlive: String?) async throws {
+        var body: [String: Any] = [:]
+        if let keepAlive { body["keep_alive"] = keepAlive }
+        _ = try await postJSON("api/models/\(id)/keep-alive", body: body, timeout: 10)
+    }
+
+    /// POST /api/models/{id}/voice —— 修改 TTS 模型默认音色。
+    func setVoice(_ id: String, voice: String) async throws {
+        _ = try await postJSON("api/models/\(id)/voice", body: ["voice": voice], timeout: 10)
+    }
+
+    /// GET /api/models/{id}/voices —— 获取 TTS 模型可用音色。
+    func voices(_ id: String) async throws -> VoiceResponse {
+        try JSONDecoder().decode(VoiceResponse.self, from: try await get("api/models/\(id)/voices"))
     }
 
     /// POST /v1/audio/speech —— 返回 WAV 音频数据（试听用）。

@@ -46,6 +46,8 @@ impl RegistryStore {
             .map_err(|error| format!("cannot open registry db: {error}"))?;
         conn.execute_batch(SCHEMA)
             .map_err(|error| format!("cannot init registry schema: {error}"))?;
+        // 旧库迁移：default_voice 列后加，缺列时补上。
+        let _ = conn.execute_batch("ALTER TABLE models ADD COLUMN default_voice TEXT;");
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -59,7 +61,7 @@ impl RegistryStore {
         };
         let mut stmt = match conn.prepare(
             "SELECT id, name, type, provider, source, path, format, size_bytes,
-                    memory_estimate, keep_alive, context_length, last_used_at
+                    memory_estimate, keep_alive, context_length, last_used_at, default_voice
              FROM models ORDER BY id",
         ) {
             Ok(stmt) => stmt,
@@ -79,6 +81,7 @@ impl RegistryStore {
                 row.get::<_, Option<String>>(9)?,
                 row.get::<_, Option<i64>>(10)?,
                 row.get::<_, Option<i64>>(11)?,
+                row.get::<_, Option<String>>(12)?,
             ))
         });
         let mut result = Vec::new();
@@ -96,6 +99,7 @@ impl RegistryStore {
                     memory_estimate: row.8.map(|v| v.max(0) as u64),
                     keep_alive: row.9,
                     context_length: row.10.map(|v| v.max(0) as u64),
+                    default_voice: row.12,
                 };
                 result.push((spec, row.11.map(|v| v.max(0) as u64)));
             }
@@ -112,8 +116,8 @@ impl RegistryStore {
         let _ = conn.execute(
             "INSERT INTO models (id, name, type, provider, source, path, format,
                                  size_bytes, memory_estimate, keep_alive, context_length,
-                                 state, installed_at, last_used_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'unloaded', ?12, ?13)
+                                 state, installed_at, last_used_at, default_voice)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'unloaded', ?12, ?13, ?14)
              ON CONFLICT(id) DO UPDATE SET
                 name = ?2, type = ?3, provider = ?4, source = ?5, path = ?6,
                 format = ?7, size_bytes = ?8, memory_estimate = ?9,
@@ -132,6 +136,7 @@ impl RegistryStore {
                 spec.context_length.map(|v| v as i64),
                 installed_at as i64,
                 last_used_at.map(|v| v as i64),
+                spec.default_voice,
             ],
         );
     }
@@ -145,6 +150,26 @@ impl RegistryStore {
     pub fn set_state(&self, id: &str, state: &str) {
         if let Ok(conn) = self.conn.lock() {
             let _ = conn.execute("UPDATE models SET state = ?2 WHERE id = ?1", [id, state]);
+        }
+    }
+
+    /// 只更新 keep_alive 字段（运行状态页行内调整策略，不重载进程）。
+    pub fn set_keep_alive(&self, id: &str, keep_alive: Option<&str>) {
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute(
+                "UPDATE models SET keep_alive = ?2 WHERE id = ?1",
+                rusqlite::params![id, keep_alive],
+            );
+        }
+    }
+
+    /// 只更新 default_voice 字段（右键菜单切换 TTS 默认音色）。
+    pub fn set_default_voice(&self, id: &str, voice: Option<&str>) {
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute(
+                "UPDATE models SET default_voice = ?2 WHERE id = ?1",
+                rusqlite::params![id, voice],
+            );
         }
     }
 

@@ -408,7 +408,7 @@ impl Runtime {
 
     pub async fn synthesize(
         self: &Arc<Self>,
-        request: SpeechRequest,
+        mut request: SpeechRequest,
     ) -> Result<SpeechResponse, ProviderError> {
         let model_id = request.model.clone();
         let _lease = self.model_lease(&model_id);
@@ -420,6 +420,9 @@ impl Runtime {
                 format!("model '{model_id}' not found"),
             )
         })?;
+        if request.voice.is_none() {
+            request.voice = spec.default_voice.clone();
+        }
         let provider = self
             .tts_providers
             .get(&spec.provider)
@@ -443,6 +446,48 @@ impl Runtime {
         if let Some(store) = &self.store {
             store.touch(id, now);
         }
+    }
+
+    /// 更新模型的 keep_alive 策略。只改注册表与持久层，进程保持常驻；
+    /// reaper 下一次扫描即按新值执行。返回是否找到该模型。
+    pub async fn set_keep_alive(&self, id: &str, keep_alive: Option<String>) -> bool {
+        let found = {
+            let mut registry = self.registry.write().await;
+            match registry.get_mut(id) {
+                Some(entry) => {
+                    entry.spec.keep_alive = keep_alive.clone();
+                    true
+                }
+                None => false,
+            }
+        };
+        if found {
+            if let Some(store) = &self.store {
+                store.set_keep_alive(id, keep_alive.as_deref());
+            }
+        }
+        found
+    }
+
+    /// 更新 TTS 模型的默认音色。只改注册表与持久层，进程保持常驻。
+    /// 返回是否找到该模型。
+    pub async fn set_default_voice(&self, id: &str, voice: Option<String>) -> bool {
+        let found = {
+            let mut registry = self.registry.write().await;
+            match registry.get_mut(id) {
+                Some(entry) => {
+                    entry.spec.default_voice = voice.clone();
+                    true
+                }
+                None => false,
+            }
+        };
+        if found {
+            if let Some(store) = &self.store {
+                store.set_default_voice(id, voice.as_deref());
+            }
+        }
+        found
     }
 
     async fn set_state(&self, id: &str, state: &str, loaded: bool) {
@@ -651,6 +696,8 @@ impl Runtime {
                 keep_alive: entry.spec.keep_alive,
                 loaded_at: entry.loaded_at,
                 last_used_at: entry.last_used_at,
+                model_type: Some(entry.spec.model_type),
+                default_voice: entry.spec.default_voice,
             })
             .collect();
         RuntimeInfo {
@@ -715,6 +762,7 @@ mod tests {
             memory_estimate: Some(0),
             keep_alive: Some("always".to_string()),
             context_length: Some(4096),
+            default_voice: None,
         }
     }
 
