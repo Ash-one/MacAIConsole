@@ -27,6 +27,8 @@ use ai_core::request::ChatRequest;
 use ai_core::response::{ChatChunk, ChatResponse};
 use ai_core::AIError;
 
+use crate::process_memory::resident_memory_bytes;
+
 const DEFAULT_PORT: u16 = 11436;
 const LOG_TAIL_LINES: usize = 40;
 
@@ -418,6 +420,12 @@ impl Provider for LlamaCppProvider {
             ok: status.available && (status.resident_models.is_empty() || status.ready),
             message: status.reason,
         })
+    }
+
+    async fn memory_usage_bytes(&self) -> Option<u64> {
+        let process = self.process.lock().await;
+        let pid = process.as_ref()?.child.id()?;
+        resident_memory_bytes(pid)
     }
 }
 

@@ -24,6 +24,8 @@ use ai_core::request::SpeechRequest;
 use ai_core::response::SpeechResponse;
 use ai_core::AIError;
 
+use crate::process_memory::resident_memory_bytes;
+
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// worker 进程 + 其 stdin/stdout。Drop 时自动结束进程。
@@ -268,6 +270,12 @@ impl Provider for KokoroMlxProvider {
             ok: status.available && (!status.ready || self.probe_ready().await),
             message: status.reason,
         })
+    }
+
+    async fn memory_usage_bytes(&self) -> Option<u64> {
+        let state = self.state.lock().await;
+        let pid = state.as_ref()?.worker.child.id()?;
+        resident_memory_bytes(pid)
     }
 }
 

@@ -132,6 +132,11 @@ pub trait Provider: Send + Sync {
     async fn unload(&self, handle: &ModelHandle) -> Result<(), ProviderError>;
 
     async fn health_check(&self) -> Result<ProviderHealth, ProviderError>;
+
+    /// 当前 worker 的 resident memory（字节）。没有常驻 worker 时返回 None。
+    async fn memory_usage_bytes(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// Chat 流式输出：Provider 产生 chunk 流，daemon 转发为 SSE（文档 §34）。
