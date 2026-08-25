@@ -9,7 +9,7 @@
 ```text
 ai CLI ─┐
         ├─ HTTP ─> aiworkd ─┬─> llama.cpp worker  ─> Metal / GGUF
-OpenAI ─┘                   ├─> whisper.cpp worker ─> Metal 离线转写
+OpenAI ─┘                   ├─> whisper.cpp worker ─> CoreML / Metal 离线转写
                             ├─> kokoro-mlx worker ─> mlx-audio / 中文 TTS
 MacAIConsole ────────────── └─> SQLite model registry / 内存调度
 ```
@@ -19,14 +19,16 @@ MacAIConsole ────────────── └─> SQLite model reg
 - Rust workspace：`ai-core`、`ai-daemon`、`ai-cli`
 - `aiworkd` 默认只监听 `127.0.0.1:11435`
 - Provider Registry 与统一 `ProviderDescriptor` / `ProviderStatus`（管理面只暴露真实引擎；mock/macos-say 仅作测试能力）
-- LlamaCppProvider：管理持久 `llama-server` 子进程，GGUF load/unload 与 Metal offload
-- WhisperCppProvider：本地 `whisper-cli` + Metal 离线转写
+- LlamaCppProvider：管理持久 `llama-server` 子进程，GGUF load/unload 与 Metal offload（启动日志自动识别 Metal）
+- WhisperCppProvider：本地 `whisper-cli` 离线转写，**CoreML 优先、失败自动回退 Metal**（`WHISPER_COREML + ALLOW_FALLBACK`；`.mlmodelc` 与 `.bin` 同目录时启用，首次运行 ANE 特化可达数分钟）
 - KokoroMlxProvider：Kokoro-82M-zh 中文 TTS，常驻 Python worker（mlx-audio / Metal GPU），中英混说与 OOV 专名已修复
 - MacOSSayProvider：macOS `say` 兜底 TTS（测试能力，不进生产注册表）
 - **SQLite 模型注册表**：daemon 重启自动恢复模型清单（`~/Library/Application Support/MacAIConsole/models.db`）
 - **内存调度**：AI 预算 `min(ram×0.75, ram−8GB)` 可配置；预算不足按 LRU 逐出空闲模型；keep_alive 到期后台 reaper 自动卸载
+- **worker 驻留内存统计**：`/api/runtime` 的 loaded_models 带真实 RSS（`memory_usage_bytes`）与加速策略（`effective_device`：coreml / metal / gpu）
 - 模型 lease / busy guard：推理期间 unload 返回 503，流结束或断开后自动释放
 - stale handle 自恢复：worker 崩溃后下一次请求自动重建
+- daemon SIGTERM 优雅关闭：卸载所有 worker 后退出
 - 普通 Chat Completion 与逐 token SSE streaming
 - OpenAI-compatible endpoints：
   - `GET /health`
@@ -35,7 +37,7 @@ MacAIConsole ────────────── └─> SQLite model reg
   - `POST /v1/audio/transcriptions`
   - `POST /v1/audio/speech`
 - Runtime 管理 endpoints：
-  - `GET /api/runtime`（含 memory_budget）
+  - `GET /api/runtime`（含 memory_budget、memory_total/used、loaded_models）
   - `GET /api/providers`
   - `POST /api/models/load`（model_type 路由 llm/stt/tts）
   - `POST /api/models/pull`（HuggingFace 单文件下载，断点续传）
@@ -43,7 +45,7 @@ MacAIConsole ────────────── └─> SQLite model reg
   - `POST /api/models/{id}/unload`
 - 统一 API / Provider 错误结构；活跃请求计数，流结束或客户端断开时自动释放
 - CLI：`status`、`list`、`pull`、`chat`、`load`、`unload`、`run`、`transcribe`、`speak`、`ps`、`serve`
-- **MacAIConsole**（`apps/MacAIConsole`）：SwiftUI 原生 GUI——运行状态页（含内存预算）、模型管理页（llm/tts/stt 分组、仓库扫描、上下文长度 K 单位热调、TTS 试听）、菜单栏状态摘要、GUI 掌管 daemon 生命周期
+- **MacAIConsole**（`apps/MacAIConsole`）：SwiftUI 原生 GUI——运行状态页（内存预算、系统内存压力条、Running Models 带加速策略 tag 与驻留内存、模型详细设置页：keep_alive / 上下文 K 单位热调 / TTS 默认音色与试听）、模型管理页（llm/tts/stt 分组、仓库扫描、模型改名、右键拷贝 curl 使用示例、STT 附加 .mlmodelc 导入）、菜单栏状态摘要、GUI 掌管 daemon 生命周期
 
 ## 构建与验证
 
@@ -99,7 +101,7 @@ export AIWORK_LLAMA_SERVER=/absolute/path/to/llama-server
 371b5a7561823ab2bb32142d2751e35e7534727b
 ```
 
-构建 Metal 版 `whisper-cli` 并下载 base 模型：
+构建 `whisper-cli` 并下载 base 模型（构建脚本默认启用 CoreML，`WHISPER_COREML + ALLOW_FALLBACK`）：
 
 ```bash
 ./scripts/build-whisper-cli.sh
@@ -126,7 +128,20 @@ export AIWORK_WHISPER_CLI=/absolute/path/to/whisper-cli
 export AIWORK_WHISPER_MODEL=/absolute/path/to/ggml-base.bin
 ```
 
-STT 当前接受 PCM WAV。TTS 通过 macOS 自带的 `/usr/bin/say` 与 `/usr/bin/afconvert` 输出 16 kHz、mono、PCM16 WAV，不需要额外下载 TTS 权重。系统 TTS Provider ID 为 `macos-say`，后续 MLX-Audio Provider 会沿用同一 API 契约。
+### CoreML 加速（可选）
+
+需要 CoreML 加速时，把官方 encoder 编译模型放到与 `.bin` 同目录（同名前缀）：
+
+```text
+Models/stt/ggml-large-v3-turbo.bin
+Models/stt/ggml-large-v3-turbo-encoder.mlmodelc/   # 与 .bin 同名同目录
+```
+
+- mlmodelc 缺失时自动回退 Metal，不阻塞加载
+- 首次运行某模型会做 ANE 特化，耗时 1-2 分钟（large 更久），之后秒级；转写超时错误会提示重试
+- GUI「添加模型」选 STT 类型时可附加选择 `.mlmodelc` 目录一并导入
+
+STT 当前接受 PCM WAV。TTS 由 kokoro-mlx worker 负责（见下），`macos-say` 仅作为测试兜底能力。
 
 ## 启动
 
@@ -141,7 +156,6 @@ cargo run -p ai-daemon --bin aiworkd
 ```bash
 cargo run -p ai-cli --bin ai -- status
 cargo run -p ai-cli --bin ai -- list
-cargo run -p ai-cli --bin ai -- chat mock hello
 cargo run -p ai-cli --bin ai -- ps
 ```
 
@@ -149,8 +163,10 @@ cargo run -p ai-cli --bin ai -- ps
 
 ```bash
 ./target/debug/aiworkd
-./target/debug/ai chat mock hello
+./target/debug/ai list
 ```
+
+对话示例见下文「运行 GGUF 模型」——`ai chat <id> <消息>` 前需先 `ai load` 或 `ai run` 加载模型。
 
 ## 运行 GGUF 模型
 
@@ -223,21 +239,20 @@ Unloaded smollm2
 
 ## STT / TTS 测试
 
-先生成一段标准 WAV：
+先生成一段标准 WAV（未指定模型时自动选择已注册的 TTS 模型，默认音色 zf_001）：
 
 ```bash
 ./target/debug/ai speak \
   "你好，这是 Mac AI 的语音识别测试。" \
-  --voice Tingting \
   --output .build/tts-stt-test.wav
 ```
 
-再使用本地 whisper.cpp 模型转写：
+再使用本地 whisper.cpp 模型转写（模型 ID 以注册表为准，如 `ggml-base` / `ggml-large-v3-turbo`）：
 
 ```bash
 ./target/debug/ai transcribe \
   .build/tts-stt-test.wav \
-  --model whisper-base \
+  --model ggml-base \
   --language zh
 ```
 
@@ -250,16 +265,16 @@ Wrote 99824 bytes to .build/tts-stt-test.wav
 
 `ggml-base` 体积较小，示例重点验证完整链路。需要更高转写精度时，可通过同一下载脚本选择更大的 whisper.cpp 模型，并将 `AIWORK_WHISPER_MODEL` 指向对应 `.bin` 文件。
 
-TTS HTTP API（macos-say 系统语音）：
+TTS HTTP API（kokoro-mlx，`response_format` 支持 wav）：
 
 ```bash
 curl http://127.0.0.1:11435/v1/audio/speech \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "macos-say",
+    "model": "Kokoro-82M-zh",
     "input": "你好，这是本地语音合成。",
-    "voice": "Tingting",
-    "format": "wav",
+    "voice": "zf_001",
+    "response_format": "wav",
     "speed": 1.0
   }' \
   -o speech.wav
@@ -270,7 +285,7 @@ STT HTTP API：
 ```bash
 curl http://127.0.0.1:11435/v1/audio/transcriptions \
   -F file=@speech.wav \
-  -F model=whisper-base \
+  -F model=ggml-base \
   -F language=zh \
   -F response_format=json
 ```
@@ -363,8 +378,16 @@ curl --no-buffer http://127.0.0.1:11435/v1/chat/completions \
 
 ## 当前边界
 
-当前版本已完成 handoff 的 Milestone 1（Runtime 架构）与 Milestone 2（SQLite model registry、`ai pull` HuggingFace 下载、内存预算/LRU/keep-alive、busy guard），以及 Milestone 3 的一部分：whisper.cpp 离线 STT 与 MLX-Audio 高质量中文 TTS（Kokoro-82M-zh）。GUI（MacAIConsole）已提供运行状态、模型管理、TTS 试听与菜单栏摘要。
+已完成 handoff 的 Milestone 1（Runtime 架构）、Milestone 2（SQLite model registry、`ai pull` HuggingFace 下载、内存预算/LRU/keep-alive、busy guard、no-silent-fallback routing），以及 Milestone 3 的大部分：whisper.cpp 离线 STT（含 CoreML 加速与 Metal 回退）、MLX-Audio 高质量中文 TTS（Kokoro-82M-zh）、STT/TTS API 与 CLI。GUI（MacAIConsole）已提供运行状态（内存预算、内存压力、加速策略 tag、驻留内存、详细设置页）、模型管理（分组仓库、改名、右键 curl 示例、.mlmodelc 导入）与菜单栏摘要。
 
-尚未实现：MLX LLM Provider、LLM/STT/TTS benchmark 框架、long-running job metadata 与有界事件回放、GUI Chat/Speech 页面、实时 STT/VAD/streaming TTS。
+尚未实现（对应 handoff Phase）：
+
+- **MLX LLM Provider**（Phase 3）与 **MLX-native ASR**（mlx-whisper / parakeet-mlx，Phase 5）——LLM 仅 llama.cpp，ASR 仅 whisper.cpp
+- **LLM / STT / TTS benchmark 框架**（handoff §28-30）——MLX vs llama.cpp 决策尚未有数据支撑
+- **long-running job metadata 与有界事件回放**（Phase 6 剩余）——per-device job queue 的完整语义与 `after_seq` 重连
+- **GUI Chat / Speech 页面**（Phase 7 剩余）——目前 GUI 是运行状态 + 模型管理，无对话页
+- **实时 STT / VAD / streaming TTS**（Phase 8）——sherpa-onnx 与流式音频链路未接入
+
+更远的 Future Capabilities（VLM、Embedding、Reranker、Image/Video generation、Agent Runtime、MCP、Realtime conversation、Remote GPU workers）见 handoff §57，均未开始。
 
 完整产品与架构说明见 [`handoff.md`](handoff.md)。

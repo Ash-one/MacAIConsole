@@ -1,8 +1,11 @@
 # MacAIConsole
 
-MacAI 的原生 macOS 控制台（第一版）：Runtime 状态 + 模型管理。
+MacAI 的原生 macOS 控制台：Runtime 状态 + 模型管理，全部通过本地 HTTP API 驱动 `aiworkd`。
 
-- 主窗口：侧栏两页「运行状态」「模型管理」
+- 主窗口：侧栏「运行状态」「模型管理」两页
+- 运行状态页：版本/PID/内存预算统计卡、系统内存压力条、Running Models 列表（类型图标、加速策略 tag（CoreML/Metal）、真实驻留内存、停止按钮、详细设置页）
+- 模型详细设置页：keep_alive 策略、LLM 上下文长度（K 单位热调并重载）、TTS 默认音色与试听
+- 模型管理页：llm/tts/stt 分组、仓库扫描（放入文件即出现）、模型改名与恢复原始 ID、右键拷贝 curl 使用示例、STT 附加 `.mlmodelc` 目录导入（CoreML 加速）
 - 菜单栏常驻小窗：状态摘要 + 快捷启停
 - GUI 掌管 aiworkd 生命周期：可在界面内启动 / 停止；离线时自动收编终端里手动拉起的守护进程
 
@@ -24,8 +27,4 @@ swift run
   `POST /api/models/load`、`POST /api/models/{id}/load`、`POST /api/models/{id}/unload`
 - 守护进程二进制探测顺序：设置中指定路径 → `AIWORKD_PATH` 环境变量 → 仓库 `target/{release,debug}/aiworkd`
 - 启动的子进程日志写入 `~/Library/Application Support/MacAIConsole/logs/aiworkd.log`
-- 添加的 GGUF 会记入本地模型库 `local-models.json`（守护进程注册表仅在运行期内存）
-
-## 第二期规划
-
-Chat 对话页、STT / TTS（whisper-base / macos-say 已注册，API 已具备）。
+- 模型仓库 `~/Library/Application Support/MacAIConsole/Models/{llm,tts,stt}/`：文件放入即出现；模型设置（上下文长度等）同步 `model-settings.json`；daemon 侧注册表持久化在 SQLite（`models.db`），重启自动恢复
