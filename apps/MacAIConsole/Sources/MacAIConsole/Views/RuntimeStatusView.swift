@@ -191,6 +191,9 @@ struct RunningModelSettingsView: View {
 
     @State private var keepAlive: String
     @State private var voice: String
+    @State private var contextLengthDraft: String
+    @State private var repoModel: RepoModel?
+    @State private var isReloading = false
     @State private var voices: [String] = []
     @State private var voicesLoaded = false
 
@@ -212,8 +215,10 @@ struct RunningModelSettingsView: View {
 
     init(model: LoadedModel) {
         self.model = model
+        let contextLength = model.contextLength ?? ModelRepository.contextLength(for: model.id)
         _keepAlive = State(initialValue: model.keepAlive?.isEmpty == false ? model.keepAlive! : "always")
         _voice = State(initialValue: model.defaultVoice?.isEmpty == false ? model.defaultVoice! : "zf_001")
+        _contextLengthDraft = State(initialValue: Self.displayContextLength(contextLength))
     }
 
     private var modelType: String {
@@ -230,6 +235,41 @@ struct RunningModelSettingsView: View {
         case "tts": "TTS"
         default: modelType.uppercased()
         }
+    }
+
+    private static func displayContextLength(_ value: Int) -> String {
+        let kilo = Double(value) / 1024.0
+        if kilo.rounded() == kilo { return String(Int(kilo)) }
+        return String(format: "%.2f", kilo)
+    }
+
+    private static func parseContextLength(_ text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard let kilo = Double(trimmed), kilo > 0, kilo <= 1024 else { return nil }
+        return Int(kilo * 1024.0)
+    }
+
+    private var parsedContextLength: Int? {
+        Self.parseContextLength(contextLengthDraft)
+    }
+
+    private var currentContextLength: Int {
+        model.contextLength ?? ModelRepository.contextLength(for: model.id)
+    }
+
+    private var contextLengthChanged: Bool {
+        parsedContextLength != nil && parsedContextLength != currentContextLength
+    }
+
+    private var contextLengthValid: Bool {
+        guard let value = parsedContextLength else { return false }
+        return value >= 256 && value <= 1024 * 1024
+    }
+
+    private var canApply: Bool {
+        guard controller.phase == .online, !isReloading else { return false }
+        guard modelType == "llm" else { return true }
+        return !contextLengthChanged || (contextLengthValid && repoModel != nil)
     }
 
     var body: some View {
@@ -249,6 +289,42 @@ struct RunningModelSettingsView: View {
                     }
                 }
 
+                if modelType == "llm" {
+                    Section("推理") {
+                        HStack {
+                            Text("上下文长度")
+                            Spacer()
+                            HStack(spacing: 4) {
+                                TextField("4", text: $contextLengthDraft)
+                                    .font(.body.monospacedDigit())
+                                    .textFieldStyle(.plain)
+                                    .frame(width: 72)
+                                    .multilineTextAlignment(.trailing)
+                                    .onChange(of: contextLengthDraft) { _, value in
+                                        let filtered = value.filter { $0.isNumber || $0 == "." }
+                                        if filtered != value { contextLengthDraft = filtered }
+                                    }
+                                Text("K")
+                                    .font(.body.weight(.medium).monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7)
+                                    .fill(Color.secondary.opacity(0.12))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 7)
+                                    .strokeBorder(Color.secondary.opacity(0.18))
+                            )
+                        }
+                        Text(repoModel == nil ? "该模型不在模型仓库中，无法从这里重载上下文" : "修改后会同步模型注册设置并重载 LLM")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 if modelType == "tts" {
                     Section("语音") {
                         if voices.isEmpty {
@@ -258,7 +334,7 @@ struct RunningModelSettingsView: View {
                                 if !voicesLoaded { ProgressView().controlSize(.small) }
                             }
                         } else {
-                            Picker("模型音色", selection: $voice) {
+                            Picker("默认音色", selection: $voice) {
                                 ForEach(voices, id: \.self) { item in
                                     Text(item).tag(item)
                                 }
@@ -277,10 +353,14 @@ struct RunningModelSettingsView: View {
         .navigationTitle("模型设置")
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("完成") { dismiss() }
+                Button(isReloading ? "重载中…" : "应用") {
+                    applySettings()
+                }
+                .disabled(!canApply)
             }
         }
         .task(id: model.id) {
+            repoModel = ModelRepository.scan().first { $0.modelID == model.id }
             guard modelType == "tts", !voicesLoaded else { return }
             defer { voicesLoaded = true }
             if let response = try? await controller.voices(for: model.id) {
@@ -289,6 +369,40 @@ struct RunningModelSettingsView: View {
                     voice = defaultVoice
                 }
             }
+        }
+    }
+
+    private func applySettings() {
+        guard modelType == "llm", contextLengthChanged else {
+            dismiss()
+            return
+        }
+        applyContextLength()
+    }
+
+    private func applyContextLength() {
+        guard modelType == "llm",
+              let value = parsedContextLength,
+              contextLengthValid,
+              let repoModel,
+              !isReloading else { return }
+
+        ModelRepository.setContextLength(value, for: model.id)
+        isReloading = true
+        Task {
+            do {
+                try await controller.registerAndLoad(
+                    path: repoModel.path,
+                    id: model.id,
+                    contextLength: value,
+                    keepAlive: keepAlive,
+                    modelType: nil
+                )
+            } catch {
+                controller.lastError = "上下文重载失败：\(DaemonController.message(for: error))"
+            }
+            isReloading = false
+            dismiss()
         }
     }
 

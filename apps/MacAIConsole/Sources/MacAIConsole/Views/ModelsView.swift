@@ -428,21 +428,18 @@ struct RepoModelRow: View {
         }
     }
 
-    /// 存储值 → 显示文本：能被 1024 整除时用 K 记法（4096 → "4K"），否则显示原始数值。
+    /// 存储值 → 显示 K 数值（4096 → "4"，单位由界面固定显示）。
     private static func displayValue(_ tokens: Int) -> String {
-        tokens % 1024 == 0 ? "\(tokens / 1024)K" : "\(tokens)"
+        let kilo = Double(tokens) / 1024.0
+        if kilo.rounded() == kilo { return String(Int(kilo)) }
+        return String(format: "%.2f", kilo)
     }
 
-    /// 输入文本 → token 数：支持 K 记法（"4k" / "8K" / "0.5k"）与原始数值（"4096"）。
+    /// 输入 K 数值 → token 数（"4" → 4096，"0.5" → 512）。
     private static func parseValue(_ text: String) -> Int? {
-        let trimmed = text.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !trimmed.isEmpty else { return nil }
-        if trimmed.hasSuffix("k") {
-            let number = trimmed.dropLast()
-            guard let value = Double(number), value > 0 else { return nil }
-            return Int(value * 1024)
-        }
-        return Int(trimmed)
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard let kilo = Double(trimmed), kilo > 0, kilo <= 1024 else { return nil }
+        return Int(kilo * 1024.0)
     }
 
     /// llm 的上下文长度编辑：改动了才出现「应用」，点击即保存并自动重载。
@@ -451,11 +448,31 @@ struct RepoModelRow: View {
             Text("上下文")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            TextField("4K", text: $contextDraft)
-                .font(.caption.monospacedDigit())
-                .frame(width: 56)
-                .multilineTextAlignment(.trailing)
-                .onSubmit(applyContext)
+            HStack(spacing: 2) {
+                TextField("4", text: $contextDraft)
+                    .font(.caption.monospacedDigit())
+                    .textFieldStyle(.plain)
+                    .frame(width: 42)
+                    .multilineTextAlignment(.trailing)
+                    .onChange(of: contextDraft) { _, value in
+                        let filtered = value.filter { $0.isNumber || $0 == "." }
+                        if filtered != value { contextDraft = filtered }
+                    }
+                Text("K")
+                    .font(.caption.weight(.medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.secondary.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.secondary.opacity(0.18))
+            )
+            .onSubmit(applyContext)
             if contextChanged, parsedContext != nil {
                 Button(isReloading ? "重载中…" : "应用") { applyContext() }
                     .buttonStyle(.borderedProminent)
