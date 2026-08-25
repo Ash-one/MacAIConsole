@@ -134,6 +134,161 @@ struct ProviderEntry: Decodable, Identifiable {
     var id: String { descriptor.id }
 }
 
+struct InferenceTaskMessage: Decodable, Hashable {
+    var role: String
+    var content: String
+}
+
+struct InferenceTaskSummary: Decodable, Identifiable, Hashable {
+    var id: String
+    var kind: String
+    var status: String
+    var model: String
+    var provider: String?
+    var inputPreview: String
+    var startedAtMs: UInt64
+    var completedAtMs: UInt64?
+    var durationMs: UInt64?
+    var error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, kind, status, model, provider, error
+        case inputPreview = "input_preview"
+        case startedAtMs = "started_at_ms"
+        case completedAtMs = "completed_at_ms"
+        case durationMs = "duration_ms"
+    }
+
+    var isRunning: Bool { status == "running" }
+
+    var kindTitle: String {
+        switch kind {
+        case "chat": "对话生成"
+        case "stt": "语音识别"
+        case "tts": "语音合成"
+        default: kind.uppercased()
+        }
+    }
+
+    var iconType: String {
+        kind == "chat" ? "llm" : kind
+    }
+
+    var statusTitle: String {
+        switch status {
+        case "running": "运行中"
+        case "succeeded": "成功"
+        case "failed": "失败"
+        case "cancelled": "已中断"
+        default: status
+        }
+    }
+}
+
+struct InferenceTaskRequest: Decodable {
+    var messages: [InferenceTaskMessage]?
+    var inputText: String?
+    var fileName: String?
+    var fileSizeBytes: UInt64?
+    var language: String?
+    var voice: String?
+    var format: String?
+    var speed: Double?
+    var stream: Bool?
+    var temperature: Double?
+    var maxTokens: UInt64?
+
+    enum CodingKeys: String, CodingKey {
+        case messages
+        case inputText = "input_text"
+        case fileName = "file_name"
+        case fileSizeBytes = "file_size_bytes"
+        case language, voice, format, speed, stream, temperature
+        case maxTokens = "max_tokens"
+    }
+}
+
+struct InferenceTaskResult: Decodable {
+    var outputText: String?
+    var language: String?
+    var finishReason: String?
+    var promptTokens: UInt64?
+    var completionTokens: UInt64?
+    var totalTokens: UInt64?
+    var contentType: String?
+    var byteCount: UInt64?
+
+    enum CodingKeys: String, CodingKey {
+        case outputText = "output_text"
+        case language
+        case finishReason = "finish_reason"
+        case promptTokens = "prompt_tokens"
+        case completionTokens = "completion_tokens"
+        case totalTokens = "total_tokens"
+        case contentType = "content_type"
+        case byteCount = "byte_count"
+    }
+}
+
+struct InferenceTaskDetail: Decodable, Identifiable {
+    var id: String
+    var kind: String
+    var status: String
+    var model: String
+    var provider: String?
+    var startedAtMs: UInt64
+    var completedAtMs: UInt64?
+    var durationMs: UInt64?
+    var request: InferenceTaskRequest?
+    var result: InferenceTaskResult?
+    var requestTruncated: Bool
+    var resultTruncated: Bool
+    var error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, kind, status, model, provider, request, result, error
+        case startedAtMs = "started_at_ms"
+        case completedAtMs = "completed_at_ms"
+        case durationMs = "duration_ms"
+        case requestTruncated = "request_truncated"
+        case resultTruncated = "result_truncated"
+    }
+
+    var isRunning: Bool { status == "running" }
+
+    var summary: InferenceTaskSummary {
+        InferenceTaskSummary(
+            id: id,
+            kind: kind,
+            status: status,
+            model: model,
+            provider: provider,
+            inputPreview: inputPreview,
+            startedAtMs: startedAtMs,
+            completedAtMs: completedAtMs,
+            durationMs: durationMs,
+            error: error
+        )
+    }
+
+    private var inputPreview: String {
+        switch kind {
+        case "chat":
+            return request?.messages?.last(where: { $0.role == "user" })?.content
+                ?? request?.messages?.last?.content
+                ?? ""
+        case "stt": return request?.fileName ?? ""
+        case "tts": return request?.inputText ?? ""
+        default: return request?.inputText ?? request?.fileName ?? ""
+        }
+    }
+}
+
+struct InferenceTaskList: Decodable {
+    var running: [InferenceTaskSummary]
+    var completed: [InferenceTaskSummary]
+}
+
 struct LoadResponse: Decodable {
     var id: String
     var provider: String?
@@ -170,7 +325,16 @@ struct DaemonAPI {
     }
 
     private func send(_ method: String, _ path: String, body: Data?, timeout: TimeInterval) async throws -> Data {
-        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        try await send(
+            method,
+            url: baseURL.appendingPathComponent(path),
+            body: body,
+            timeout: timeout
+        )
+    }
+
+    private func send(_ method: String, url: URL, body: Data?, timeout: TimeInterval) async throws -> Data {
+        var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = timeout
         if let body {
@@ -223,6 +387,31 @@ struct DaemonAPI {
     func providers() async throws -> [ProviderEntry] {
         struct Wrapper: Decodable { var data: [ProviderEntry] }
         return try JSONDecoder().decode(Wrapper.self, from: try await get("api/providers")).data
+    }
+
+    /// GET /api/tasks?completed_limit=N。N 由客户端先收敛到 1...100。
+    func tasks(completedLimit: Int = 100) async throws -> InferenceTaskList {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("api/tasks"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(
+                name: "completed_limit",
+                value: String(min(max(completedLimit, 1), 100))
+            )
+        ]
+        guard let url = components?.url else { throw URLError(.badURL) }
+        return try JSONDecoder().decode(
+            InferenceTaskList.self,
+            from: try await send("GET", url: url, body: nil, timeout: 4)
+        )
+    }
+
+    /// GET /api/tasks/{id}。
+    func task(id: String) async throws -> InferenceTaskDetail {
+        let data = try await get("api/tasks/\(id)")
+        return try JSONDecoder().decode(InferenceTaskDetail.self, from: data)
     }
 
     /// POST /api/models/load —— 注册并加载模型（llm→llama.cpp/.gguf，stt→whisper.cpp/.bin）

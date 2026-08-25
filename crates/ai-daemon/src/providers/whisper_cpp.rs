@@ -60,8 +60,10 @@ impl WhisperCppProvider {
         let logs = stderr.to_ascii_lowercase();
         if logs.contains("coreml = 1") || logs.contains("core ml model loaded") {
             "coreml".to_string()
-        } else if logs.contains("metal = 1") || logs.contains("metal: true")
-            || logs.contains("ggml_metal") || logs.contains("mtl : embed_library")
+        } else if logs.contains("metal = 1")
+            || logs.contains("metal: true")
+            || logs.contains("ggml_metal")
+            || logs.contains("mtl : embed_library")
         {
             "metal".to_string()
         } else {
@@ -85,11 +87,7 @@ impl Provider for WhisperCppProvider {
             id: self.id().to_string(),
             capabilities: self.capabilities(),
             isolation: IsolationMode::Worker,
-            supported_devices: vec![
-                "coreml".to_string(),
-                "metal".to_string(),
-                "cpu".to_string(),
-            ],
+            supported_devices: vec!["coreml".to_string(), "metal".to_string(), "cpu".to_string()],
         }
     }
 

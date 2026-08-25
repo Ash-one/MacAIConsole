@@ -17,5 +17,6 @@ pub use provider::{
 };
 pub use request::{ChatMessage, ChatRequest, SpeechRequest, TranscriptionRequest};
 pub use response::{
-    ChatChunk, ChatResponse, ChatUsage, ModelEntry, RuntimeInfo, TranscriptionResponse,
+    ChatChunk, ChatResponse, ChatUsage, ModelEntry, RuntimeInfo, TaskDetail, TaskListResponse,
+    TaskRequestDetail, TaskResultDetail, TaskSummary, TranscriptionResponse,
 };

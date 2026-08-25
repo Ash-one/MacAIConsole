@@ -2,6 +2,7 @@ import SwiftUI
 
 enum Page: Hashable {
     case runtime
+    case tasks
     case models
 }
 
@@ -14,6 +15,8 @@ struct RootView: View {
             List(selection: $page) {
                 Label("运行状态", systemImage: "gauge")
                     .tag(Page.runtime)
+                Label("任务", systemImage: "list.bullet.rectangle.portrait")
+                    .tag(Page.tasks)
                 Label("模型管理", systemImage: "shippingbox")
                     .tag(Page.models)
             }
@@ -21,6 +24,7 @@ struct RootView: View {
         } detail: {
             switch page {
             case .runtime: RuntimeStatusView()
+            case .tasks: TasksView()
             case .models: ModelsView()
             }
         }

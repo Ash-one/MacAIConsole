@@ -16,7 +16,10 @@ use ai_core::provider::{
     STTProvider, TTSProvider,
 };
 use ai_core::request::{SpeechRequest, TranscriptionRequest};
-use ai_core::response::{LoadedModelInfo, RuntimeInfo, SpeechResponse, TranscriptionResponse};
+use ai_core::response::{
+    LoadedModelInfo, RuntimeInfo, SpeechResponse, TaskRequestDetail, TaskResultDetail,
+    TranscriptionResponse,
+};
 use ai_core::AIError;
 
 use crate::providers::{
@@ -24,6 +27,7 @@ use crate::providers::{
 };
 use crate::registry::RegistryStore;
 use crate::scheduler;
+use crate::tasks::{TaskHandle, TaskRegistry};
 
 /// 内存版模型注册表条目：模型规格 + 当前状态 + 使用时间。
 #[derive(Debug, Clone)]
@@ -48,24 +52,13 @@ pub struct Runtime {
     model_leases: StdMutex<HashMap<String, u64>>,
     lifecycle_lock: Mutex<()>,
     started_at: Instant,
-    active_requests: AtomicU64,
+    tasks: TaskRegistry,
     request_counter: AtomicU64,
-}
-
-/// 活跃请求计数守卫。普通请求返回、流式响应结束或客户端断开时自动归零。
-pub struct RequestGuard {
-    runtime: Arc<Runtime>,
 }
 
 pub struct ModelLease {
     runtime: Arc<Runtime>,
     model_id: String,
-}
-
-impl Drop for RequestGuard {
-    fn drop(&mut self) {
-        self.runtime.active_requests.fetch_sub(1, Ordering::SeqCst);
-    }
 }
 
 impl Drop for ModelLease {
@@ -95,14 +88,11 @@ impl Runtime {
     /// 只展示真实引擎；macos-say 仅作为 `ai speak` 未指定模型时的兜底能力。
     fn inject_test_providers(&mut self) {
         let mock = Arc::new(MockProvider);
-        self.providers
-            .insert("mock".to_string(), mock.clone());
+        self.providers.insert("mock".to_string(), mock.clone());
         self.chat_providers.insert("mock".to_string(), mock);
         let say = Arc::new(MacOSSayProvider::new());
-        self.providers
-            .insert("macos-say".to_string(), say.clone());
-        self.tts_providers
-            .insert("macos-say".to_string(), say);
+        self.providers.insert("macos-say".to_string(), say.clone());
+        self.tts_providers.insert("macos-say".to_string(), say);
     }
 
     /// 生产构造：打开 SQLite 注册表并加载已注册模型；预算由 scheduler 计算。
@@ -169,7 +159,7 @@ impl Runtime {
             model_leases: StdMutex::new(HashMap::new()),
             lifecycle_lock: Mutex::new(()),
             started_at: Instant::now(),
-            active_requests: AtomicU64::new(0),
+            tasks: TaskRegistry::new(),
             request_counter: AtomicU64::new(0),
         }
     }
@@ -266,12 +256,18 @@ impl Runtime {
     /// 返回 Err 表示模型不存在或卸载失败。
     pub async fn unregister_model(&self, id: &str) -> Result<(), ProviderError> {
         if self.registry.read().await.get(id).is_none() {
-            return Err(ProviderError::new(AIError::ModelNotFound, format!("model '{id}' not found")));
+            return Err(ProviderError::new(
+                AIError::ModelNotFound,
+                format!("model '{id}' not found"),
+            ));
         }
         // 已加载则先卸载，避免孤儿 worker。
         if let Some(entry) = self.registry.read().await.get(id) {
             let state = entry.state.clone();
-            if matches!(state.as_str(), "loading" | "ready" | "busy" | "idle" | "unloading") {
+            if matches!(
+                state.as_str(),
+                "loading" | "ready" | "busy" | "idle" | "unloading"
+            ) {
                 self.unload_model(id).await?;
             }
         }
@@ -457,62 +453,97 @@ impl Runtime {
     pub async fn transcribe(
         self: &Arc<Self>,
         request: TranscriptionRequest,
+        task: TaskHandle,
     ) -> Result<TranscriptionResponse, ProviderError> {
         let model_id = request.model.clone();
         let _lease = self.model_lease(&model_id);
-        let _request = self.request_guard();
-        self.load_model(&model_id).await?;
-        let spec = self.get_model(&model_id).await.ok_or_else(|| {
-            ProviderError::new(
-                AIError::ModelNotFound,
-                format!("model '{model_id}' not found"),
-            )
-        })?;
-        let provider = self
-            .stt_providers
-            .get(&spec.provider)
-            .cloned()
-            .ok_or_else(|| {
+        let result: Result<TranscriptionResponse, ProviderError> = async {
+            let spec = self.get_model(&model_id).await.ok_or_else(|| {
                 ProviderError::new(
-                    AIError::ProviderUnavailable,
-                    format!("provider '{}' does not support STT", spec.provider),
+                    AIError::ModelNotFound,
+                    format!("model '{model_id}' not found"),
                 )
             })?;
-        let response = provider.transcribe(request).await?;
-        self.touch_model(&model_id).await;
-        Ok(response)
+            task.set_provider(Some(spec.provider.clone()));
+            self.load_model(&model_id).await?;
+            let provider = self
+                .stt_providers
+                .get(&spec.provider)
+                .cloned()
+                .ok_or_else(|| {
+                    ProviderError::new(
+                        AIError::ProviderUnavailable,
+                        format!("provider '{}' does not support STT", spec.provider),
+                    )
+                })?;
+            provider.transcribe(request).await
+        }
+        .await;
+        match result {
+            Ok(response) => {
+                task.succeed(TaskResultDetail {
+                    output_text: Some(response.text.clone()),
+                    language: response.language.clone(),
+                    ..TaskResultDetail::default()
+                });
+                self.touch_model(&model_id).await;
+                Ok(response)
+            }
+            Err(error) => {
+                task.fail(error.message.clone());
+                Err(error)
+            }
+        }
     }
 
     pub async fn synthesize(
         self: &Arc<Self>,
         mut request: SpeechRequest,
+        task: TaskHandle,
     ) -> Result<SpeechResponse, ProviderError> {
         let model_id = request.model.clone();
         let _lease = self.model_lease(&model_id);
-        let _request = self.request_guard();
-        self.load_model(&model_id).await?;
-        let spec = self.get_model(&model_id).await.ok_or_else(|| {
-            ProviderError::new(
-                AIError::ModelNotFound,
-                format!("model '{model_id}' not found"),
-            )
-        })?;
-        if request.voice.is_none() {
-            request.voice = spec.default_voice.clone();
-        }
-        let provider = self
-            .tts_providers
-            .get(&spec.provider)
-            .cloned()
-            .ok_or_else(|| {
+        let result: Result<SpeechResponse, ProviderError> = async {
+            let spec = self.get_model(&model_id).await.ok_or_else(|| {
                 ProviderError::new(
-                    AIError::ProviderUnavailable,
-                    format!("provider '{}' does not support TTS", spec.provider),
+                    AIError::ModelNotFound,
+                    format!("model '{model_id}' not found"),
                 )
             })?;
-        let response = provider.synthesize(request).await?;
-        self.touch_model(&model_id).await;
-        Ok(response)
+            task.set_provider(Some(spec.provider.clone()));
+            self.load_model(&model_id).await?;
+            if request.voice.is_none() {
+                request.voice = spec.default_voice.clone();
+            }
+            task.update_request(|detail| detail.voice = request.voice.clone());
+            let provider = self
+                .tts_providers
+                .get(&spec.provider)
+                .cloned()
+                .ok_or_else(|| {
+                    ProviderError::new(
+                        AIError::ProviderUnavailable,
+                        format!("provider '{}' does not support TTS", spec.provider),
+                    )
+                })?;
+            provider.synthesize(request).await
+        }
+        .await;
+        match result {
+            Ok(response) => {
+                task.succeed(TaskResultDetail {
+                    content_type: Some(response.content_type.clone()),
+                    byte_count: Some(response.bytes),
+                    ..TaskResultDetail::default()
+                });
+                self.touch_model(&model_id).await;
+                Ok(response)
+            }
+            Err(error) => {
+                task.fail(error.message.clone());
+                Err(error)
+            }
+        }
     }
 
     pub async fn touch_model(&self, id: &str) {
@@ -592,6 +623,20 @@ impl Runtime {
         format!("req_{t}_{n}")
     }
 
+    pub fn start_task(
+        &self,
+        kind: impl Into<String>,
+        model: impl Into<String>,
+        request: TaskRequestDetail,
+    ) -> TaskHandle {
+        self.tasks
+            .start(self.next_request_id(), kind, model, request)
+    }
+
+    pub fn tasks(&self) -> TaskRegistry {
+        self.tasks.clone()
+    }
+
     pub fn model_lease(self: &Arc<Self>, model_id: &str) -> ModelLease {
         if let Ok(mut leases) = self.model_leases.lock() {
             *leases.entry(model_id.to_string()).or_insert(0) += 1;
@@ -618,13 +663,6 @@ impl Runtime {
                 AIError::ProviderUnavailable,
                 format!("model '{model_id}' is busy with {active} active request(s)"),
             ))
-        }
-    }
-
-    pub fn request_guard(self: &Arc<Self>) -> RequestGuard {
-        self.active_requests.fetch_add(1, Ordering::SeqCst);
-        RequestGuard {
-            runtime: Arc::clone(self),
         }
     }
 
@@ -755,16 +793,12 @@ impl Runtime {
     }
 
     pub async fn runtime_info(&self, version: &str) -> RuntimeInfo {
-        let entries = self
-            .list_models()
-            .await
-            .into_iter()
-            .filter(|entry| {
-                matches!(
-                    entry.state.as_str(),
-                    "loading" | "ready" | "busy" | "idle" | "unloading"
-                )
-            });
+        let entries = self.list_models().await.into_iter().filter(|entry| {
+            matches!(
+                entry.state.as_str(),
+                "loading" | "ready" | "busy" | "idle" | "unloading"
+            )
+        });
         let mut loaded_models = Vec::new();
         for entry in entries {
             let memory_usage_bytes = match self.providers.get(&entry.spec.provider) {
@@ -795,7 +829,7 @@ impl Runtime {
             pid: std::process::id(),
             uptime_secs: self.started_at.elapsed().as_secs(),
             loaded_models,
-            active_requests: self.active_requests.load(Ordering::SeqCst),
+            active_requests: self.tasks.running_count(),
             memory_budget: self.memory_budget,
             memory_total: scheduler::total_memory_bytes(),
             memory_used: scheduler::used_memory_bytes(),
@@ -805,13 +839,7 @@ impl Runtime {
     /// 优雅关闭：卸载所有仍在驻留的模型（终止对应 worker 进程），
     /// daemon 收到 SIGTERM/SIGINT 时调用，避免 worker 成为孤儿。
     pub async fn shutdown_all(&self) {
-        let loaded_ids: Vec<String> = self
-            .handles
-            .read()
-            .await
-            .keys()
-            .cloned()
-            .collect();
+        let loaded_ids: Vec<String> = self.handles.read().await.keys().cloned().collect();
         for id in loaded_ids {
             match self.unload_model(&id).await {
                 Ok(()) => tracing::info!(model = %id, "shutdown: unloaded model"),
@@ -899,13 +927,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_guard_tracks_and_releases_active_request() {
+    async fn task_registry_tracks_and_releases_active_request() {
         let runtime = Arc::new(Runtime::new());
         assert_eq!(runtime.runtime_info("test").await.active_requests, 0);
-        let guard = runtime.request_guard();
+        let task = runtime.start_task("chat", "mock", TaskRequestDetail::default());
         assert_eq!(runtime.runtime_info("test").await.active_requests, 1);
-        drop(guard);
+        drop(task);
         assert_eq!(runtime.runtime_info("test").await.active_requests, 0);
+    }
+
+    #[tokio::test]
+    async fn audio_paths_finalize_tasks_when_model_lookup_fails() {
+        let runtime = Arc::new(Runtime::new());
+        let stt_task = runtime.start_task("stt", "missing-stt", TaskRequestDetail::default());
+        let stt_error = runtime
+            .transcribe(
+                TranscriptionRequest {
+                    model: "missing-stt".to_string(),
+                    file: Some("meeting.wav".to_string()),
+                    language: Some("zh".to_string()),
+                    response_format: Some("json".to_string()),
+                },
+                stt_task,
+            )
+            .await
+            .unwrap_err();
+        assert!(stt_error.message.contains("not found"));
+
+        let tts_task = runtime.start_task("tts", "missing-tts", TaskRequestDetail::default());
+        let tts_error = runtime
+            .synthesize(
+                SpeechRequest {
+                    model: "missing-tts".to_string(),
+                    input: "hello".to_string(),
+                    voice: None,
+                    format: Some("wav".to_string()),
+                    speed: None,
+                },
+                tts_task,
+            )
+            .await
+            .unwrap_err();
+        assert!(tts_error.message.contains("not found"));
+
+        assert_eq!(runtime.tasks().running_count(), 0);
+        let completed = runtime.tasks().list(100).completed;
+        assert_eq!(completed.len(), 2);
+        assert_eq!(completed[0].kind, "tts");
+        assert_eq!(completed[0].status, "failed");
+        assert_eq!(completed[1].kind, "stt");
+        assert_eq!(completed[1].status, "failed");
     }
 
     #[tokio::test]
@@ -947,7 +1018,13 @@ mod tests {
             .collect();
         assert_eq!(
             ids,
-            vec!["kokoro-mlx", "llama.cpp", "macos-say", "mock", "whisper.cpp"]
+            vec![
+                "kokoro-mlx",
+                "llama.cpp",
+                "macos-say",
+                "mock",
+                "whisper.cpp"
+            ]
         );
     }
 }

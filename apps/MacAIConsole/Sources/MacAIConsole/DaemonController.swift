@@ -21,6 +21,9 @@ final class DaemonController {
     var info: RuntimeInfo?
     var providers: [ProviderEntry] = []
     var registeredModels: [ModelEntry] = []
+    private(set) var runningTasks: [InferenceTaskSummary] = []
+    private(set) var completedTasks: [InferenceTaskSummary] = []
+    private(set) var tasksError: String?
     var lastError: String?
     var busyModelIDs: Set<String> = []
 
@@ -100,12 +103,29 @@ final class DaemonController {
     // MARK: - 数据操作
 
     func refresh() async throws {
-        let info = try await api.runtimeInfo()
-        let models = try? await api.models()
-        let providers = try? await api.providers()
+        async let infoRequest = api.runtimeInfo()
+        async let modelsRequest = api.models()
+        async let providersRequest = api.providers()
+        async let tasksRequest = api.tasks(completedLimit: 100)
+
+        let info = try await infoRequest
+        let models = try? await modelsRequest
+        let providers = try? await providersRequest
+        let tasks = try? await tasksRequest
         self.info = info
         if let models { registeredModels = models }
         if let providers { self.providers = providers }
+        if let tasks {
+            runningTasks = tasks.running
+            completedTasks = tasks.completed
+            tasksError = nil
+        } else {
+            tasksError = "任务记录暂时无法读取：守护进程未返回有效数据"
+        }
+    }
+
+    func task(id: String) async throws -> InferenceTaskDetail {
+        try await api.task(id: id)
     }
 
     func loadRegistered(_ id: String) async {
@@ -247,6 +267,9 @@ final class DaemonController {
         info = nil
         registeredModels = []
         providers = []
+        runningTasks = []
+        completedTasks = []
+        tasksError = nil
         childProcess = nil
         stopDeadline = nil
         try? logHandle?.close()
