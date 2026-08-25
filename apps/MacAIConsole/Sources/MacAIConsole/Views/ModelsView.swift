@@ -60,6 +60,11 @@ struct ModelsView: View {
         Set(controller.registeredModels.map(\.id))
     }
 
+    /// 已注册的模型来源路径集合。仓库灰色状态按 path 匹配——改名不影响它。
+    private var registeredPaths: Set<String> {
+        Set(controller.registeredModels.compactMap(\.path))
+    }
+
     /// 按类型分组展示顺序：llm → stt → tts，其余未知类型按字母序殿后。
     private let typeOrder = ["llm", "stt", "tts"]
 
@@ -164,14 +169,14 @@ struct ModelsView: View {
                         ForEach(ModelRepository.folderNames, id: \.self) { type in
                             let entries = repoModels.filter { $0.modelType == type }
                             if !entries.isEmpty {
-                                let allRegistered = entries.allSatisfy { registeredIDs.contains($0.modelID) }
+                                let allRegistered = entries.allSatisfy { registeredPaths.contains($0.path) }
                                 ModelTypeSection(type: type, title: typeLabel(type), count: entries.count, dimmed: allRegistered) {
                                     ForEach(entries) { model in
                                         RepoModelRow(
                                             model: model,
                                             // 仓库行只关心「是否已注册」，不同步展示运行时加载状态。
                                             isLoaded: false,
-                                            isRegistered: registeredIDs.contains(model.modelID)
+                                            isRegistered: registeredPaths.contains(model.path)
                                         )
                                         if model.id != entries.last?.id { Divider().opacity(0.25) }
                                     }
@@ -190,6 +195,7 @@ struct ModelsView: View {
         }
     }
 }
+
 
 /// 可折叠的类型分组：LLM / STT / TTS。默认展开，chevron 随状态旋转。
 /// `dimmed` 为 true 时（仓库区该类型已全部注册）标题降灰，提示整组不重要。
@@ -257,6 +263,16 @@ struct RegisteredModelRow: View {
     let isWorkerProcess: Bool
 
     @State private var isHovering = false
+    @State private var showRenameSheet = false
+    @State private var renameDraft = ""
+
+    /// 原始 ID = 注册来源文件名（去扩展名），来自 daemon 记录的 path，改名不影响。
+    private var originalID: String? { entry.originalID }
+    /// 当前 ID 与原始 ID 不同 = 用户改过名。
+    private var isRenamed: Bool {
+        guard let originalID else { return false }
+        return entry.id != originalID
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -293,30 +309,27 @@ struct RegisteredModelRow: View {
                 if controller.busyModelIDs.contains(entry.id) {
                     ProgressView()
                 } else {
-                    Button {
+                    GhostActionButton(
+                        systemImage: isWorkerProcess ? "stop.circle" : "eject.circle",
+                        help: isWorkerProcess ? "停止独立进程" : "卸载",
+                        activeTint: .red,
+                        isDisabled: controller.phase != .online
+                    ) {
                         Task { await controller.unload(entry.id) }
-                    } label: {
-                        Image(systemName: isWorkerProcess ? "stop.fill" : "eject.fill")
-                            .font(.callout.weight(.semibold))
                     }
-                    .buttonStyle(.bordered)
-                    .tint(Color(nsColor: .secondaryLabelColor))
-                    .help(isWorkerProcess ? "停止独立进程" : "卸载")
-                    .disabled(controller.phase != .online)
                 }
             } else {
                 if controller.busyModelIDs.contains(entry.id) {
                     ProgressView()
                 } else {
-                    Button {
+                    GhostActionButton(
+                        systemImage: "play.circle",
+                        help: isWorkerProcess ? "启动独立进程" : "加载",
+                        activeTint: .green,
+                        isDisabled: controller.phase != .online
+                    ) {
                         Task { await controller.loadRegistered(entry.id) }
-                    } label: {
-                        Image(systemName: "play.fill")
-                            .font(.callout.weight(.semibold))
                     }
-                    .buttonStyle(.borderedProminent)
-                    .help(isWorkerProcess ? "启动独立进程" : "加载")
-                    .disabled(controller.phase != .online)
                 }
             }
         }
@@ -327,6 +340,85 @@ struct RegisteredModelRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .onHover { isHovering = $0 }
         .animation(.snappy(duration: 0.15), value: isHovering)
+        .contextMenu {
+            Button {
+                renameDraft = entry.id
+                showRenameSheet = true
+            } label: {
+                Label("更改 ID…", systemImage: "character.cursor.ibeam")
+            }
+            .disabled(originalID == nil)
+
+            Button {
+                if let originalID {
+                    Task { await controller.rename(entry.id, to: originalID) }
+                }
+            } label: {
+                Label(isRenamed ? "恢复原始 ID（\(originalID ?? "")）" : "恢复原始 ID",
+                      systemImage: "arrow.uturn.backward")
+            }
+            .disabled(!isRenamed)
+
+            Divider()
+
+            Button(role: .destructive) {
+                Task { await controller.unregister(entry.id) }
+            } label: {
+                Label("删除", systemImage: "trash")
+                    .foregroundStyle(.red)
+            }
+        }
+        .sheet(isPresented: $showRenameSheet) {
+            RenameModelSheet(currentID: entry.id) { newID in
+                Task { await controller.rename(entry.id, to: newID) }
+            }
+        }
+    }
+}
+
+/// 更改模型 ID 的输入弹窗。
+struct RenameModelSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let currentID: String
+    let onSubmit: (String) -> Void
+
+    @State private var draft = ""
+
+    private var isValid: Bool {
+        let trimmed = draft.trimmingCharacters(in: .whitespaces)
+        return !trimmed.isEmpty
+            && trimmed != currentID
+            && trimmed.allSatisfy { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_" }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("更改模型 ID")
+                .font(.headline)
+            TextField("新的 ID", text: $draft)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { if isValid { submit() } }
+            Text("只允许字母、数字、点、连字符和下划线。已加载的模型会先停止。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("取消", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("确定") { submit() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!isValid)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
+        .onAppear { draft = currentID }
+    }
+
+    private func submit() {
+        dismiss()
+        onSubmit(draft.trimmingCharacters(in: .whitespaces))
     }
 }
 

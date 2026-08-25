@@ -58,9 +58,10 @@ struct StatCard: View {
     }
 }
 
-/// 错误横幅。
+/// 错误横幅。提供 `onClose` 时显示关闭按钮。
 struct ErrorBanner: View {
     let text: String
+    var onClose: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -69,6 +70,17 @@ struct ErrorBanner: View {
             Text(text)
                 .font(.callout)
             Spacer(minLength: 0)
+            if let onClose {
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("关闭提示")
+            }
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(.red.opacity(0.10)))
@@ -95,6 +107,42 @@ struct ModelTypeIcon: View {
         case "tts": "speaker.wave.2"
         default: "cube"
         }
+    }
+}
+
+/// 列表行幽灵操作按钮：常态是安静的次级色圆形图标，悬停时浮现淡圆底并转为语义色。
+/// 停止类传红色、启动类传绿色。
+struct GhostActionButton: View {
+    let systemImage: String
+    let help: String
+    let activeTint: Color
+    var isDisabled: Bool = false
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.title3)
+                .symbolVariant(.fill)
+                .foregroundStyle(
+                    isDisabled ? Color(nsColor: .disabledControlTextColor)
+                        : isHovering ? activeTint : Color(nsColor: .secondaryLabelColor)
+                )
+                .background(
+                    Circle()
+                        .fill(Color.primary.opacity(isHovering && !isDisabled ? 0.08 : 0))
+                        .frame(width: 26, height: 26)
+                )
+                .opacity(isDisabled ? 0.5 : 1)
+        }
+        .buttonStyle(.plain)
+        .controlSize(.small)
+        .disabled(isDisabled)
+        .onHover { isHovering = $0 }
+        .animation(.snappy(duration: 0.15), value: isHovering)
+        .help(help)
     }
 }
 

@@ -83,6 +83,13 @@ enum ModelRepository {
         return map[modelID] ?? 4096
     }
 
+    /// 模型是否有自定义上下文设置（区分默认 4096 与显式设置）。
+    static func customContextLength(for modelID: String) -> Int? {
+        guard let data = try? Data(contentsOf: settingsURL),
+              let map = try? JSONDecoder().decode([String: Int].self, from: data) else { return nil }
+        return map[modelID]
+    }
+
     static func setContextLength(_ length: Int, for modelID: String) {
         var map = [String: Int]()
         if let data = try? Data(contentsOf: settingsURL),
@@ -91,6 +98,17 @@ enum ModelRepository {
         }
         map[modelID] = length
         try? FileManager.default.createDirectory(at: baseURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(map) {
+            try? data.write(to: settingsURL, options: .atomic)
+        }
+    }
+
+    /// 删除模型的本地设置记录（删除模型时调用）。
+    static func removeContextLength(for modelID: String) {
+        guard let data = try? Data(contentsOf: settingsURL),
+              var map = try? JSONDecoder().decode([String: Int].self, from: data),
+              map[modelID] != nil else { return }
+        map.removeValue(forKey: modelID)
         if let data = try? JSONEncoder().encode(map) {
             try? data.write(to: settingsURL, options: .atomic)
         }
