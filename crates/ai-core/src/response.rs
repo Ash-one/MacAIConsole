@@ -128,4 +128,7 @@ pub struct LoadedModelInfo {
     /// TTS 默认音色。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_voice: Option<String>,
+    /// 当前生效的加速设备（coreml / metal / gpu / cpu）；未探测到时为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_device: Option<String>,
 }

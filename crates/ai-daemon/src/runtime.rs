@@ -771,6 +771,10 @@ impl Runtime {
                 Some(provider) => provider.memory_usage_bytes().await,
                 None => None,
             };
+            let effective_device = match self.providers.get(&entry.spec.provider) {
+                Some(provider) => provider.effective_device().await,
+                None => None,
+            };
             loaded_models.push(LoadedModelInfo {
                 id: entry.spec.id,
                 provider: entry.spec.provider,
@@ -783,6 +787,7 @@ impl Runtime {
                 context_length: entry.spec.context_length,
                 model_type: Some(entry.spec.model_type),
                 default_voice: entry.spec.default_voice,
+                effective_device,
             });
         }
         RuntimeInfo {

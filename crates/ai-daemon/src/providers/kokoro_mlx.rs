@@ -277,6 +277,14 @@ impl Provider for KokoroMlxProvider {
         let pid = state.as_ref()?.worker.child.id()?;
         resident_memory_bytes(pid)
     }
+
+    async fn effective_device(&self) -> Option<String> {
+        self.state
+            .lock()
+            .await
+            .as_ref()
+            .map(|_| "gpu".to_string())
+    }
 }
 
 #[async_trait]
