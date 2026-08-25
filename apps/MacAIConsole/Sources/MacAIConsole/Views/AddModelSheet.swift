@@ -8,6 +8,7 @@ struct AddModelSheet: View {
     @Environment(DaemonController.self) private var controller
 
     @State private var pickedURL: URL?
+    @State private var pickedCoreMLURL: URL?
     @State private var modelType = "llm"
     @State private var modelID = ""
     @State private var isWorking = false
@@ -41,12 +42,31 @@ struct AddModelSheet: View {
                     Button("浏览…") { pickFile() }
                 }
 
+                if modelType == "stt" {
+                    HStack {
+                        TextField("Core ML 编译模型（可选）", text: Binding(
+                            get: { pickedCoreMLURL?.path ?? "" },
+                            set: { if $0.isEmpty { pickedCoreMLURL = nil } }
+                        ))
+                        .font(.callout)
+                        Button("浏览…") { pickCoreMLDirectory() }
+                    }
+                    Text("选择 .mlmodelc 目录后会与 .bin 一起导入；未选择时自动回退 Metal。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 TextField("模型 ID（供 API 调用）", text: $modelID)
                     .onChange(of: modelID) { _, _ in idEdited = true }
             }
             .formStyle(.grouped)
+            .onChange(of: modelType) { _, newValue in
+                if newValue != "stt" {
+                    pickedCoreMLURL = nil
+                }
+            }
 
-            Text("文件会拷入仓库 Models/\(modelType)/，随后立即注册加载；之后把同类文件放进该文件夹即可在列表中出现。")
+            Text("文件会拷入仓库 Models/\(modelType)/，随后立即注册加载；STT 的可选 .mlmodelc 会与 .bin 放在一起。")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
@@ -74,8 +94,14 @@ struct AddModelSheet: View {
 
     private var isValid: Bool {
         guard let pickedURL, !modelID.isEmpty else { return false }
-        return pickedURL.pathExtension.lowercased() == expectedExtension
-            && modelID.allSatisfy { $0.isLetter || $0.isNumber || $0 == "." || $0 == "_" || $0 == "-" }
+        guard pickedURL.pathExtension.lowercased() == expectedExtension,
+              modelID.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "_" || $0 == "-" }) else {
+            return false
+        }
+        guard let pickedCoreMLURL else { return true }
+        return modelType == "stt"
+            && pickedCoreMLURL.pathExtension.lowercased() == "mlmodelc"
+            && FileManager.default.fileExists(atPath: pickedCoreMLURL.path)
     }
 
     private func pickFile() {
@@ -94,6 +120,18 @@ struct AddModelSheet: View {
         }
     }
 
+    private func pickCoreMLDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = pickedCoreMLURL?.deletingLastPathComponent()
+        if panel.runModal() == .OK, let url = panel.url,
+           url.pathExtension.lowercased() == "mlmodelc" {
+            pickedCoreMLURL = url
+        }
+    }
+
     private func submit() {
         guard let source = pickedURL else { return }
         isWorking = true
@@ -104,6 +142,13 @@ struct AddModelSheet: View {
             do {
                 // 先拷入仓库（失败则中止，不碰 daemon），再注册加载。
                 let imported = try ModelRepository.importFile(at: source, type: type)
+                if type == "stt", let coreMLSource = pickedCoreMLURL {
+                    _ = try ModelRepository.importResource(
+                        at: coreMLSource,
+                        type: type,
+                        destinationName: coreMLResourceName(for: imported)
+                    )
+                }
                 try await controller.registerAndLoad(
                     path: imported.path,
                     id: id,
@@ -117,5 +162,15 @@ struct AddModelSheet: View {
                 isWorking = false
             }
         }
+    }
+
+    /// whisper.cpp 会从 .bin 自动寻找同目录的 `<stem>-encoder.mlmodelc`。
+    private func coreMLResourceName(for modelURL: URL) -> String {
+        var stem = modelURL.deletingPathExtension().lastPathComponent
+        let suffix = Array(stem.suffix(5))
+        if suffix.count == 5, suffix[0] == "-", suffix[1] == "q", suffix[3] == "_" {
+            stem.removeLast(5)
+        }
+        return "\(stem)-encoder.mlmodelc"
     }
 }

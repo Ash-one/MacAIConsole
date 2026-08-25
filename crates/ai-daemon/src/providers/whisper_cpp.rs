@@ -10,7 +10,6 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::process::Command;
 use tokio::sync::Mutex;
-use tokio::time::timeout;
 
 use ai_core::model::ModelSpec;
 use ai_core::provider::{
@@ -59,7 +58,10 @@ impl WhisperCppProvider {
 
     fn detect_device(stderr: &str) -> String {
         let logs = stderr.to_ascii_lowercase();
-        if logs.contains("metal = 1") || logs.contains("metal: true") || logs.contains("ggml_metal")
+        if logs.contains("coreml = 1") || logs.contains("core ml model loaded") {
+            "coreml".to_string()
+        } else if logs.contains("metal = 1") || logs.contains("metal: true")
+            || logs.contains("ggml_metal") || logs.contains("mtl : embed_library")
         {
             "metal".to_string()
         } else {
@@ -83,7 +85,11 @@ impl Provider for WhisperCppProvider {
             id: self.id().to_string(),
             capabilities: self.capabilities(),
             isolation: IsolationMode::Worker,
-            supported_devices: vec!["metal".to_string(), "cpu".to_string()],
+            supported_devices: vec![
+                "coreml".to_string(),
+                "metal".to_string(),
+                "cpu".to_string(),
+            ],
         }
     }
 
@@ -231,17 +237,27 @@ impl STTProvider for WhisperCppProvider {
             command.arg("-l").arg(language);
         }
 
-        let child_output = timeout(Duration::from_secs(300), command.output())
-            .await
-            .map_err(|_| {
-                ProviderError::new(AIError::Timeout, "whisper-cli timed out after 300 seconds")
-            })?
-            .map_err(|error| {
+        let child = command.spawn().map_err(|error| {
+            ProviderError::new(
+                AIError::BackendCrashed,
+                format!("failed to start '{}': {error}", binary.display()),
+            )
+        })?;
+        let child_output = tokio::select! {
+            result = child.wait_with_output() => result.map_err(|error| {
                 ProviderError::new(
                     AIError::BackendCrashed,
-                    format!("failed to start '{}': {error}", binary.display()),
+                    format!("failed to wait for '{}': {error}", binary.display()),
                 )
-            })?;
+            })?,
+            _ = tokio::time::sleep(Duration::from_secs(300)) => {
+                return Err(ProviderError::new(
+                    AIError::Timeout,
+                    "whisper-cli timed out after 300 seconds; 若为 CoreML 首次运行，\
+                     ANE 特化可达数分钟，请稍后重试",
+                ));
+            }
+        };
         let stderr = String::from_utf8_lossy(&child_output.stderr).to_string();
         if !child_output.status.success() {
             return Err(ProviderError::new(
@@ -380,5 +396,24 @@ mod tests {
             "metal"
         );
         assert_eq!(WhisperCppProvider::detect_device("METAL = 0"), "cpu");
+    }
+
+    #[test]
+    fn detects_coreml_from_whisper_logs() {
+        assert_eq!(
+            WhisperCppProvider::detect_device(
+                "system_info: n_threads = 4 / 8 | WHISPER : COREML = 1 | MTL : EMBED_LIBRARY = 1"
+            ),
+            "coreml"
+        );
+        assert_eq!(
+            WhisperCppProvider::detect_device("whisper_init_state: Core ML model loaded"),
+            "coreml"
+        );
+        // COREML=0（mlmodelc 缺失回退）时仍应识别为 Metal
+        assert_eq!(
+            WhisperCppProvider::detect_device("system_info: COREML = 0 | MTL : EMBED_LIBRARY = 1"),
+            "metal"
+        );
     }
 }
