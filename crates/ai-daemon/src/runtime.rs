@@ -205,6 +205,83 @@ impl Runtime {
             .map(|entry| entry.spec.clone())
     }
 
+    /// 重命名模型 ID。keep_alive / 上下文长度 / 默认音色等设置全部保留；
+    /// 已加载的模型先卸载 worker（新 ID 下状态为 unloaded）。
+    pub async fn rename_model(&self, id: &str, new_id: &str) -> Result<(), ProviderError> {
+        let new_id = new_id.trim();
+        if new_id.is_empty()
+            || !new_id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        {
+            return Err(ProviderError::new(
+                AIError::InvalidRequest,
+                "invalid model id: only letters, digits, '.', '-', '_' are allowed",
+            ));
+        }
+        {
+            let registry = self.registry.read().await;
+            if !registry.contains_key(id) {
+                return Err(ProviderError::new(
+                    AIError::ModelNotFound,
+                    format!("model '{id}' not found"),
+                ));
+            }
+            if registry.contains_key(new_id) {
+                return Err(ProviderError::new(
+                    AIError::InvalidRequest,
+                    format!("model id '{new_id}' already exists"),
+                ));
+            }
+        }
+        // 已加载则先卸载（在拿写锁之前做，避免同任务内锁升级死锁）。
+        if let Some(entry) = self.registry.read().await.get(id) {
+            if matches!(
+                entry.state.as_str(),
+                "loading" | "ready" | "busy" | "idle" | "unloading"
+            ) {
+                self.unload_model(id).await?;
+            }
+        }
+        let mut entry = {
+            let mut registry = self.registry.write().await;
+            registry.remove(id)
+        };
+        if let Some(ref mut entry) = entry {
+            entry.spec.id = new_id.to_string();
+            entry.state = "unloaded".to_string();
+            self.registry
+                .write()
+                .await
+                .insert(new_id.to_string(), entry.clone());
+            if let Some(store) = &self.store {
+                store.upsert(&entry.spec, unix_now(), None);
+                store.remove(id);
+            }
+        }
+        Ok(())
+    }
+
+    /// 从注册表中删除一个模型。已加载的模型会先卸载（终止 worker）。
+    /// 返回 Err 表示模型不存在或卸载失败。
+    pub async fn unregister_model(&self, id: &str) -> Result<(), ProviderError> {
+        if self.registry.read().await.get(id).is_none() {
+            return Err(ProviderError::new(AIError::ModelNotFound, format!("model '{id}' not found")));
+        }
+        // 已加载则先卸载，避免孤儿 worker。
+        if let Some(entry) = self.registry.read().await.get(id) {
+            let state = entry.state.clone();
+            if matches!(state.as_str(), "loading" | "ready" | "busy" | "idle" | "unloading") {
+                self.unload_model(id).await?;
+            }
+        }
+        self.registry.write().await.remove(id);
+        if let Some(store) = &self.store {
+            store.remove(id);
+        }
+        Ok(())
+    }
+
     pub async fn list_models(&self) -> Vec<RegistryEntry> {
         let registry = self.registry.read().await;
         let mut entries: Vec<RegistryEntry> = registry.values().cloned().collect();
@@ -678,7 +755,7 @@ impl Runtime {
     }
 
     pub async fn runtime_info(&self, version: &str) -> RuntimeInfo {
-        let loaded_models = self
+        let entries = self
             .list_models()
             .await
             .into_iter()
@@ -687,20 +764,27 @@ impl Runtime {
                     entry.state.as_str(),
                     "loading" | "ready" | "busy" | "idle" | "unloading"
                 )
-            })
-            .map(|entry| LoadedModelInfo {
+            });
+        let mut loaded_models = Vec::new();
+        for entry in entries {
+            let memory_usage_bytes = match self.providers.get(&entry.spec.provider) {
+                Some(provider) => provider.memory_usage_bytes().await,
+                None => None,
+            };
+            loaded_models.push(LoadedModelInfo {
                 id: entry.spec.id,
                 provider: entry.spec.provider,
                 state: entry.state,
                 memory_estimate: entry.spec.memory_estimate,
+                memory_usage_bytes,
                 keep_alive: entry.spec.keep_alive,
                 loaded_at: entry.loaded_at,
                 last_used_at: entry.last_used_at,
                 context_length: entry.spec.context_length,
                 model_type: Some(entry.spec.model_type),
                 default_voice: entry.spec.default_voice,
-            })
-            .collect();
+            });
+        }
         RuntimeInfo {
             version: version.to_string(),
             pid: std::process::id(),
@@ -708,7 +792,28 @@ impl Runtime {
             loaded_models,
             active_requests: self.active_requests.load(Ordering::SeqCst),
             memory_budget: self.memory_budget,
+            memory_total: scheduler::total_memory_bytes(),
+            memory_used: scheduler::used_memory_bytes(),
         }
+    }
+
+    /// 优雅关闭：卸载所有仍在驻留的模型（终止对应 worker 进程），
+    /// daemon 收到 SIGTERM/SIGINT 时调用，避免 worker 成为孤儿。
+    pub async fn shutdown_all(&self) {
+        let loaded_ids: Vec<String> = self
+            .handles
+            .read()
+            .await
+            .keys()
+            .cloned()
+            .collect();
+        for id in loaded_ids {
+            match self.unload_model(&id).await {
+                Ok(()) => tracing::info!(model = %id, "shutdown: unloaded model"),
+                Err(error) => tracing::warn!(model = %id, %error, "shutdown: unload failed"),
+            }
+        }
+        tracing::info!("shutdown complete");
     }
 }
 

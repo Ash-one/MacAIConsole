@@ -39,6 +39,14 @@ pub fn total_memory_bytes() -> Option<u64> {
     (total > 0).then_some(total)
 }
 
+/// 当前已使用的物理内存字节数（供 GUI 内存压力条展示）。
+pub fn used_memory_bytes() -> Option<u64> {
+    let mut system = System::new();
+    system.refresh_memory();
+    let used = system.used_memory();
+    (used > 0).then_some(used)
+}
+
 /// AI 内存预算（handoff §23）。环境变量 `AIWORKD_MEMORY_BUDGET`（字节）优先。
 pub fn memory_budget() -> Option<u64> {
     if let Ok(raw) = std::env::var("AIWORKD_MEMORY_BUDGET") {

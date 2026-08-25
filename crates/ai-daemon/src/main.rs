@@ -4,6 +4,7 @@
 //! load/unload。默认只绑定 127.0.0.1:11435。
 
 mod providers;
+mod process_memory;
 mod pull;
 mod registry;
 mod runtime;
@@ -18,7 +19,7 @@ use axum::extract::{DefaultBodyLimit, Multipart, Path as AxumPath, State};
 use axum::http::{header, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -85,6 +86,8 @@ async fn main() {
         .route("/api/models/pull", post(pull_model))
         .route("/api/models/{id}/load", post(load_registered_model))
         .route("/api/models/{id}/unload", post(unload_model))
+        .route("/api/models/{id}", delete(unregister_model))
+        .route("/api/models/{id}/rename", post(rename_model))
         .route("/api/models/{id}/keep-alive", post(set_model_keep_alive))
         .route("/api/models/{id}/voice", post(set_model_voice))
         .route("/api/models/{id}/voices", get(list_model_voices))
@@ -98,7 +101,26 @@ async fn main() {
 
     tracing::info!(%addr, "aiworkd listening");
     println!("AI Runtime running at http://{addr}");
-    axum::serve(listener, app).await.expect("server error");
+
+    // SIGTERM / SIGINT：先优雅卸载所有 worker，再退出，避免 worker 成为孤儿。
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("install SIGTERM handler");
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .expect("install SIGINT handler");
+
+    tokio::select! {
+        result = axum::serve(listener, app) => {
+            result.expect("server error");
+        }
+        _ = sigterm.recv() => {
+            tracing::info!("SIGTERM received; shutting down all workers");
+            runtime.shutdown_all().await;
+        }
+        _ = sigint.recv() => {
+            tracing::info!("SIGINT received; shutting down all workers");
+            runtime.shutdown_all().await;
+        }
+    }
 }
 
 fn init_tracing() {
@@ -130,6 +152,7 @@ async fn list_models(State(state): State<AppState>) -> Json<Value> {
             created: entry.loaded_at.unwrap_or(0),
             owned_by: format!("aiworkd/{}", entry.spec.provider),
             model_type: entry.spec.model_type,
+            path: entry.spec.path,
         })
         .collect();
     Json(json!({"object": "list", "data": models}))
@@ -439,6 +462,32 @@ async fn unload_model(State(state): State<AppState>, AxumPath(id): AxumPath<Stri
     }
     match state.runtime.unload_model(&id).await {
         Ok(()) => Json(json!({"id": id, "state": "unloaded"})).into_response(),
+        Err(error) => provider_error(error),
+    }
+}
+
+/// DELETE /api/models/{id} —— 从注册表删除模型（已加载时先卸载 worker）。
+/// 只移除注册记录，模型文件保留在磁盘上。
+async fn unregister_model(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
+    match state.runtime.unregister_model(&id).await {
+        Ok(()) => Json(json!({"id": id, "deleted": true})).into_response(),
+        Err(error) => provider_error(error),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RenameModelRequest {
+    new_id: String,
+}
+
+/// POST /api/models/{id}/rename —— 重命名模型 ID（设置保留，已加载先卸载）。
+async fn rename_model(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<RenameModelRequest>,
+) -> Response {
+    match state.runtime.rename_model(&id, &req.new_id).await {
+        Ok(()) => Json(json!({"id": req.new_id.trim(), "renamed_from": id})).into_response(),
         Err(error) => provider_error(error),
     }
 }
