@@ -39,6 +39,7 @@ struct LoadedModel: Decodable, Identifiable, Hashable {
     var keepAlive: String?
     var loadedAt: UInt64?
     var lastUsedAt: UInt64?
+    var contextLength: Int?
     var modelType: String?
     var defaultVoice: String?
 
@@ -48,6 +49,7 @@ struct LoadedModel: Decodable, Identifiable, Hashable {
         case keepAlive = "keep_alive"
         case loadedAt = "loaded_at"
         case lastUsedAt = "last_used_at"
+        case contextLength = "context_length"
         case modelType = "model_type"
         case defaultVoice = "default_voice"
     }

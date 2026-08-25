@@ -696,6 +696,7 @@ impl Runtime {
                 keep_alive: entry.spec.keep_alive,
                 loaded_at: entry.loaded_at,
                 last_used_at: entry.last_used_at,
+                context_length: entry.spec.context_length,
                 model_type: Some(entry.spec.model_type),
                 default_voice: entry.spec.default_voice,
             })

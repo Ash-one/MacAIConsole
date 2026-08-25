@@ -107,6 +107,9 @@ pub struct LoadedModelInfo {
     pub keep_alive: Option<String>,
     pub loaded_at: Option<u64>,
     pub last_used_at: Option<u64>,
+    /// 当前注册规格的上下文长度（LLM 使用）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<u64>,
     /// llm / stt / tts —— GUI 右键菜单按类型区分。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_type: Option<String>,
