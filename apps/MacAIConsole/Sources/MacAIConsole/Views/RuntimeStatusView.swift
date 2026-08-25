@@ -9,10 +9,16 @@ struct RuntimeStatusView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if let error = controller.lastError {
-                    ErrorBanner(text: error)
+                    ErrorBanner(text: error, onClose: { controller.lastError = nil })
                 }
                 headerCard
                 statsGrid
+                if let info = controller.info, let total = info.memoryTotal, total > 0 {
+                    MemoryPressureBar(
+                        used: info.memoryUsed ?? 0,
+                        total: total
+                    )
+                }
                 loadedModelsSection
                 providerSection
             }
@@ -76,7 +82,6 @@ struct RuntimeStatusView: View {
                         if model.id != models.last?.id { Divider() }
                     }
                 }
-                .padding(.horizontal, 4)
             } else {
                 Text(controller.phase == .online ? "当前没有加载中的模型" : "守护进程离线，暂无数据")
                     .font(.callout)
@@ -91,7 +96,7 @@ struct RuntimeStatusView: View {
     }
 
     private var providerSection: some View {
-        GroupBox("Provider 状态") {
+        GroupBox {
             if controller.providers.isEmpty {
                 Text("暂无 Provider 数据")
                     .font(.callout)
@@ -104,8 +109,56 @@ struct RuntimeStatusView: View {
                         if provider.id != controller.providers.last?.id { Divider() }
                     }
                 }
-                .padding(.horizontal, 4)
             }
+        } label: {
+            Text("Provider 状态")
+                .font(.title3.weight(.semibold))
+                .padding(.bottom, 8)
+        }
+    }
+}
+
+/// 内存压力条：展示系统物理内存整体占用。
+struct MemoryPressureBar: View {
+    let used: UInt64
+    let total: UInt64
+
+    private var fraction: Double {
+        total > 0 ? min(Double(used) / Double(total), 1.0) : 0
+    }
+
+    private var pressureColor: Color {
+        switch fraction {
+        case ..<0.6: .green
+        case ..<0.85: .orange
+        default: .red
+        }
+    }
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("系统内存压力")
+                        .font(.title3.weight(.semibold))
+                    Spacer(minLength: 4)
+                    Text("\(Format.bytes(used)) / \(Format.bytes(total))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.secondary.opacity(0.15))
+                        Capsule()
+                            .fill(pressureColor)
+                            .frame(width: max(proxy.size.width * fraction, 2))
+                    }
+                }
+                .frame(height: 10)
+                .animation(.snappy(duration: 0.3), value: fraction)
+            }
+            .padding(2)
         }
     }
 }
@@ -143,8 +196,16 @@ struct ModelRow: View {
 
     @State private var isHovering = false
 
+    private var modelType: String {
+        if let type = model.modelType, !type.isEmpty { return type }
+        if model.provider == "kokoro-mlx" { return "tts" }
+        if model.provider == "whisper.cpp" { return "stt" }
+        return "llm"
+    }
+
     var body: some View {
-        HStack {
+        HStack(spacing: 10) {
+            ModelTypeIcon(type: modelType)
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.id)
                     .font(.body.weight(.medium))
@@ -156,16 +217,19 @@ struct ModelRow: View {
             if controller.busyModelIDs.contains(model.id) {
                 ProgressView().controlSize(.small)
             } else {
-                Button("卸载") {
+                GhostActionButton(
+                    systemImage: "stop.circle",
+                    help: "停止模型",
+                    activeTint: .red,
+                    isDisabled: controller.phase != .online
+                ) {
                     Task { await controller.unload(model.id) }
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(controller.phase != .online)
             }
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 6)
+        .padding(.trailing, 6)
         .contentShape(Rectangle())
         .background(isHovering ? Color.primary.opacity(0.05) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -178,8 +242,13 @@ struct ModelRow: View {
     private var subtitle: String {
         var parts = [model.provider]
         if model.state != "ready" { parts.append("状态：\(model.state)") }
-        if let memory = model.memoryEstimate, memory > 0 { parts.append(Format.bytes(memory)) }
-        parts.append("\(Format.relativeTime(model.loadedAt))加载")
+        if let memory = model.memoryUsageBytes, memory > 0 {
+            parts.append("驻留内存：\(Format.bytes(memory))")
+        } else if modelType == "stt" {
+            parts.append("无常驻进程")
+        } else {
+            parts.append("内存不可测")
+        }
         return parts.joined(separator: " · ")
     }
 }
@@ -196,6 +265,7 @@ struct RunningModelSettingsView: View {
     @State private var isReloading = false
     @State private var voices: [String] = []
     @State private var voicesLoaded = false
+    @State private var isPreviewing = false
 
     private struct KeepAliveChoice: Identifiable {
         let label: String
@@ -344,6 +414,16 @@ struct RunningModelSettingsView: View {
                                 Task { await controller.setVoice(model.id, voice: value) }
                             }
                         }
+                        Button {
+                            Task { await previewVoice() }
+                        } label: {
+                            Label("试听", systemImage: "speaker.wave.2.fill")
+                        }
+                        .labelStyle(.titleAndIcon)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(isPreviewing || controller.phase != .online)
+                        .help("用当前音色合成一句示例文本并播放")
                     }
                 }
             }
@@ -369,6 +449,33 @@ struct RunningModelSettingsView: View {
                     voice = defaultVoice
                 }
             }
+        }
+    }
+
+    /// 试听：用当前音色合成示例文本并播放（复用模型管理页的 afplay 方案）。
+    private func previewVoice() async {
+        isPreviewing = true
+        defer { isPreviewing = false }
+        do {
+            let audio = try await controller.api.synthesizeSpeech(
+                modelID: model.id,
+                text: "你好，我是 Mac AI 的语音合成，很高兴为你朗读这段文字。",
+                voice: voice
+            )
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("macai-preview-\(UUID().uuidString).wav")
+            try audio.write(to: url)
+            defer { try? FileManager.default.removeItem(at: url) }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
+            process.arguments = [url.path]
+            try process.run()
+            process.waitUntilExit()
+            if process.terminationStatus != 0 {
+                controller.lastError = "播放失败（afplay 退出码 \(process.terminationStatus)）"
+            }
+        } catch {
+            controller.lastError = "试听失败：\(DaemonController.message(for: error))"
         }
     }
 

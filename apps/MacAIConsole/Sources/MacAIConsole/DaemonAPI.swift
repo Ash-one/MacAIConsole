@@ -21,6 +21,10 @@ struct RuntimeInfo: Decodable {
     var loadedModels: [LoadedModel]
     /// AI 内存预算（字节）；daemon 无法探测时缺失。
     var memoryBudget: UInt64?
+    /// 物理内存总量（字节），供内存压力条展示。
+    var memoryTotal: UInt64?
+    /// 当前已使用物理内存（字节）。
+    var memoryUsed: UInt64?
 
     enum CodingKeys: String, CodingKey {
         case version, pid
@@ -28,6 +32,8 @@ struct RuntimeInfo: Decodable {
         case activeRequests = "active_requests"
         case loadedModels = "loaded_models"
         case memoryBudget = "memory_budget"
+        case memoryTotal = "memory_total"
+        case memoryUsed = "memory_used"
     }
 }
 
@@ -36,6 +42,7 @@ struct LoadedModel: Decodable, Identifiable, Hashable {
     var provider: String
     var state: String
     var memoryEstimate: UInt64?
+    var memoryUsageBytes: UInt64?
     var keepAlive: String?
     var loadedAt: UInt64?
     var lastUsedAt: UInt64?
@@ -46,6 +53,7 @@ struct LoadedModel: Decodable, Identifiable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, provider, state
         case memoryEstimate = "memory_estimate"
+        case memoryUsageBytes = "memory_usage_bytes"
         case keepAlive = "keep_alive"
         case loadedAt = "loaded_at"
         case lastUsedAt = "last_used_at"
@@ -69,12 +77,22 @@ struct ModelEntry: Decodable, Identifiable, Hashable {
     var id: String
     var ownedBy: String
     var modelType: String
+    /// 注册时的模型文件路径。改名不影响它——GUI 用它推导原始/默认 ID。
+    var path: String?
 
     enum CodingKeys: String, CodingKey {
         case id
         case ownedBy = "owned_by"
         // /v1/models 实际返回的字段名是 "type"（OpenAI 兼容格式）。
         case modelType = "type"
+        case path
+    }
+
+    /// 原始 ID = 注册来源文件名（去扩展名）。与改名无关，始终可恢复。
+    var originalID: String? {
+        guard let path else { return nil }
+        let name = (path as NSString).lastPathComponent
+        return (name as NSString).deletingPathExtension
     }
 }
 
@@ -226,6 +244,16 @@ struct DaemonAPI {
     func unload(_ id: String) async throws -> LoadResponse {
         let data = try await postJSON("api/models/\(id)/unload", body: nil, timeout: 30)
         return try JSONDecoder().decode(LoadResponse.self, from: data)
+    }
+
+    /// DELETE /api/models/{id} —— 从注册表删除模型（已加载时先卸载 worker）。
+    func unregister(_ id: String) async throws {
+        _ = try await send("DELETE", "api/models/\(id)", body: nil, timeout: 30)
+    }
+
+    /// POST /api/models/{id}/rename —— 重命名模型 ID（设置保留，已加载先卸载）。
+    func rename(_ id: String, to newID: String) async throws {
+        _ = try await postJSON("api/models/\(id)/rename", body: ["new_id": newID], timeout: 30)
     }
 
     /// POST /api/models/{id}/keep-alive —— 只改策略，进程保持常驻。

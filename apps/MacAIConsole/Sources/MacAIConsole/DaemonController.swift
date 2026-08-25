@@ -132,6 +132,38 @@ final class DaemonController {
         }
     }
 
+    /// 从注册表删除模型（已加载时 daemon 会先卸载 worker），并同步本地上下文设置。
+    func unregister(_ id: String) async {
+        guard !busyModelIDs.contains(id) else { return }
+        busyModelIDs.insert(id)
+        defer { busyModelIDs.remove(id) }
+        do {
+            try await api.unregister(id)
+            ModelRepository.removeContextLength(for: id)
+            try await refresh()
+        } catch {
+            lastError = "删除失败：\(Self.message(for: error))"
+        }
+    }
+
+    /// 重命名模型 ID（daemon 端保留全部策略设置）。
+    func rename(_ id: String, to newID: String) async {
+        guard !busyModelIDs.contains(id) else { return }
+        busyModelIDs.insert(id)
+        defer { busyModelIDs.remove(id) }
+        do {
+            try await api.rename(id, to: newID)
+            // 本地按旧 ID 存的上下文设置迁移到新 ID。
+            if let length = ModelRepository.customContextLength(for: id) {
+                ModelRepository.setContextLength(length, for: newID)
+                ModelRepository.removeContextLength(for: id)
+            }
+            try await refresh()
+        } catch {
+            lastError = "重命名失败：\(Self.message(for: error))"
+        }
+    }
+
     /// 调整 keep_alive 策略：只改注册表，进程保持常驻，reaper 按新值执行。
     func setKeepAlive(_ id: String, keepAlive: String?) async {
         do {
