@@ -11,13 +11,54 @@ stdin EOF 时退出。音频写入临时文件，路径通过响应返回。
 import contextlib
 import json
 import os
+import re
 import sys
 import tempfile
 import time
 
+import numpy as np
+
 
 def log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
+
+
+def _split_long_text_for_kokoro(text: str, max_chars: int = 150) -> str:
+    """把长文本切成短行，规避 mlx-audio 中文管线的音素硬截断。
+
+    按中英文标点/空白断句，贪心合并到不超过 max_chars 的行，用换行连接。
+    单个句子仍超限时再按字符硬切，保证每一行都不超过上限。
+    管线默认 split_pattern=r"\\n+" 会按行分段合成。
+    """
+    text = (text or "").strip()
+    if not text or max_chars <= 0 or len(text) <= max_chars:
+        return text
+
+    units = [part for part in re.split(r"(?<=[。！？!?；;，,\.\s])", text) if part]
+    if not units:
+        units = [text]
+
+    expanded = []
+    for unit in units:
+        unit = unit.strip()
+        if not unit:
+            continue
+        expanded.extend(
+            unit[i : i + max_chars] for i in range(0, len(unit), max_chars)
+        )
+
+    lines = []
+    current = ""
+    for unit in expanded:
+        candidate = current + unit
+        if current and len(candidate) > max_chars:
+            lines.append(current)
+            current = unit
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return "\n".join(lines)
 
 
 def _patch_misaki_zh_version() -> None:
@@ -122,11 +163,26 @@ def main() -> None:
             elif any("\u4e00" <= ch <= "\u9fff" for ch in text):
                 kwargs["lang_code"] = "z"
 
+            # mlx-audio 中文管线缺陷规避（pipeline.py 中文分支）：
+            #   1) 切分正则只认英文标点 [.!?]，中文句号被当作整段超长句；
+            #   2) 单块音素 >510 时直接 ps[:510] 硬截断，长文本永远只剩 ~31s。
+            # 解法：worker 先把文本按中文/英文标点切成短行（每行音素必 <510），
+            # 管线按默认 split_pattern=r"\n+" 逐行合成，再由下方 np.concatenate 拼回完整音频。
+            if kwargs.get("lang_code") == "z":
+                text = _split_long_text_for_kokoro(text, max_chars=150)
+                kwargs["text"] = text
+
             # 库内部（如 "Creating new KokoroPipeline..."）会直接 print 到 stdout，
             # 污染 JSON 行协议；合成期间全部重定向到 stderr。
             with contextlib.redirect_stdout(sys.stderr):
                 results = list(model.generate(**kwargs))
-            audio = results[0].audio if results else None
+            # Kokoro 管线按 ~510 音素 token 分段 yield，长文本会产生多个
+            # segment；只取 results[0] 会静默丢弃后续段落（表现为 ~31s 截断）。
+            # 全部段按序拼接成完整音频。
+            parts = [r.audio for r in results if r.audio is not None]
+            audio = None
+            if parts:
+                audio = parts[0] if len(parts) == 1 else np.concatenate(parts)
             if audio is None:
                 raise RuntimeError("model produced no audio")
 
