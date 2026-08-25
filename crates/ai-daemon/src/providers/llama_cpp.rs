@@ -427,6 +427,11 @@ impl Provider for LlamaCppProvider {
         let pid = process.as_ref()?.child.id()?;
         resident_memory_bytes(pid)
     }
+
+    async fn effective_device(&self) -> Option<String> {
+        let process = self.process.lock().await;
+        process.as_ref().map(|state| Self::effective_device(state))
+    }
 }
 
 #[async_trait]

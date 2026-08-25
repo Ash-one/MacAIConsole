@@ -137,6 +137,12 @@ pub trait Provider: Send + Sync {
     async fn memory_usage_bytes(&self) -> Option<u64> {
         None
     }
+
+    /// 当前生效的加速设备（"coreml" / "metal" / "gpu" / "cpu"）。
+    /// 没有常驻 worker 或尚未探测到时返回 None。
+    async fn effective_device(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Chat 流式输出：Provider 产生 chunk 流，daemon 转发为 SSE（文档 §34）。

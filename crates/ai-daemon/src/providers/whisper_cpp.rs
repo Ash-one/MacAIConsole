@@ -178,6 +178,14 @@ impl Provider for WhisperCppProvider {
             message: status.reason,
         })
     }
+
+    async fn effective_device(&self) -> Option<String> {
+        self.state
+            .lock()
+            .await
+            .as_ref()
+            .and_then(|loaded| loaded.effective_device.clone())
+    }
 }
 
 #[async_trait]

@@ -209,9 +209,19 @@ struct ModelRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.id)
                     .font(.body.weight(.medium))
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    if let tag = accelTag {
+                        Text(tag.text)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(tag.color)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1.5)
+                            .background(Capsule().fill(tag.color.opacity(0.14)))
+                    }
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 12)
             if controller.busyModelIDs.contains(model.id) {
@@ -278,6 +288,15 @@ struct ModelRow: View {
               -H "Content-Type: application/json" \\
               -d '{"model": "\(model.id)", "messages": [{"role": "user", "content": "你好"}]}'
             """
+        }
+    }
+
+    /// 加速策略 tag：仅当检测到 CoreML / Metal 生效时显示。
+    private var accelTag: (text: String, color: Color)? {
+        switch model.effectiveDevice?.lowercased() {
+        case "coreml": ("CoreML", .blue)
+        case "metal": ("Metal", .orange)
+        default: nil
         }
     }
 

@@ -49,6 +49,8 @@ struct LoadedModel: Decodable, Identifiable, Hashable {
     var contextLength: Int?
     var modelType: String?
     var defaultVoice: String?
+    /// 当前生效的加速设备（coreml / metal / gpu / cpu）；未探测到时为空。
+    var effectiveDevice: String?
 
     enum CodingKeys: String, CodingKey {
         case id, provider, state
@@ -60,6 +62,7 @@ struct LoadedModel: Decodable, Identifiable, Hashable {
         case contextLength = "context_length"
         case modelType = "model_type"
         case defaultVoice = "default_voice"
+        case effectiveDevice = "effective_device"
     }
 }
 
