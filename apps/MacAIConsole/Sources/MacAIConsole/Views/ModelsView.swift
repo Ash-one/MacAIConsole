@@ -19,7 +19,6 @@ struct ModelsView: View {
             }
             .padding(24)
         }
-        .background(Color(nsColor: .underPageBackgroundColor))
         .navigationTitle("模型管理")
         .toolbar {
             ToolbarItemGroup {
