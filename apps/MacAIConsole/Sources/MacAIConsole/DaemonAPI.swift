@@ -322,10 +322,22 @@ enum DaemonError: LocalizedError {
 // MARK: - 客户端
 
 struct DaemonAPI {
-    var baseURL: URL
+    static let defaultBaseURL: URL = {
+        guard let url = URL(string: "http://127.0.0.1:11435") else {
+            fatalError("The hard-coded aiworkd URL is invalid")
+        }
+        return url
+    }()
 
-    init(baseURL: URL = URL(string: "http://127.0.0.1:11435")!) {
+    let baseURL: URL
+    let session: URLSession
+
+    init(
+        baseURL: URL = DaemonAPI.defaultBaseURL,
+        session: URLSession = .shared
+    ) {
         self.baseURL = baseURL
+        self.session = session
     }
 
     private func send(_ method: String, _ path: String, body: Data?, timeout: TimeInterval) async throws -> Data {
@@ -346,7 +358,7 @@ struct DaemonAPI {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = body
         }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
@@ -365,7 +377,7 @@ struct DaemonAPI {
     }
 
     private func postJSON(_ path: String, body: [String: Any]?, timeout: TimeInterval = 30) async throws -> Data {
-        let data = body.map { try! JSONSerialization.data(withJSONObject: $0) }
+        let data = try body.map { try JSONSerialization.data(withJSONObject: $0) }
         return try await send("POST", path, body: data, timeout: timeout)
     }
 
@@ -373,7 +385,7 @@ struct DaemonAPI {
     func isHealthy() async -> Bool {
         var request = URLRequest(url: baseURL.appendingPathComponent("health"))
         request.timeoutInterval = 1.0
-        guard let (_, response) = try? await URLSession.shared.data(for: request),
+        guard let (_, response) = try? await session.data(for: request),
               let http = response as? HTTPURLResponse else { return false }
         return http.statusCode == 200
     }
