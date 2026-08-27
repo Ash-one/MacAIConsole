@@ -11,7 +11,7 @@ MacAI 是面向 Apple Silicon 的本地 AI Runtime。Rust daemon `aiworkd` 统�
 ## 架构
 
 ```text
-ai CLI ───────────────┐
+macai CLI ────────────┐
 MacAIConsole (SwiftUI) ├── HTTP ──> aiworkd ──┬── llama.cpp ──> GGUF / Metal
 OpenAI-compatible SDK ┘                      ├── whisper.cpp ─> Core ML / Metal
                                              └── Kokoro MLX ──> local TTS
@@ -50,7 +50,7 @@ Provider 以独立进程承载高风险或第三方推理运行时。某个 work
 
 ### 客户端
 
-CLI `ai` 当前提供：
+CLI `macai` 当前提供：
 
 ```text
 status      list        ps          providers   tasks
@@ -59,7 +59,7 @@ keep-alive  pull        chat        run         transcribe
 speak       voice       logging     serve
 ```
 
-运行 `ai --help` 查看完整命令索引，运行 `ai <命令> --help` 查看参数和示例。`start`、`unload`、`rename`、`keep-alive` 和 `remove` 操作 daemon 的运行状态或注册表；`remove` 会保留磁盘上的模型文件。
+运行 `macai --help` 查看完整命令索引，运行 `macai <命令> --help` 查看参数和示例。`start`、`unload`、`rename`、`keep-alive` 和 `remove` 操作 daemon 的运行状态或注册表；`remove` 会保留磁盘上的模型文件。
 
 MacAIConsole 当前提供：
 
@@ -107,10 +107,10 @@ http://127.0.0.1:11435
 另开一个终端检查状态：
 
 ```bash
-./target/release/ai status
-./target/release/ai list
-./target/release/ai ps
-./target/release/ai --help
+./target/release/macai status
+./target/release/macai list
+./target/release/macai ps
+./target/release/macai --help
 ```
 
 ### 3. 构建 llama.cpp worker
@@ -136,23 +136,23 @@ export AIWORK_LLAMA_SERVER=/absolute/path/to/llama-server
 注册并运行本地 GGUF：
 
 ```bash
-./target/release/ai load /path/to/model.gguf \
+./target/release/macai load /path/to/model.gguf \
   --id local-model \
   --type llm \
   --keep-alive 5m \
   --context-length 4096
 
-./target/release/ai chat local-model "Hello" \
+./target/release/macai chat local-model "Hello" \
   --system "Answer concisely" \
   --temperature 0.2 \
   --max-tokens 256
 
-./target/release/ai tasks --limit 10
-./target/release/ai providers
-./target/release/ai unload local-model
+./target/release/macai tasks --limit 10
+./target/release/macai providers
+./target/release/macai unload local-model
 ```
 
-已注册但未运行的模型可用 `ai start <model>` 重新加载。`ai keep-alive <model> 30m` 调整空闲驻留时间；`ai rename` 修改模型 ID，运行中的模型会先停止；`ai remove` 删除注册记录。TTS 模型可通过 `ai voice <model>` 查看音色，并用 `ai voice <model> <voice>` 设置默认音色。
+已注册但未运行的模型可用 `macai start <model>` 重新加载。`macai keep-alive <model> 30m` 调整空闲驻留时间；`macai rename` 修改模型 ID，运行中的模型会先停止；`macai remove` 删除注册记录。TTS 模型可通过 `macai voice <model>` 查看音色，并用 `macai voice <model> <voice>` 设置默认音色。
 
 ### 4. 构建 whisper.cpp worker
 
@@ -287,6 +287,189 @@ GET  /api/models/{id}/voices
 POST /api/models/{id}/voice
 ```
 
+## 使用案例：为 Hermes Agent 提供本地 TTS 与 STT
+
+[Hermes Agent](https://hermes-agent.nousresearch.com/docs/) 支持命令型语音 Provider。MacAI 可以通过本地 OpenAI-compatible API 为 Hermes 提供：
+
+| Hermes 能力 | MacAI endpoint | MacAI Provider |
+| --- | --- | --- |
+| TTS（文字转语音） | `POST /v1/audio/speech` | Kokoro MLX |
+| STT（语音转文字） | `POST /v1/audio/transcriptions` | whisper.cpp |
+
+接入后的数据流如下：
+
+```text
+Hermes text_to_speech
+  -> samples/hermes_macai_tts.py
+  -> MacAI /v1/audio/speech
+  -> WAV audio
+
+Hermes voice message
+  -> samples/hermes_macai_stt.sh
+  -> ffmpeg: input audio -> 16 kHz mono PCM WAV
+  -> MacAI /v1/audio/transcriptions
+  -> UTF-8 transcript
+```
+
+### 前置条件
+
+1. `aiworkd` 正在 `http://127.0.0.1:11435` 运行。
+2. MacAI 已注册至少一个 `tts` 模型和一个 `stt` 模型。
+3. 本机已安装 `hermes`、`python3`、`curl` 和 `ffmpeg`。
+4. Hermes 版本支持 `tts.providers.<name>` 与 `stt.providers.<name>` 命令型 Provider。
+
+先检查 MacAI：
+
+```bash
+curl --fail http://127.0.0.1:11435/health
+curl --fail http://127.0.0.1:11435/v1/models
+```
+
+`/v1/models` 的 `data` 数组中应包含 `type: "tts"` 和 `type: "stt"` 的模型。
+
+### 一键配置
+
+在 MacAI 仓库根目录运行：
+
+```bash
+./samples/configure-hermes-audio.sh
+```
+
+脚本会：
+
+1. 检查 MacAI、Hermes、Python、curl 与 ffmpeg。
+2. 从 `/v1/models` 自动选择第一个 TTS 和 STT 模型。
+3. 向当前 Hermes profile 写入名为 `macai` 的 TTS/STT Provider。
+4. 启用 Hermes 的 `tts` toolset。
+5. 读回 `tts.provider` 与 `stt.provider`，确认配置已落盘。
+
+可以通过环境变量覆盖自动发现结果：
+
+```bash
+MACAI_BASE_URL=http://127.0.0.1:11435 \
+MACAI_TTS_MODEL=Kokoro-82M-zh \
+MACAI_TTS_VOICE=zf_001 \
+MACAI_STT_MODEL=whisper-large-v3-turbo \
+MACAI_STT_LANGUAGE=zh \
+./samples/configure-hermes-audio.sh
+```
+
+可用变量：
+
+| 变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `HERMES_BIN` | `hermes` | 指定 Hermes 可执行文件 |
+| `MACAI_BASE_URL` | `http://127.0.0.1:11435` | MacAI 根地址或 `/v1` API 地址 |
+| `MACAI_TTS_MODEL` | 自动发现 | MacAI TTS 模型 ID |
+| `MACAI_TTS_VOICE` | 空 | 可选的 Kokoro 音色 ID；为空时使用模型默认音色 |
+| `MACAI_STT_MODEL` | 自动发现 | MacAI STT 模型 ID |
+| `MACAI_STT_LANGUAGE` | `zh` | STT 语言提示 |
+
+> [!NOTE]
+> 配置中保存了 `samples` 脚本的绝对路径。移动 MacAI 仓库后，请重新运行配置脚本。
+
+### 生成的 Hermes 配置
+
+脚本通过 `hermes config set` 写入当前 profile。生成的核心结构如下，其中脚本路径与模型 ID 会替换为本机真实值：
+
+```yaml
+tts:
+  provider: macai
+  providers:
+    macai:
+      type: command
+      command: >-
+        python3 "/absolute/path/to/MacAI/samples/hermes_macai_tts.py"
+        --input "{input_path}"
+        --output "{output_path}"
+        --base-url "http://127.0.0.1:11435/v1"
+        --model "{model}"
+        --voice "{voice}"
+        --format "{format}"
+        --speed "{speed}"
+      model: Kokoro-82M-zh
+      voice: ""
+      output_format: wav
+      timeout: 150
+      max_text_length: 3000
+      voice_compatible: true
+
+stt:
+  enabled: true
+  echo_transcripts: true
+  provider: macai
+  language: zh
+  providers:
+    macai:
+      type: command
+      command: >-
+        bash "/absolute/path/to/MacAI/samples/hermes_macai_stt.sh"
+        "{input_path}"
+        "{output_path}"
+        "http://127.0.0.1:11435/v1"
+        "{model}"
+        "{language}"
+      model: whisper-large-v3-turbo
+      language: zh
+      format: txt
+      timeout: 300
+```
+
+TTS 适配脚本使用 Python 标准库读取 Hermes 创建的 UTF-8 文本文件，调用 MacAI 后将音频写入 `{output_path}`。STT 适配脚本先把 Hermes 收到的 WAV、OGG、Opus 或其他 ffmpeg 支持的音频统一转换为 MacAI 当前要求的 PCM WAV，再返回纯文本转写结果。
+
+命名为独立的 `macai` STT Provider 还有一个兼容性作用：Hermes 的内置 `openai` STT 路径可能把 `whisper-large-v3-turbo` 识别为 Groq 模型名并改写为 `whisper-1`；命令型 Provider 会将 MacAI 模型 ID 原样传递。
+
+### 验证适配脚本
+
+直接验证 TTS：
+
+```bash
+printf '你好，这是 MacAI 提供给 Hermes 的语音合成测试。' > /tmp/macai-tts.txt
+
+python3 samples/hermes_macai_tts.py \
+  --input /tmp/macai-tts.txt \
+  --output /tmp/macai-tts.wav \
+  --base-url http://127.0.0.1:11435 \
+  --model Kokoro-82M-zh \
+  --format wav
+
+file /tmp/macai-tts.wav
+```
+
+直接验证 STT：
+
+```bash
+bash samples/hermes_macai_stt.sh \
+  /path/to/input.ogg \
+  /tmp/macai-transcript.txt \
+  http://127.0.0.1:11435 \
+  whisper-large-v3-turbo \
+  zh
+
+cat /tmp/macai-transcript.txt
+```
+
+检查 Hermes 的最终选择：
+
+```bash
+hermes config get tts.provider
+hermes config get stt.provider
+hermes config get tts.providers.macai
+hermes config get stt.providers.macai
+```
+
+配置完成后重启 Hermes Desktop。Gateway 用户可以执行 `/restart`。随后可使用 Hermes 的 `text_to_speech` 工具、CLI `/voice tts` 模式或消息平台语音消息验证完整链路。
+
+### 常见问题
+
+- **`model_not_found`**：运行 `curl http://127.0.0.1:11435/v1/models`，把脚本配置中的模型 ID 改成返回的真实 `id`，或重新运行一键配置。
+- **`Connection refused`**：先通过 MacAIConsole 启动 daemon，或在仓库中运行 `./target/release/aiworkd`。
+- **`Required command is missing: ffmpeg`**：安装 ffmpeg 后重新运行配置；STT 适配器依赖它统一音频格式。
+- **Hermes 仍显示旧 Provider**：重启 Hermes Desktop 或 Gateway。Hermes profile 相互隔离，请确认运行配置脚本和启动 Hermes 时使用的是同一个 profile。
+- **模型首次请求较慢**：whisper.cpp Core ML encoder 首次进行 ANE 特化时可能需要额外时间，后续请求会复用缓存。
+
+Hermes 命令型语音 Provider 的完整说明见 [Voice & TTS](https://hermes-agent.nousresearch.com/docs/user-guide/features/tts)。
+
 ## 本地数据
 
 MacAIConsole 使用以下目录：
@@ -343,6 +526,7 @@ apps/
 └── MacAIConsole/  # 原生 SwiftUI 控制台
 
 scripts/           # llama.cpp、whisper.cpp 与 Kokoro worker 工具
+samples/           # 第三方集成示例（含 Hermes TTS/STT 适配器）
 handoff.md         # 目标架构与长期路线
 ```
 
