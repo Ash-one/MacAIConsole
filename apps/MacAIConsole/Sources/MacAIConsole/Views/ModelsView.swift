@@ -189,10 +189,26 @@ struct ModelsView: View {
             .padding(.horizontal, 4)
             .padding(.bottom, 6)
         } label: {
-            Text("模型仓库（Models/llm · tts · stt）")
-                .font(.title3.weight(.semibold))
-                .padding(.bottom, 8)
+            HStack {
+                Text("模型仓库（Models/llm · tts · stt）")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                Button {
+                    openModelRepository()
+                } label: {
+                    Label("打开", systemImage: "folder")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("在访达中打开模型保存路径")
+            }
+            .padding(.bottom, 8)
         }
+    }
+
+    private func openModelRepository() {
+        _ = ModelRepository.scan()
+        NSWorkspace.shared.open(ModelRepository.baseURL)
     }
 }
 
