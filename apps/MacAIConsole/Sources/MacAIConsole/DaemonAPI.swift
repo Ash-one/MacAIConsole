@@ -295,6 +295,10 @@ struct LoadResponse: Decodable {
     var state: String?
 }
 
+struct LoggingLevelResponse: Decodable {
+    var level: String
+}
+
 struct APIErrorBody: Decodable {
     struct Inner: Decodable {
         var type: String
@@ -334,6 +338,7 @@ struct DaemonAPI {
     }
 
     private func send(_ method: String, url: URL, body: Data?, timeout: TimeInterval) async throws -> Data {
+        AppLogger.debug("API \(method) \(url.path)")
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = timeout
@@ -345,6 +350,7 @@ struct DaemonAPI {
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
+        AppLogger.debug("API \(method) \(url.path) → HTTP \(http.statusCode)")
         guard (200..<300).contains(http.statusCode) else {
             if let detail = try? JSONDecoder().decode(APIErrorBody.self, from: data) {
                 throw DaemonError.http(status: http.statusCode, message: detail.error.message)
@@ -387,6 +393,12 @@ struct DaemonAPI {
     func providers() async throws -> [ProviderEntry] {
         struct Wrapper: Decodable { var data: [ProviderEntry] }
         return try JSONDecoder().decode(Wrapper.self, from: try await get("api/providers")).data
+    }
+
+    /// POST /api/logging —— 运行时切换 daemon 的 Info / Debug 过滤级别。
+    func setLogLevel(_ level: LogLevel) async throws -> LoggingLevelResponse {
+        let data = try await postJSON("api/logging", body: ["level": level.rawValue], timeout: 4)
+        return try JSONDecoder().decode(LoggingLevelResponse.self, from: data)
     }
 
     /// GET /api/tasks?completed_limit=N。N 由客户端先收敛到 1...100。

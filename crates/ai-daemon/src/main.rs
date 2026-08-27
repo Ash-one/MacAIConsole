@@ -12,6 +12,7 @@ mod scheduler;
 mod tasks;
 
 use std::path::{Path as FilePath, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,6 +26,8 @@ use axum::{Json, Router};
 use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use ai_core::errors::{AIError, ApiErrorBody};
 use ai_core::provider::ProviderError;
@@ -35,10 +38,17 @@ use crate::runtime::Runtime;
 use crate::tasks::{chat_request_detail, speech_request_detail, transcription_request_detail};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const LOG_LEVEL_INFO: u8 = 0;
+const LOG_LEVEL_DEBUG: u8 = 1;
+
+type LogFilterHandle =
+    tracing_subscriber::reload::Handle<tracing_subscriber::EnvFilter, tracing_subscriber::Registry>;
 
 #[derive(Clone)]
 struct AppState {
     runtime: Arc<Runtime>,
+    log_filter: LogFilterHandle,
+    log_level: Arc<AtomicU8>,
 }
 
 #[derive(Serialize)]
@@ -46,6 +56,16 @@ struct HealthResponse {
     status: String,
     version: String,
     model_count: usize,
+}
+
+#[derive(Serialize)]
+struct LoggingLevelResponse {
+    level: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetLoggingLevelRequest {
+    level: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,7 +81,8 @@ struct LoadModelRequest {
 
 #[tokio::main]
 async fn main() {
-    init_tracing();
+    let initial_log_level = configured_log_level();
+    let log_filter = init_tracing();
 
     // 注册表数据库与 GUI 模型仓库同根（~/Library/Application Support/MacAIConsole）。
     let db_path = std::env::var("HOME")
@@ -75,6 +96,8 @@ async fn main() {
 
     let state = AppState {
         runtime: Arc::clone(&runtime),
+        log_filter,
+        log_level: Arc::new(AtomicU8::new(initial_log_level)),
     };
     let app = Router::new()
         .route("/health", get(health))
@@ -83,6 +106,7 @@ async fn main() {
         .route("/v1/audio/transcriptions", post(audio_transcriptions))
         .route("/v1/audio/speech", post(audio_speech))
         .route("/api/runtime", get(runtime_info))
+        .route("/api/logging", get(logging_level).post(set_logging_level))
         .route("/api/tasks", get(list_tasks))
         .route("/api/tasks/{id}", get(task_detail))
         .route("/api/providers", get(provider_statuses))
@@ -127,13 +151,26 @@ async fn main() {
     }
 }
 
-fn init_tracing() {
+fn configured_log_level() -> u8 {
+    match std::env::var("RUST_LOG") {
+        Ok(level) if level.eq_ignore_ascii_case("debug") => LOG_LEVEL_DEBUG,
+        _ => LOG_LEVEL_INFO,
+    }
+}
+
+fn init_tracing() -> LogFilterHandle {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(false)
+    let (filter_layer, handle) = tracing_subscriber::reload::Layer::new(filter);
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .with_ansi(false),
+        )
         .init();
+    handle
 }
 
 async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
@@ -142,6 +179,47 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
         version: VERSION.to_string(),
         model_count: state.runtime.list_models().await.len(),
     })
+}
+
+async fn logging_level(State(state): State<AppState>) -> Json<LoggingLevelResponse> {
+    Json(LoggingLevelResponse {
+        level: if state.log_level.load(Ordering::Relaxed) == LOG_LEVEL_DEBUG {
+            "debug"
+        } else {
+            "info"
+        }
+        .to_string(),
+    })
+}
+
+async fn set_logging_level(
+    State(state): State<AppState>,
+    Json(request): Json<SetLoggingLevelRequest>,
+) -> Response {
+    let level = request.level.to_ascii_lowercase();
+    let value = match level.as_str() {
+        "info" => LOG_LEVEL_INFO,
+        "debug" => LOG_LEVEL_DEBUG,
+        _ => {
+            return api_error(
+                AIError::InvalidRequest,
+                "log level must be 'info' or 'debug'",
+            );
+        }
+    };
+
+    if let Err(error) = state
+        .log_filter
+        .reload(tracing_subscriber::EnvFilter::new(level.clone()))
+    {
+        return api_error(
+            AIError::Internal,
+            format!("log filter reload failed: {error}"),
+        );
+    }
+    state.log_level.store(value, Ordering::Relaxed);
+    tracing::info!(level, "log level changed");
+    Json(LoggingLevelResponse { level }).into_response()
 }
 
 async fn list_models(State(state): State<AppState>) -> Json<Value> {
@@ -903,6 +981,16 @@ mod tests {
         }
     }
 
+    fn app_state(runtime: Arc<Runtime>) -> AppState {
+        let (_, log_filter) =
+            tracing_subscriber::reload::Layer::new(tracing_subscriber::EnvFilter::new("info"));
+        AppState {
+            runtime,
+            log_filter,
+            log_level: Arc::new(AtomicU8::new(LOG_LEVEL_INFO)),
+        }
+    }
+
     #[tokio::test]
     async fn non_stream_chat_records_result_and_usage() {
         let runtime = Arc::new(Runtime::new());
@@ -918,13 +1006,7 @@ mod tests {
             max_tokens: Some(32),
         };
 
-        let response = chat_completions(
-            State(AppState {
-                runtime: runtime.clone(),
-            }),
-            Json(request),
-        )
-        .await;
+        let response = chat_completions(State(app_state(runtime.clone())), Json(request)).await;
 
         assert_eq!(response.status(), StatusCode::OK);
         let list = runtime.tasks().list(100);
@@ -943,9 +1025,7 @@ mod tests {
         let runtime = Arc::new(Runtime::new());
         runtime.register(mock_model()).await;
         let response = chat_completions(
-            State(AppState {
-                runtime: runtime.clone(),
-            }),
+            State(app_state(runtime.clone())),
             Json(ChatRequest {
                 model: "mock-task".to_string(),
                 messages: vec![ai_core::request::ChatMessage {
@@ -977,9 +1057,7 @@ mod tests {
         let runtime = Arc::new(Runtime::new());
         runtime.register(mock_model()).await;
         let response = chat_completions(
-            State(AppState {
-                runtime: runtime.clone(),
-            }),
+            State(app_state(runtime.clone())),
             Json(ChatRequest {
                 model: "mock-task".to_string(),
                 messages: vec![ai_core::request::ChatMessage {
@@ -1006,9 +1084,7 @@ mod tests {
     async fn valid_chat_for_missing_model_records_failed_task() {
         let runtime = Arc::new(Runtime::new());
         let response = chat_completions(
-            State(AppState {
-                runtime: runtime.clone(),
-            }),
+            State(app_state(runtime.clone())),
             Json(ChatRequest {
                 model: "missing-task-model".to_string(),
                 messages: vec![ai_core::request::ChatMessage {
@@ -1037,9 +1113,7 @@ mod tests {
     #[tokio::test]
     async fn task_detail_for_unknown_id_is_standard_not_found() {
         let response = task_detail(
-            State(AppState {
-                runtime: Arc::new(Runtime::new()),
-            }),
+            State(app_state(Arc::new(Runtime::new()))),
             AxumPath("missing-task".to_string()),
         )
         .await;
