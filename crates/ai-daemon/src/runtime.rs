@@ -85,7 +85,7 @@ impl Runtime {
 
     /// 注入测试用 provider（mock 回显、macos-say 系统 TTS）。
     /// 它们不进入生产 providers 表——管理面（/api/providers、/v1/models）
-    /// 只展示真实引擎；macos-say 仅作为 `ai speak` 未指定模型时的兜底能力。
+    /// 只展示真实引擎；macos-say 仅作为 `macai speak` 未指定模型时的兜底能力。
     fn inject_test_providers(&mut self) {
         let mock = Arc::new(MockProvider);
         self.providers.insert("mock".to_string(), mock.clone());
