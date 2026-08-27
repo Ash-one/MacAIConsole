@@ -1,4 +1,4 @@
-//! ai — aiworkd 的命令行客户端（文档 §4.3、§18）。
+//! macai — aiworkd 的命令行客户端（文档 §4.3、§18）。
 //!
 //! CLI 只负责输入、输出和 Runtime 管理请求；模型与推理状态统一由 aiworkd 持有。
 
@@ -15,19 +15,19 @@ const LONG_ABOUT: &str = "MacAI 本地 AI Runtime 的命令行客户端。\n\n\
 所有命令都连接 aiworkd；CLI 不会另起一套推理 Runtime。查询命令可用于观察模型、\
 Provider 和任务状态，管理命令可加载、停止或配置已注册模型。";
 const AFTER_HELP: &str = "常用示例：
-  ai status
-  ai list
-  ai load ./model.gguf --id local-model
-  ai chat local-model \"用一句话介绍你自己\" --temperature 0.2
-  ai run local-model --system \"回答保持简洁\"
-  ai tasks --limit 10
-  ai --addr 127.0.0.1:11435 providers
+  macai status
+  macai list
+  macai load ./model.gguf --id local-model
+  macai chat local-model \"用一句话介绍你自己\" --temperature 0.2
+  macai run local-model --system \"回答保持简洁\"
+  macai tasks --limit 10
+  macai --addr 127.0.0.1:11435 providers
 
-使用“ai <命令> --help”查看某个命令的参数。";
+使用“macai <命令> --help”查看某个命令的参数。";
 
 #[derive(Parser)]
 #[command(
-    name = "ai",
+    name = "macai",
     version,
     about = "MacAI 本地 AI Runtime 命令行客户端",
     long_about = LONG_ABOUT,
@@ -738,7 +738,7 @@ fn cmd_keep_alive(base: &str, model: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// ai pull：下载可能耗时数分钟。daemon 的 HTTP 读超时是 300s，大文件靠
+/// macai pull：下载可能耗时数分钟。daemon 的 HTTP 读超时是 300s，大文件靠
 /// daemon 端流式写盘；CLI 侧提示进度由 daemon 日志承载。
 fn cmd_pull(
     base: &str,
@@ -858,7 +858,7 @@ fn cmd_speak(
                     .find(|m| m["type"] == "tts")
                     .and_then(|m| m["id"].as_str())
             })
-            .ok_or("no TTS model available; load one with 'ai pull' first")?
+            .ok_or("no TTS model available; load one with 'macai pull' first")?
             .to_string();
         println!("Using TTS model: {found}");
         found
@@ -1186,12 +1186,12 @@ mod tests {
         ] {
             assert!(help.contains(command), "help omitted {command}");
         }
-        assert!(help.contains("ai <命令> --help"));
+        assert!(help.contains("macai <命令> --help"));
     }
 
     #[test]
     fn help_flag_exits_successfully_without_contacting_daemon() {
-        let error = match Cli::try_parse_from(["ai", "--help"]) {
+        let error = match Cli::try_parse_from(["macai", "--help"]) {
             Ok(_) => panic!("--help should stop after rendering help"),
             Err(error) => error,
         };
@@ -1202,7 +1202,7 @@ mod tests {
     #[test]
     fn chat_accepts_generation_options() {
         let cli = Cli::try_parse_from([
-            "ai",
+            "macai",
             "chat",
             "local-model",
             "hello",
