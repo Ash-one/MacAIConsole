@@ -44,16 +44,16 @@
 用户安装应用后，应能够执行：
 
 ```bash
-ai pull qwen3
-ai run qwen3
+macai pull qwen3
+macai run qwen3
 
-ai transcribe meeting.wav
+macai transcribe meeting.wav
 
-ai speak "Hello world"
+macai speak "Hello world"
 
-ai list
-ai ps
-ai stop qwen3
+macai list
+macai ps
+macai stop qwen3
 ```
 
 同时能够通过：
@@ -263,7 +263,7 @@ Health monitoring
 CLI 名称：
 
 ```text
-ai
+macai
 ```
 
 Rust 实现。
@@ -949,7 +949,7 @@ POST /api/models/load
 ## Models
 
 ```bash
-ai list
+macai list
 ```
 
 输出：
@@ -966,7 +966,7 @@ qwen3-tts            tts     4.8 GB   idle
 ## Pull
 
 ```bash
-ai pull qwen3
+macai pull qwen3
 ```
 
 行为：
@@ -983,7 +983,7 @@ register model
 ## Run
 
 ```bash
-ai run qwen3
+macai run qwen3
 ```
 
 进入：
@@ -997,7 +997,7 @@ interactive chat
 ## Chat
 
 ```bash
-ai chat qwen3 "Explain transformers"
+macai chat qwen3 "Explain transformers"
 ```
 
 ---
@@ -1005,13 +1005,13 @@ ai chat qwen3 "Explain transformers"
 ## STT
 
 ```bash
-ai transcribe audio.wav
+macai transcribe audio.wav
 ```
 
 可选：
 
 ```bash
-ai transcribe audio.wav \
+macai transcribe audio.wav \
     --model whisper-large-v3 \
     --language zh
 ```
@@ -1021,13 +1021,13 @@ ai transcribe audio.wav \
 ## TTS
 
 ```bash
-ai speak "Hello world"
+macai speak "Hello world"
 ```
 
 或者：
 
 ```bash
-ai speak \
+macai speak \
     "你好" \
     --model qwen3-tts \
     --output output.wav
@@ -1038,7 +1038,7 @@ ai speak \
 ## Runtime
 
 ```bash
-ai ps
+macai ps
 ```
 
 例如：
@@ -1054,7 +1054,7 @@ whisper-large-v3   whisper.cpp   3.2 GB      idle
 ## Stop
 
 ```bash
-ai stop qwen3-8b
+macai stop qwen3-8b
 ```
 
 ---
@@ -1062,7 +1062,7 @@ ai stop qwen3-8b
 ## Server
 
 ```bash
-ai serve
+macai serve
 ```
 
 如果 daemon 已运行：
@@ -2187,7 +2187,7 @@ Rust workspace
 
 aiworkd
 
-ai CLI
+macai CLI
 
 health API
 ```
@@ -2195,7 +2195,7 @@ health API
 完成标准：
 
 ```bash
-ai status
+macai status
 ```
 
 可以得到：
@@ -2225,7 +2225,7 @@ OpenAI API
 完成标准：
 
 ```bash
-ai run model.gguf
+macai run model.gguf
 ```
 
 可聊天。
@@ -2249,9 +2249,9 @@ SQLite
 
 model manifest
 
-ai list
+macai list
 
-ai pull
+macai pull
 
 model folder
 ```
@@ -2259,9 +2259,9 @@ model folder
 完成标准：
 
 ```bash
-ai pull MODEL
-ai list
-ai run MODEL
+macai pull MODEL
+macai list
+macai run MODEL
 ```
 
 完整工作。
@@ -2305,7 +2305,7 @@ API：
 CLI：
 
 ```bash
-ai transcribe
+macai transcribe
 ```
 
 ---
@@ -2591,13 +2591,13 @@ CLI startup
 目标体验：
 
 ```bash
-ai pull qwen3
+macai pull qwen3
 ```
 
 然后：
 
 ```bash
-ai run qwen3
+macai run qwen3
 ```
 
 用户无需理解：
@@ -2619,7 +2619,7 @@ quantization backend
 高级用户可以手动设置：
 
 ```bash
-ai run qwen3 --provider mlx
+macai run qwen3 --provider mlx
 ```
 
 ---
@@ -2633,7 +2633,7 @@ Rust workspace
 
 aiworkd
 
-ai CLI
+macai CLI
 
 provider abstraction
 
@@ -2661,7 +2661,7 @@ MockProvider
 验收：
 
 ```bash
-ai chat mock hello
+macai chat mock hello
 ```
 
 输出：
@@ -2698,7 +2698,7 @@ http://127.0.0.1:11435/v1/chat/completions \
 Milestone 1 完成时，必须满足：
 
 * `aiworkd` 可以独立运行
-* `ai` 可以发现 daemon
+* `macai` 可以发现 daemon
 * Provider interface 已建立
 * Provider descriptor / status 可查询
 * Mock Provider 可运行
@@ -2735,8 +2735,8 @@ Milestone 2：
 
 * Model Registry
 * Hugging Face download
-* `ai pull`
-* `ai list`
+* `macai pull`
+* `macai list`
 * MLX Provider
 * LLM benchmark
 * Memory estimate
@@ -2796,9 +2796,9 @@ AIWorkbench.app
 然后：
 
 ```bash
-ai pull qwen3
+macai pull qwen3
 
-ai run qwen3
+macai run qwen3
 ```
 
 可以：
@@ -2810,7 +2810,7 @@ Chat
 运行：
 
 ```bash
-ai transcribe audio.wav
+macai transcribe audio.wav
 ```
 
 可以：
@@ -2822,7 +2822,7 @@ STT
 运行：
 
 ```bash
-ai speak "Hello"
+macai speak "Hello"
 ```
 
 可以：
