@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -55,6 +56,8 @@ struct WorkerReply {
 
 pub struct KokoroMlxProvider {
     state: Mutex<Option<KokoroState>>,
+    /// 只读观测快照独立于 worker I/O 锁，避免推理期间阻塞 /api/runtime。
+    resident: StdRwLock<Option<KokoroResident>>,
     python: PathBuf,
     script: PathBuf,
     /// 当前驻留模型的默认音色（load 时从 spec 读取，set_default_voice 时同步）。
@@ -66,10 +69,17 @@ struct KokoroState {
     worker: WorkerProcess,
 }
 
+#[derive(Clone)]
+struct KokoroResident {
+    model_id: String,
+    pid: Option<u32>,
+}
+
 impl KokoroMlxProvider {
     pub fn from_env() -> Self {
         Self {
             state: Mutex::new(None),
+            resident: StdRwLock::new(None),
             python: PathBuf::from(".build/kokoro-venv/bin/python"),
             script: PathBuf::from("scripts/kokoro_worker.py"),
             default_voice: Mutex::new(None),
@@ -111,12 +121,34 @@ impl KokoroMlxProvider {
         None
     }
 
-    async fn probe_ready(&self) -> bool {
-        let mut guard = self.state.lock().await;
-        match guard.as_mut() {
+    fn resident_snapshot(&self) -> Option<KokoroResident> {
+        self.resident
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn set_resident(&self, resident: Option<KokoroResident>) {
+        *self
+            .resident
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = resident;
+    }
+
+    fn probe_ready(&self) -> bool {
+        // synthesize 会在等待 worker 回复期间持有 state。观测请求此时读取快照，
+        // 空闲时再用 try_wait 校验真实进程状态。
+        let Ok(mut guard) = self.state.try_lock() else {
+            return self.resident_snapshot().is_some();
+        };
+        let ready = match guard.as_mut() {
             Some(state) => matches!(state.worker.child.try_wait(), Ok(None)),
             None => false,
+        };
+        if !ready {
+            self.set_resident(None);
         }
+        ready
     }
 }
 
@@ -140,16 +172,13 @@ impl Provider for KokoroMlxProvider {
     }
 
     async fn status(&self) -> ProviderStatus {
-        let ready = self.probe_ready().await;
+        let ready = self.probe_ready();
         let python_found = self.resolve_python().is_some();
         let script_found = self.resolve_script().is_some();
-        let resident = {
-            let guard = self.state.lock().await;
-            guard
-                .as_ref()
-                .map(|state| vec![state.model_id.clone()])
-                .unwrap_or_default()
-        };
+        let resident = self
+            .resident_snapshot()
+            .map(|snapshot| vec![snapshot.model_id])
+            .unwrap_or_default();
         let reason = if !python_found {
             Some("kokoro venv python not found".to_string())
         } else if !script_found {
@@ -211,6 +240,7 @@ impl Provider for KokoroMlxProvider {
                     format!("failed to start kokoro worker: {error}"),
                 )
             })?;
+        let pid = child.id();
         let stdin = child.stdin.take().ok_or_else(|| {
             ProviderError::new(AIError::Internal, "kokoro worker stdin unavailable")
         })?;
@@ -226,6 +256,10 @@ impl Provider for KokoroMlxProvider {
                 stdout,
             },
         });
+        self.set_resident(Some(KokoroResident {
+            model_id: model.id.clone(),
+            pid,
+        }));
         *self.default_voice.lock().await = model.default_voice.clone();
         Ok(ModelHandle {
             model_id: model.id.clone(),
@@ -240,6 +274,7 @@ impl Provider for KokoroMlxProvider {
             .is_some_and(|state| state.model_id == handle.model_id);
         if matches {
             if let Some(state) = guard.take() {
+                self.set_resident(None);
                 let mut worker = state.worker;
                 let _ = worker.stdin.shutdown().await;
                 match timeout(Duration::from_secs(5), worker.child.wait()).await {
@@ -267,19 +302,48 @@ impl Provider for KokoroMlxProvider {
     async fn health_check(&self) -> Result<ProviderHealth, ProviderError> {
         let status = self.status().await;
         Ok(ProviderHealth {
-            ok: status.available && (!status.ready || self.probe_ready().await),
+            ok: status.available && (!status.ready || self.probe_ready()),
             message: status.reason,
         })
     }
 
     async fn memory_usage_bytes(&self) -> Option<u64> {
-        let state = self.state.lock().await;
-        let pid = state.as_ref()?.worker.child.id()?;
+        let pid = self.resident_snapshot()?.pid?;
         resident_memory_bytes(pid)
     }
 
     async fn effective_device(&self) -> Option<String> {
-        self.state.lock().await.as_ref().map(|_| "gpu".to_string())
+        self.resident_snapshot().map(|_| "gpu".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn observability_does_not_wait_for_active_synthesis_lock() {
+        let provider = KokoroMlxProvider::from_env();
+        provider.set_resident(Some(KokoroResident {
+            model_id: "kokoro-test".to_string(),
+            pid: Some(std::process::id()),
+        }));
+        let _active_synthesis = provider.state.lock().await;
+
+        let status = timeout(Duration::from_secs(1), provider.status())
+            .await
+            .expect("provider status must not wait for synthesis");
+        assert!(status.ready);
+        assert_eq!(status.resident_models, ["kokoro-test"]);
+
+        let device = timeout(Duration::from_secs(1), provider.effective_device())
+            .await
+            .expect("device observation must not wait for synthesis");
+        assert_eq!(device.as_deref(), Some("gpu"));
+
+        timeout(Duration::from_secs(1), provider.memory_usage_bytes())
+            .await
+            .expect("memory observation must not wait for synthesis");
     }
 }
 
