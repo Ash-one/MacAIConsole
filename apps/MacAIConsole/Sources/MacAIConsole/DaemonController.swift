@@ -24,7 +24,12 @@ final class DaemonController {
     private(set) var runningTasks: [InferenceTaskSummary] = []
     private(set) var completedTasks: [InferenceTaskSummary] = []
     private(set) var tasksError: String?
-    var lastError: String?
+    var lastError: String? {
+        didSet {
+            guard let lastError, lastError != oldValue else { return }
+            AppLogger.error(lastError)
+        }
+    }
     var busyModelIDs: Set<String> = []
 
     let api = DaemonAPI()
@@ -34,17 +39,26 @@ final class DaemonController {
     private var logHandle: FileHandle?
     private var stopDeadline: Date?
     private var restartAfterStop = false
+
+    init() {
+        AppLogger.info("MacAIConsole GUI 已启动")
+    }
+
     // MARK: - 生命周期
 
     func bootstrapIfNeeded() {
         guard loopTask == nil else { return }
+        AppLogger.info("守护进程状态轮询已启动")
         loopTask = Task { [weak self] in
             while !Task.isCancelled {
                 let interval = await self?.tick() ?? 1.0
                 try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
             }
         }
-        guard AppSettings.autoStartDaemon else { return }
+        guard AppSettings.autoStartDaemon else {
+            AppLogger.info("已关闭 aiworkd 自动启动")
+            return
+        }
         Task { [weak self] in
             guard let self, !(await self.api.isHealthy()) else { return }
             self.startDaemon()
@@ -59,13 +73,19 @@ final class DaemonController {
         }
         lastError = nil
         phase = .starting
+        AppLogger.info("正在启动 aiworkd：\(binary.path)")
         do {
             let (process, log) = try Self.spawn(binary: binary)
             childProcess = process
             logHandle = log
+            AppLogger.info("aiworkd 进程已拉起，PID \(process.processIdentifier)")
             process.terminationHandler = { [weak self] proc in
                 Task { @MainActor in
-                    guard let self, self.childProcess === proc, self.phase != .stopping else { return }
+                    guard let self, self.childProcess === proc else { return }
+                    if self.phase == .stopping {
+                        AppLogger.info("aiworkd 已按请求退出，code \(proc.terminationStatus)")
+                        return
+                    }
                     self.lastError = "aiworkd 意外退出（code \(proc.terminationStatus)）。日志：应用支持目录/MacAIConsole/logs/aiworkd.log"
                     self.childProcess = nil
                 }
@@ -81,13 +101,16 @@ final class DaemonController {
         phase = .stopping
         stopDeadline = Date().addingTimeInterval(8)
         if let pid = info?.pid, pid > 0 {
+            AppLogger.info("正在停止 aiworkd，PID \(pid)")
             kill(pid_t(pid), SIGTERM)
         } else if let child = childProcess, child.isRunning {
+            AppLogger.info("正在停止 GUI 拉起的 aiworkd")
             child.terminate()
         }
     }
 
     func restartDaemon() {
+        AppLogger.info("已请求重启 aiworkd")
         restartAfterStop = true
         switch phase {
         case .offline:
@@ -120,7 +143,9 @@ final class DaemonController {
             completedTasks = tasks.completed
             tasksError = nil
         } else {
-            tasksError = "任务记录暂时无法读取：守护进程未返回有效数据"
+            let message = "任务记录暂时无法读取：守护进程未返回有效数据"
+            if tasksError != message { AppLogger.warning(message) }
+            tasksError = message
         }
     }
 
@@ -135,6 +160,7 @@ final class DaemonController {
         do {
             _ = try await api.loadRegistered(id)
             try await refresh()
+            AppLogger.info("已加载模型：\(id)")
         } catch {
             lastError = "加载失败：\(Self.message(for: error))"
         }
@@ -147,6 +173,7 @@ final class DaemonController {
         do {
             _ = try await api.unload(id)
             try await refresh()
+            AppLogger.info("已停止模型：\(id)")
         } catch {
             lastError = "卸载失败：\(Self.message(for: error))"
         }
@@ -161,6 +188,7 @@ final class DaemonController {
             try await api.unregister(id)
             ModelRepository.removeContextLength(for: id)
             try await refresh()
+            AppLogger.info("已删除模型注册：\(id)")
         } catch {
             lastError = "删除失败：\(Self.message(for: error))"
         }
@@ -179,6 +207,7 @@ final class DaemonController {
                 ModelRepository.removeContextLength(for: id)
             }
             try await refresh()
+            AppLogger.info("已重命名模型：\(id) → \(newID)")
         } catch {
             lastError = "重命名失败：\(Self.message(for: error))"
         }
@@ -189,6 +218,7 @@ final class DaemonController {
         do {
             try await api.setKeepAlive(id, keepAlive: keepAlive)
             try await refresh()
+            AppLogger.info("已更新模型驻留策略：\(id)")
         } catch {
             lastError = "策略修改失败：\(Self.message(for: error))"
         }
@@ -199,6 +229,7 @@ final class DaemonController {
         do {
             try await api.setVoice(id, voice: voice)
             try await refresh()
+            AppLogger.info("已更新 TTS 默认音色：\(id) / \(voice)")
         } catch {
             lastError = "音色修改失败：\(Self.message(for: error))"
         }
@@ -212,6 +243,16 @@ final class DaemonController {
     func registerAndLoad(path: String, id: String, contextLength: Int, keepAlive: String?, modelType: String? = nil) async throws {
         _ = try await api.registerAndLoad(path: path, id: id, name: nil, contextLength: contextLength, keepAlive: keepAlive, modelType: modelType)
         try await refresh()
+        AppLogger.info("已注册并加载模型：\(id)")
+    }
+
+    func setLogLevel(_ level: LogLevel) async throws {
+        guard phase == .online else {
+            AppLogger.info("日志级别将在下次启动 aiworkd 时应用：\(level.title)")
+            return
+        }
+        let response = try await api.setLogLevel(level)
+        AppLogger.info("日志级别已切换为 \(response.level.capitalized)")
     }
 
     // MARK: - 轮询内核
@@ -223,6 +264,8 @@ final class DaemonController {
                 do { try await refresh() } catch {}
                 phase = .online
                 lastError = nil
+                AppLogger.info("已连接 aiworkd，PID \(info?.pid ?? 0)")
+                try? await setLogLevel(AppSettings.logLevel)
             }
             return 1.0
 
@@ -231,6 +274,8 @@ final class DaemonController {
                 do { try await refresh() } catch {}
                 phase = .online
                 lastError = nil
+                AppLogger.info("aiworkd 已就绪，PID \(info?.pid ?? 0)")
+                try? await setLogLevel(AppSettings.logLevel)
             }
             return 0.4
 
@@ -246,7 +291,10 @@ final class DaemonController {
                 return 1.0
             }
             if let deadline = stopDeadline, Date() >= deadline {
-                if let pid = info?.pid, pid > 0 { kill(pid_t(pid), SIGKILL) }
+                if let pid = info?.pid, pid > 0 {
+                    AppLogger.warning("aiworkd 未在期限内退出，发送 SIGKILL，PID \(pid)")
+                    kill(pid_t(pid), SIGKILL)
+                }
                 stopDeadline = Date().addingTimeInterval(4)
             }
             return 0.4
@@ -263,6 +311,7 @@ final class DaemonController {
     }
 
     private func finishStop() {
+        AppLogger.info("aiworkd 当前离线")
         phase = .offline
         info = nil
         registeredModels = []
@@ -283,7 +332,7 @@ final class DaemonController {
         process.executableURL = binary
 
         var environment = ProcessInfo.processInfo.environment
-        environment["RUST_LOG"] = "info"
+        environment["RUST_LOG"] = AppSettings.logLevel.rawValue
         if let budget = AppSettings.parseMemoryBudget(AppSettings.memoryBudgetText) {
             environment["AIWORKD_MEMORY_BUDGET"] = String(budget)
         } else {
@@ -297,11 +346,10 @@ final class DaemonController {
         cwd = cwd.deletingLastPathComponent()
         process.currentDirectoryURL = cwd
 
-        let logDir = logDirectory
-        try FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
-        let logURL = logDir.appendingPathComponent("aiworkd.log")
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: logURL)
+        let logURL = LogFiles.daemon
+        let handle = try LogFiles.openForAppend(at: logURL)
+        let marker = "\n--- \(Date().ISO8601Format()) GUI 启动 aiworkd ---\n"
+        try handle.write(contentsOf: Data(marker.utf8))
         process.standardOutput = handle
         process.standardError = handle
         try process.run()
@@ -309,9 +357,7 @@ final class DaemonController {
     }
 
     static var logDirectory: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MacAIConsole", isDirectory: true)
-            .appendingPathComponent("logs", isDirectory: true)
+        LogFiles.directory
     }
 
     /// 二进制探测顺序：设置中指定的路径 → AIWORKD_PATH 环境变量 → 仓库 target/release、target/debug。

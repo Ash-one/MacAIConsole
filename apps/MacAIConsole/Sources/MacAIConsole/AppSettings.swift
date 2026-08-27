@@ -4,6 +4,7 @@ enum AppSettings {
     static let aiworkdPathKey = "aiworkdPath"
     static let autoStartKey = "autoStartDaemon"
     static let memoryBudgetKey = "memoryBudget"
+    static let logLevelKey = "logLevel"
 
     static var aiworkdPath: String? {
         let value = UserDefaults.standard.string(forKey: aiworkdPathKey)?
@@ -18,6 +19,11 @@ enum AppSettings {
     /// 用户覆盖值。空字符串表示使用 daemon 的自动预算策略。
     static var memoryBudgetText: String {
         UserDefaults.standard.string(forKey: memoryBudgetKey) ?? ""
+    }
+
+    static var logLevel: LogLevel {
+        let rawValue = UserDefaults.standard.string(forKey: logLevelKey) ?? LogLevel.info.rawValue
+        return LogLevel(rawValue: rawValue) ?? .info
     }
 
     /// 支持 B / K / M / G / T 后缀；无后缀按字节解析。
