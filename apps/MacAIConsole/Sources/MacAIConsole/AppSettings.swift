@@ -5,6 +5,7 @@ enum AppSettings {
     static let autoStartKey = "autoStartDaemon"
     static let memoryBudgetKey = "memoryBudget"
     static let logLevelKey = "logLevel"
+    static let qwen3ASR06BEnabledKey = "qwen3ASR06BEnabled"
 
     static var aiworkdPath: String? {
         let value = UserDefaults.standard.string(forKey: aiworkdPathKey)?
@@ -24,6 +25,15 @@ enum AppSettings {
     static var logLevel: LogLevel {
         let rawValue = UserDefaults.standard.string(forKey: logLevelKey) ?? LogLevel.info.rawValue
         return LogLevel(rawValue: rawValue) ?? .info
+    }
+
+    /// Qwen3-ASR is opt-in until its larger model footprint is explicitly accepted.
+    static var qwen3ASR06BEnabled: Bool {
+        qwen3ASR06BEnabled(in: .standard)
+    }
+
+    static func qwen3ASR06BEnabled(in defaults: UserDefaults) -> Bool {
+        defaults.object(forKey: qwen3ASR06BEnabledKey) as? Bool ?? false
     }
 
     /// 支持 B / K / M / G / T 后缀；无后缀按字节解析。

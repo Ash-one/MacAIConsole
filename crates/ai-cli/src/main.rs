@@ -85,6 +85,9 @@ enum Commands {
         /// 模型类型。
         #[arg(long = "type", value_enum, default_value = "llm")]
         model_type: ModelType,
+        /// 推理后端，如 qwen3-asr；省略时按模型类型选择默认值。
+        #[arg(long)]
+        provider: Option<String>,
         /// LLM 上下文长度。
         #[arg(long, default_value_t = 4096)]
         context_length: u64,
@@ -242,16 +245,20 @@ fn main() {
             id,
             name,
             model_type,
+            provider,
             context_length,
             keep_alive,
         } => cmd_load(
             &base,
             &path,
-            id.as_deref(),
-            name.as_deref(),
-            model_type,
-            context_length,
-            keep_alive.as_deref(),
+            LoadOptions {
+                id: id.as_deref(),
+                name: name.as_deref(),
+                model_type,
+                provider: provider.as_deref(),
+                context_length,
+                keep_alive: keep_alive.as_deref(),
+            },
         )
         .map(|_| ()),
         Commands::Start { model } => cmd_start(&base, &model),
@@ -658,28 +665,41 @@ fn cmd_run(
 
 fn resolve_model_argument(base: &str, model: &str) -> Result<String, String> {
     if Path::new(model).is_file() {
-        cmd_load(base, model, None, None, ModelType::Llm, 4096, None)
+        cmd_load(
+            base,
+            model,
+            LoadOptions {
+                id: None,
+                name: None,
+                model_type: ModelType::Llm,
+                provider: None,
+                context_length: 4096,
+                keep_alive: None,
+            },
+        )
     } else {
         Ok(model.to_string())
     }
 }
 
-fn cmd_load(
-    base: &str,
-    path: &str,
-    id: Option<&str>,
-    name: Option<&str>,
+struct LoadOptions<'a> {
+    id: Option<&'a str>,
+    name: Option<&'a str>,
     model_type: ModelType,
+    provider: Option<&'a str>,
     context_length: u64,
-    keep_alive: Option<&str>,
-) -> Result<String, String> {
+    keep_alive: Option<&'a str>,
+}
+
+fn cmd_load(base: &str, path: &str, options: LoadOptions<'_>) -> Result<String, String> {
     let body = json!({
         "path": path,
-        "id": id,
-        "name": name,
-        "model_type": model_type.as_str(),
-        "context_length": context_length,
-        "keep_alive": keep_alive,
+        "id": options.id,
+        "name": options.name,
+        "model_type": options.model_type.as_str(),
+        "provider": options.provider,
+        "context_length": options.context_length,
+        "keep_alive": options.keep_alive,
     });
     let (status, response) = post_json(base, "/api/models/load", &body)?;
     if status != 200 {
