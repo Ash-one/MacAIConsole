@@ -328,7 +328,7 @@ impl Runtime {
         // 无 estimate 的小模型（mock 等）按 0 计，不受预算约束。
         if self.memory_budget.is_some() {
             let requested = spec.memory_estimate.unwrap_or(0);
-            if requested > 0 && !self.evict_for_memory(requested).await {
+            if requested > 0 && !self.evict_for_memory(requested, Some(id)).await {
                 return Err(ProviderError::new(
                     AIError::ProviderUnavailable,
                     format!(
@@ -671,12 +671,14 @@ impl Runtime {
     }
 
     /// 当前常驻模型的内存占用合计（estimate；无 estimate 的按 0 计）。
-    async fn resident_memory_bytes(&self) -> u64 {
+    /// exclude_id 用于把自己排除——load_model 重入时目标模型可能已常驻。
+    async fn resident_memory_bytes(&self, exclude_id: Option<&str>) -> u64 {
         self.registry
             .read()
             .await
             .values()
             .filter(|entry| entry.state != "unloaded" && entry.state != "failed")
+            .filter(|entry| Some(entry.spec.id.as_str()) != exclude_id)
             .filter_map(|entry| entry.spec.memory_estimate)
             .sum()
     }
@@ -684,11 +686,11 @@ impl Runtime {
     /// LRU 逐出（handoff §24）：预算不足时按 last_used 升序逐出无 lease 的
     /// 常驻模型，直到腾出 requested 字节。keep_alive=always 的不逐。
     /// 必须在 lifecycle_lock 内调用。返回 true 表示已腾出足够空间。
-    async fn evict_for_memory(&self, requested: u64) -> bool {
+    async fn evict_for_memory(&self, requested: u64, exclude_id: Option<&str>) -> bool {
         let Some(budget) = self.memory_budget else {
             return true; // 无法探测内存：跳过约束
         };
-        let resident = self.resident_memory_bytes().await;
+        let resident = self.resident_memory_bytes(exclude_id).await;
         if resident.saturating_add(requested) <= budget {
             return true;
         }

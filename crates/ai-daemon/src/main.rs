@@ -124,8 +124,13 @@ async fn main() {
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .with_state(state);
 
-    let addr = "127.0.0.1:11435";
-    let listener = tokio::net::TcpListener::bind(addr)
+    // 端口默认 11435；测试/并行场景可用 AIWORKD_PORT 覆盖（生产 GUI 拉起时不设置）。
+    let port: u16 = std::env::var("AIWORKD_PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(11435);
+    let addr = format!("127.0.0.1:{port}");
+    let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .expect("bind failed");
 
