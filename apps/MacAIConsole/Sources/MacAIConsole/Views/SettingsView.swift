@@ -2,9 +2,10 @@ import AppKit
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage("aiworkdPath") private var daemonPath = ""
-    @AppStorage("autoStartDaemon") private var autoStart = true
-    @AppStorage("memoryBudget") private var memoryBudget = ""
+    @AppStorage(AppSettings.aiworkdPathKey) private var daemonPath = ""
+    @AppStorage(AppSettings.autoStartKey) private var autoStart = true
+    @AppStorage(AppSettings.memoryBudgetKey) private var memoryBudget = ""
+    @AppStorage(AppSettings.qwen3ASR06BEnabledKey) private var qwen3ASR06BEnabled = false
     @Environment(DaemonController.self) private var controller
 
     var body: some View {
@@ -38,6 +39,15 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(AppSettings.parseMemoryBudget(memoryBudget) == nil && !memoryBudget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            Section("语音转文字 · STT") {
+                Toggle("启用 Qwen3-ASR 0.6B", isOn: $qwen3ASR06BEnabled)
+                    .accessibilityLabel("启用 Qwen3-ASR 0.6B 语音转文字")
+                    .accessibilityHint("控制 Qwen3-ASR 0.6B 是否作为可用的语音转文字选项")
+                Text("开启后，Qwen3-ASR 0.6B 可作为语音识别模型使用。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("关于") {
