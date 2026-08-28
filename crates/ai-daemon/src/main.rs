@@ -73,8 +73,10 @@ struct LoadModelRequest {
     path: String,
     id: Option<String>,
     name: Option<String>,
-    /// llm（默认）/ stt。llm → llama.cpp (.gguf)，stt → whisper.cpp (.bin)。
+    /// llm（默认）/ stt / tts。
     model_type: Option<String>,
+    /// 显式推理后端。STT 支持 whisper.cpp（默认）与 qwen3-asr。
+    provider: Option<String>,
     context_length: Option<u64>,
     keep_alive: Option<String>,
 }
@@ -122,8 +124,13 @@ async fn main() {
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .with_state(state);
 
-    let addr = "127.0.0.1:11435";
-    let listener = tokio::net::TcpListener::bind(addr)
+    // 端口默认 11435；测试/并行场景可用 AIWORKD_PORT 覆盖（生产 GUI 拉起时不设置）。
+    let port: u16 = std::env::var("AIWORKD_PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(11435);
+    let addr = format!("127.0.0.1:{port}");
+    let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .expect("bind failed");
 
@@ -436,6 +443,7 @@ async fn finish_pull(state: AppState, request: pull::PullRequest, dest: PathBuf)
         id: Some(id),
         name: None,
         model_type: Some(request.model_type.clone()),
+        provider: None,
         context_length: None,
         keep_alive: None,
     };
@@ -455,7 +463,6 @@ async fn register_and_load_model(
             )
         }
     };
-    // 类型路由：stt → whisper.cpp (.bin)，tts → kokoro-mlx（模型目录），默认 llm → llama.cpp (.gguf)。
     let model_type = match request.model_type.as_deref() {
         Some("llm") | None => "llm",
         Some("stt") => "stt",
@@ -467,46 +474,70 @@ async fn register_and_load_model(
             );
         }
     };
-    let expected_ext = match model_type {
-        "llm" => Some("gguf"),
-        "stt" => Some("bin"),
-        _ => None,
+    let requested_provider = request.provider.as_deref().map(str::trim);
+    let provider = match (model_type, requested_provider) {
+        ("llm", None | Some("llama.cpp")) => "llama.cpp",
+        ("stt", None | Some("whisper.cpp")) => "whisper.cpp",
+        ("stt", Some("qwen3-asr")) => "qwen3-asr",
+        ("tts", None | Some("kokoro-mlx")) => "kokoro-mlx",
+        (other_type, None) => {
+            return api_error(
+                AIError::InvalidRequest,
+                format!("no default provider is defined for model type '{other_type}'"),
+            );
+        }
+        (_, Some(other)) => {
+            return api_error(
+                AIError::InvalidRequest,
+                format!("provider '{other}' does not support model type '{model_type}'"),
+            );
+        }
     };
-    if let Some(expected_ext) = expected_ext {
-        if path.extension().and_then(|value| value.to_str()) != Some(expected_ext) {
+    match provider {
+        "llama.cpp" if path.extension().and_then(|value| value.to_str()) != Some("gguf") => {
             return api_error(
                 AIError::InvalidRequest,
                 format!(
-                    "expected a .{expected_ext} model for type '{model_type}', got '{}'",
+                    "expected a .gguf model for provider 'llama.cpp', got '{}'",
                     path.display()
                 ),
             );
         }
-    }
-    if model_type == "tts" && !path.is_dir() {
-        return api_error(
-            AIError::InvalidRequest,
-            format!(
-                "expected a model directory containing model.safetensors for type 'tts', got '{}'",
-                path.display()
-            ),
-        );
+        "whisper.cpp" if path.extension().and_then(|value| value.to_str()) != Some("bin") => {
+            return api_error(
+                AIError::InvalidRequest,
+                format!(
+                    "expected a .bin model for provider 'whisper.cpp', got '{}'",
+                    path.display()
+                ),
+            );
+        }
+        "kokoro-mlx" if !path.is_dir() => {
+            return api_error(
+                AIError::InvalidRequest,
+                format!(
+                    "expected a model directory containing model.safetensors for provider 'kokoro-mlx', got '{}'",
+                    path.display()
+                ),
+            );
+        }
+        "qwen3-asr" => {
+            if let Err(error) = providers::qwen3_asr::validate_model_dir(&path) {
+                return provider_error(error);
+            }
+        }
+        _ => {}
     }
 
-    let id = request.id.unwrap_or_else(|| {
-        path.file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or("model")
-            .to_string()
-    });
+    let id = request.id.unwrap_or_else(|| default_model_id(&path));
     if !valid_model_id(&id) {
         return api_error(
             AIError::InvalidRequest,
             "model id may contain only letters, numbers, '.', '_' and '-'",
         );
     }
-    let metadata = match path.metadata() {
-        Ok(metadata) => metadata,
+    let size_bytes = match recursive_path_size(&path) {
+        Ok(size) => size,
         Err(error) => {
             return api_error(
                 AIError::ModelNotFound,
@@ -514,10 +545,16 @@ async fn register_and_load_model(
             )
         }
     };
-    let (provider, format, keep_alive_default) = match model_type {
-        "llm" => ("llama.cpp", Some("gguf"), Some("5m")),
-        "stt" => ("whisper.cpp", Some("bin"), Some("always")),
-        _ => ("kokoro-mlx", None, Some("always")),
+    let (format, keep_alive_default, memory_estimate) = match provider {
+        "llama.cpp" => (Some("gguf"), Some("5m"), Some(size_bytes)),
+        "whisper.cpp" => (Some("bin"), Some("always"), Some(size_bytes)),
+        // 6 GiB is MacAI's initial scheduling estimate; real RSS is reported from the worker.
+        "qwen3-asr" => (
+            Some("qwen3-asr"),
+            Some("always"),
+            Some(6 * 1024 * 1024 * 1024),
+        ),
+        _ => (None, Some("always"), Some(size_bytes)),
     };
     let spec = ai_core::model::ModelSpec {
         id: id.clone(),
@@ -527,8 +564,8 @@ async fn register_and_load_model(
         source: None,
         path: Some(path.to_string_lossy().into_owned()),
         format: format.map(String::from),
-        size_bytes: Some(metadata.len()),
-        memory_estimate: Some(metadata.len()),
+        size_bytes: Some(size_bytes),
+        memory_estimate,
         keep_alive: request
             .keep_alive
             .or_else(|| keep_alive_default.map(String::from)),
@@ -791,7 +828,7 @@ async fn audio_transcriptions(State(state): State<AppState>, mut multipart: Mult
                 {
                     return api_error(
                         AIError::InvalidRequest,
-                        "whisper.cpp STT currently accepts .wav uploads",
+                        "STT currently accepts .wav uploads",
                     );
                 }
                 let bytes = match field.bytes().await {
@@ -936,6 +973,31 @@ impl Drop for UploadedAudio {
     }
 }
 
+fn default_model_id(path: &FilePath) -> String {
+    let value = if path.is_dir() {
+        path.file_name()
+    } else {
+        path.file_stem()
+    };
+    value
+        .and_then(|value| value.to_str())
+        .unwrap_or("model")
+        .to_string()
+}
+
+fn recursive_path_size(path: &FilePath) -> std::io::Result<u64> {
+    let metadata = path.metadata()?;
+    if metadata.is_file() {
+        return Ok(metadata.len());
+    }
+    let mut total = 0u64;
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        total = total.saturating_add(recursive_path_size(&entry.path())?);
+    }
+    Ok(total)
+}
+
 fn valid_model_id(id: &str) -> bool {
     !id.is_empty()
         && id
@@ -962,6 +1024,22 @@ mod tests {
         assert!(valid_model_id("SmolLM2-135M.Q4_K_M"));
         assert!(!valid_model_id("../model"));
         assert!(!valid_model_id("model name"));
+    }
+
+    #[test]
+    fn preserves_directory_model_id_and_sums_snapshot_size() {
+        let path = std::env::temp_dir().join(format!("Qwen3-ASR-0.6B-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(path.join("tokenizer")).unwrap();
+        std::fs::write(path.join("model.safetensors"), b"1234").unwrap();
+        std::fs::write(path.join("tokenizer/config.json"), b"12").unwrap();
+
+        assert_eq!(
+            default_model_id(&path),
+            path.file_name().unwrap().to_string_lossy()
+        );
+        assert_eq!(recursive_path_size(&path).unwrap(), 6);
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     fn mock_model() -> ai_core::model::ModelSpec {

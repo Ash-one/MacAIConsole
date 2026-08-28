@@ -5,10 +5,12 @@ pub mod kokoro_mlx;
 pub mod llama_cpp;
 pub mod macos_say;
 pub mod mock;
+pub mod qwen3_asr;
 pub mod whisper_cpp;
 
 pub use kokoro_mlx::KokoroMlxProvider;
 pub use llama_cpp::LlamaCppProvider;
 pub use macos_say::MacOSSayProvider;
 pub use mock::MockProvider;
+pub use qwen3_asr::Qwen3AsrProvider;
 pub use whisper_cpp::WhisperCppProvider;
