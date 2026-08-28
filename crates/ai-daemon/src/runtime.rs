@@ -23,7 +23,8 @@ use ai_core::response::{
 use ai_core::AIError;
 
 use crate::providers::{
-    KokoroMlxProvider, LlamaCppProvider, MacOSSayProvider, MockProvider, WhisperCppProvider,
+    KokoroMlxProvider, LlamaCppProvider, MacOSSayProvider, MockProvider, Qwen3AsrProvider,
+    WhisperCppProvider,
 };
 use crate::registry::RegistryStore;
 use crate::scheduler;
@@ -132,11 +133,13 @@ impl Runtime {
         // 由 new() 的 inject_test_providers 注入，不进生产 providers 表。
         let llama = Arc::new(LlamaCppProvider::from_env());
         let whisper = Arc::new(WhisperCppProvider::from_env());
+        let qwen3_asr = Arc::new(Qwen3AsrProvider::from_env());
         let kokoro = Arc::new(KokoroMlxProvider::from_env());
 
         let mut providers: HashMap<String, Arc<dyn Provider>> = HashMap::new();
         providers.insert("llama.cpp".to_string(), llama.clone());
         providers.insert("whisper.cpp".to_string(), whisper.clone());
+        providers.insert("qwen3-asr".to_string(), qwen3_asr.clone());
         providers.insert("kokoro-mlx".to_string(), kokoro.clone());
 
         let mut chat_providers: HashMap<String, Arc<dyn ChatProvider>> = HashMap::new();
@@ -144,6 +147,7 @@ impl Runtime {
 
         let mut stt_providers: HashMap<String, Arc<dyn STTProvider>> = HashMap::new();
         stt_providers.insert("whisper.cpp".to_string(), whisper);
+        stt_providers.insert("qwen3-asr".to_string(), qwen3_asr);
 
         let mut tts_providers: HashMap<String, Arc<dyn TTSProvider>> = HashMap::new();
         tts_providers.insert("kokoro-mlx".to_string(), kokoro);
@@ -1023,6 +1027,7 @@ mod tests {
                 "llama.cpp",
                 "macos-say",
                 "mock",
+                "qwen3-asr",
                 "whisper.cpp"
             ]
         );
