@@ -100,6 +100,12 @@ private struct TaskRow: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+                if let sttMetricsLine {
+                    Text(sttMetricsLine)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 12)
             if task.isRunning {
@@ -147,10 +153,17 @@ private struct TaskRow: View {
     }
 
     private var modelLine: String {
+        var parts = [task.model]
         if let provider = task.provider, !provider.isEmpty {
-            return "\(task.model) · \(provider)"
+            parts.append(provider)
         }
-        return task.model
+        return parts.joined(separator: " · ")
+    }
+
+    private var sttMetricsLine: String? {
+        guard task.kind == "stt" else { return nil }
+        let rtf = task.isRunning ? "计算中" : Format.realTimeFactor(task.realTimeFactor)
+        return "输入音频 \(Format.duration(milliseconds: task.audioDurationMs)) · RTF \(rtf)"
     }
 
     private var durationText: String {
@@ -275,6 +288,15 @@ private struct TaskDetailSheet: View {
                 LabeledContent("开始时间", value: Format.absoluteTime(milliseconds: displaySummary.startedAtMs))
                 LabeledContent("结束时间", value: displaySummary.isRunning ? "仍在运行" : Format.absoluteTime(milliseconds: displaySummary.completedAtMs))
                 LabeledContent("耗时", value: durationText)
+                if displaySummary.kind == "stt" {
+                    LabeledContent("输入音频时长", value: Format.duration(milliseconds: displaySummary.audioDurationMs))
+                    LabeledContent(
+                        "RTF",
+                        value: displaySummary.isRunning
+                            ? "计算中"
+                            : Format.realTimeFactor(displaySummary.realTimeFactor)
+                    )
+                }
             }
             .padding(2)
         } label: {

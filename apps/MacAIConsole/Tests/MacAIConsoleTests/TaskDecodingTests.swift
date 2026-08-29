@@ -40,6 +40,7 @@ final class TaskDecodingTests: XCTestCase {
                   "started_at_ms": 1787670001000,
                   "completed_at_ms": 1787670002000,
                   "duration_ms": 1000,
+                  "audio_duration_ms": 15700,
                   "error": null
                 },
                 {
@@ -78,6 +79,9 @@ final class TaskDecodingTests: XCTestCase {
         XCTAssertEqual(list.running[1].kind, "image_generation")
         XCTAssertEqual(list.running[1].statusTitle, "queued")
         XCTAssertEqual(list.completed[0].kindTitle, "语音识别")
+        XCTAssertEqual(list.completed[0].audioDurationMs, 15_700)
+        XCTAssertEqual(list.completed[0].realTimeFactor ?? 0, 1.0 / 15.7, accuracy: 0.0001)
+        XCTAssertEqual(Format.realTimeFactor(list.completed[0].realTimeFactor), "0.06×")
         XCTAssertEqual(list.completed[1].statusTitle, "失败")
         XCTAssertEqual(list.completed[2].statusTitle, "已中断")
         XCTAssertNil(list.completed[1].provider)
@@ -157,6 +161,7 @@ final class TaskDecodingTests: XCTestCase {
                 "messages": [],
                 "file_name": "meeting.wav",
                 "file_size_bytes": 4096,
+                "audio_duration_ms": 15700,
                 "language": "zh",
                 "format": "json"
               },
@@ -172,6 +177,8 @@ final class TaskDecodingTests: XCTestCase {
         let stt = try JSONDecoder().decode(InferenceTaskDetail.self, from: data)
         XCTAssertEqual(stt.request?.fileName, "meeting.wav")
         XCTAssertEqual(stt.request?.fileSizeBytes, 4096)
+        XCTAssertEqual(stt.request?.audioDurationMs, 15_700)
+        XCTAssertEqual(stt.summary.audioDurationMs, 15_700)
         XCTAssertEqual(stt.result?.outputText, "你好")
 
         let ttsData = Data(

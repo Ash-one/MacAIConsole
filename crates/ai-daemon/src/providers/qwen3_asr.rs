@@ -88,41 +88,100 @@ struct ReplyFailure {
     fatal: bool,
 }
 
+struct QwenBackendConfig {
+    id: &'static str,
+    label: &'static str,
+    python_env: &'static str,
+    script_env: &'static str,
+    device_env: &'static str,
+    python: &'static str,
+    script: &'static str,
+    default_device: &'static str,
+    allowed_devices: &'static [&'static str],
+    supported_devices: &'static [&'static str],
+    install_hint: &'static str,
+}
+
+const PYTORCH_BACKEND: QwenBackendConfig = QwenBackendConfig {
+    id: "qwen3-asr",
+    label: "Qwen3-ASR",
+    python_env: "AIWORK_QWEN3_ASR_PYTHON",
+    script_env: "AIWORK_QWEN3_ASR_SCRIPT",
+    device_env: "AIWORK_QWEN3_ASR_DEVICE",
+    python: ".build/qwen3-asr-venv/bin/python",
+    script: "scripts/qwen3_asr_worker.py",
+    default_device: "auto",
+    allowed_devices: &["auto", "mps", "cpu"],
+    supported_devices: &["mps", "cpu"],
+    install_hint: "create .build/qwen3-asr-venv and install qwen-asr==0.0.6",
+};
+
+const MLX_BACKEND: QwenBackendConfig = QwenBackendConfig {
+    id: "qwen3-asr-mlx",
+    label: "Qwen3-ASR MLX",
+    python_env: "AIWORK_QWEN3_ASR_MLX_PYTHON",
+    script_env: "AIWORK_QWEN3_ASR_MLX_SCRIPT",
+    device_env: "AIWORK_QWEN3_ASR_MLX_DEVICE",
+    python: ".build/qwen3-asr-mlx-venv/bin/python",
+    script: "scripts/qwen3_asr_mlx_worker.py",
+    default_device: "auto",
+    allowed_devices: &["auto", "metal"],
+    supported_devices: &["metal"],
+    install_hint: "create .build/qwen3-asr-mlx-venv and install mlx-audio==0.5.0",
+};
+
 pub struct Qwen3AsrProvider {
     state: Mutex<Option<QwenState>>,
     resident: StdRwLock<Option<QwenResident>>,
-    python: PathBuf,
-    script: PathBuf,
+    config: &'static QwenBackendConfig,
+    python_override: Option<PathBuf>,
+    script_override: Option<PathBuf>,
 }
 
 impl Qwen3AsrProvider {
     pub fn from_env() -> Self {
+        Self::with_config(&PYTORCH_BACKEND)
+    }
+
+    pub fn mlx_from_env() -> Self {
+        Self::with_config(&MLX_BACKEND)
+    }
+
+    fn with_config(config: &'static QwenBackendConfig) -> Self {
         Self {
             state: Mutex::new(None),
             resident: StdRwLock::new(None),
-            python: PathBuf::from(".build/qwen3-asr-venv/bin/python"),
-            script: PathBuf::from("scripts/qwen3_asr_worker.py"),
+            config,
+            python_override: None,
+            script_override: None,
         }
     }
 
     fn resolve_python(&self) -> Option<PathBuf> {
-        if let Ok(value) = env::var("AIWORK_QWEN3_ASR_PYTHON") {
+        if let Some(path) = &self.python_override {
+            return path.is_file().then(|| path.clone());
+        }
+        if let Ok(value) = env::var(self.config.python_env) {
             let candidate = PathBuf::from(value.trim());
             if candidate.is_file() {
                 return Some(candidate);
             }
         }
-        resolve_project_file(&self.python)
+        resolve_project_file(Path::new(self.config.python))
     }
 
     fn resolve_script(&self) -> Option<PathBuf> {
-        if let Ok(value) = env::var("AIWORK_QWEN3_ASR_SCRIPT") {
+        if let Some(path) = &self.script_override {
+            return path.is_file().then(|| path.clone());
+        }
+        if let Ok(value) = env::var(self.config.script_env) {
             let candidate = PathBuf::from(value.trim());
             if candidate.is_file() {
                 return Some(candidate.canonicalize().unwrap_or(candidate));
             }
         }
-        resolve_project_file(&self.script).map(|path| path.canonicalize().unwrap_or(path))
+        resolve_project_file(Path::new(self.config.script))
+            .map(|path| path.canonicalize().unwrap_or(path))
     }
 
     fn resident_snapshot(&self) -> Option<QwenResident> {
@@ -186,7 +245,7 @@ impl Qwen3AsrProvider {
 #[async_trait]
 impl Provider for Qwen3AsrProvider {
     fn id(&self) -> &'static str {
-        "qwen3-asr"
+        self.config.id
     }
 
     fn capabilities(&self) -> Vec<Capability> {
@@ -198,7 +257,12 @@ impl Provider for Qwen3AsrProvider {
             id: self.id().to_string(),
             capabilities: self.capabilities(),
             isolation: IsolationMode::Worker,
-            supported_devices: vec!["mps".to_string(), "cpu".to_string()],
+            supported_devices: self
+                .config
+                .supported_devices
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
         }
     }
 
@@ -214,15 +278,18 @@ impl Provider for Qwen3AsrProvider {
             .map(|value| vec![value.model_id])
             .unwrap_or_default();
         let reason = if !python_found {
-            Some("Qwen3-ASR Python environment was not found".to_string())
+            Some(format!(
+                "{} Python environment was not found",
+                self.config.label
+            ))
         } else if !script_found {
-            Some("scripts/qwen3_asr_worker.py was not found".to_string())
+            Some(format!("{} was not found", self.config.script))
         } else if ready {
             effective_device
                 .as_ref()
-                .map(|device| format!("Qwen3-ASR worker is ready on {device}"))
+                .map(|device| format!("{} worker is ready on {device}", self.config.label))
         } else {
-            Some("no Qwen3-ASR model is loaded".to_string())
+            Some(format!("no {} model is loaded", self.config.label))
         };
         ProviderStatus {
             available: python_found && script_found,
@@ -230,8 +297,7 @@ impl Provider for Qwen3AsrProvider {
             effective_device,
             resident_models,
             reason,
-            install_hint: (!python_found)
-                .then(|| "create .build/qwen3-asr-venv and install qwen-asr==0.0.6".to_string()),
+            install_hint: (!python_found).then(|| self.config.install_hint.to_string()),
         }
     }
 
@@ -239,13 +305,13 @@ impl Provider for Qwen3AsrProvider {
         let python = self.resolve_python().ok_or_else(|| {
             ProviderError::new(
                 AIError::ProviderUnavailable,
-                "Qwen3-ASR Python environment was not found (.build/qwen3-asr-venv)",
+                format!("{} Python environment was not found", self.config.label),
             )
         })?;
         let script = self.resolve_script().ok_or_else(|| {
             ProviderError::new(
                 AIError::ProviderUnavailable,
-                "scripts/qwen3_asr_worker.py was not found",
+                format!("{} was not found", self.config.script),
             )
         })?;
         let model_path = model.path.as_deref().ok_or_else(|| {
@@ -260,13 +326,22 @@ impl Provider for Qwen3AsrProvider {
                 format!("Qwen3-ASR model directory for '{}' was not found", model.id),
             )
         })?;
-        validate_model_dir(&model_dir)?;
+        if self.config.id == MLX_BACKEND.id {
+            validate_mlx_8bit_model_dir(&model_dir)?;
+        } else {
+            validate_model_dir(&model_dir)?;
+        }
 
-        let device = env::var("AIWORK_QWEN3_ASR_DEVICE").unwrap_or_else(|_| "auto".to_string());
-        if !matches!(device.as_str(), "auto" | "mps" | "cpu") {
+        let device = env::var(self.config.device_env)
+            .unwrap_or_else(|_| self.config.default_device.to_string());
+        if !self.config.allowed_devices.contains(&device.as_str()) {
             return Err(ProviderError::new(
                 AIError::InvalidRequest,
-                "AIWORK_QWEN3_ASR_DEVICE must be auto, mps, or cpu",
+                format!(
+                    "{} must be one of: {}",
+                    self.config.device_env,
+                    self.config.allowed_devices.join(", ")
+                ),
             ));
         }
         let mut child = Command::new(&python)
@@ -618,6 +693,34 @@ fn canonical_language(value: &str) -> Result<String, ProviderError> {
     Ok(language.to_string())
 }
 
+pub(crate) fn validate_mlx_8bit_model_dir(path: &Path) -> Result<(), ProviderError> {
+    validate_model_dir(path)?;
+    let config = std::fs::read_to_string(path.join("config.json")).map_err(|error| {
+        ProviderError::new(
+            AIError::InvalidRequest,
+            format!("failed to read Qwen3-ASR MLX config.json: {error}"),
+        )
+    })?;
+    let config: serde_json::Value = serde_json::from_str(&config).map_err(|error| {
+        ProviderError::new(
+            AIError::InvalidRequest,
+            format!("invalid Qwen3-ASR MLX config.json: {error}"),
+        )
+    })?;
+    let bits = config
+        .get("quantization")
+        .or_else(|| config.get("quantization_config"))
+        .and_then(|value| value.get("bits"))
+        .and_then(serde_json::Value::as_u64);
+    if bits != Some(8) {
+        return Err(ProviderError::new(
+            AIError::InvalidRequest,
+            "qwen3-asr-mlx requires an MLX 8-bit model directory",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_model_dir(path: &Path) -> Result<(), ProviderError> {
     if !path.is_dir() {
         return Err(ProviderError::new(
@@ -720,6 +823,33 @@ mod tests {
     }
 
     #[test]
+    fn validates_mlx_8bit_model_directory() {
+        let dir = TempModelDir::new();
+        fs::write(
+            dir.0.join("config.json"),
+            br#"{"quantization":{"group_size":64,"bits":8,"mode":"affine"}}"#,
+        )
+        .unwrap();
+        for name in [
+            "model.safetensors",
+            "preprocessor_config.json",
+            "tokenizer_config.json",
+        ] {
+            dir.touch(name);
+        }
+        validate_mlx_8bit_model_dir(&dir.0).unwrap();
+
+        fs::write(
+            dir.0.join("config.json"),
+            br#"{"quantization":{"group_size":64,"bits":4,"mode":"affine"}}"#,
+        )
+        .unwrap();
+        let error = validate_mlx_8bit_model_dir(&dir.0).unwrap_err();
+        assert_eq!(error.kind, AIError::InvalidRequest);
+        assert!(error.message.contains("8-bit"));
+    }
+
+    #[test]
     fn maps_language_codes_and_rejects_unknown_values() {
         assert_eq!(canonical_language("zh").unwrap(), "Chinese");
         assert_eq!(canonical_language("EN").unwrap(), "English");
@@ -804,8 +934,9 @@ for line in sys.stdin:
         let provider = Qwen3AsrProvider {
             state: Mutex::new(None),
             resident: StdRwLock::new(None),
-            python,
-            script,
+            config: &PYTORCH_BACKEND,
+            python_override: Some(python),
+            script_override: Some(script),
         };
         let model = ModelSpec {
             id: "qwen-test".to_string(),

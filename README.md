@@ -185,33 +185,45 @@ ggml-large-v3-turbo-encoder.mlmodelc/
 
 ### 5. 准备 Qwen3-ASR 0.6B
 
-Qwen3-ASR 使用独立 Python 环境与完整模型目录：
+Qwen3-ASR 提供两个独立 Provider：Apple Silicon 优先使用 MLX 8-bit，PyTorch MPS FP16 保留为兼容回退。
+
+MLX 8-bit 环境与权重：
+
+```bash
+uv venv --python 3.12 .build/qwen3-asr-mlx-venv
+uv pip install --python .build/qwen3-asr-mlx-venv/bin/python 'mlx-audio==0.5.0'
+
+hf download mlx-community/Qwen3-ASR-0.6B-8bit \
+  --local-dir "$HOME/Library/Application Support/MacAIConsole/Models/stt/Qwen3-ASR-0.6B-MLX-8bit"
+```
+
+注册时选择 `qwen3-asr-mlx`；daemon 会校验模型配置确实为 8-bit：
+
+```bash
+./target/release/macai load \
+  "$HOME/Library/Application Support/MacAIConsole/Models/stt/Qwen3-ASR-0.6B-MLX-8bit" \
+  --id qwen3-asr-mlx-8bit \
+  --type stt \
+  --provider qwen3-asr-mlx \
+  --keep-alive always
+
+./target/release/macai transcribe meeting.wav \
+  --model qwen3-asr-mlx-8bit \
+  --language zh
+```
+
+PyTorch 回退环境与模型：
 
 ```bash
 python3.12 -m venv .build/qwen3-asr-venv
 .build/qwen3-asr-venv/bin/pip install -U pip
 .build/qwen3-asr-venv/bin/pip install 'qwen-asr==0.0.6'
 
-huggingface-cli download Qwen/Qwen3-ASR-0.6B \
+hf download Qwen/Qwen3-ASR-0.6B \
   --local-dir "$HOME/Library/Application Support/MacAIConsole/Models/stt/Qwen3-ASR-0.6B"
 ```
 
-注册时显式选择 `qwen3-asr` provider；模型必须是包含 `config.json`、`model.safetensors`、preprocessor 与 tokenizer 文件的完整目录：
-
-```bash
-./target/release/macai load \
-  "$HOME/Library/Application Support/MacAIConsole/Models/stt/Qwen3-ASR-0.6B" \
-  --id qwen3-asr-0.6b \
-  --type stt \
-  --provider qwen3-asr \
-  --keep-alive always
-
-./target/release/macai transcribe meeting.wav \
-  --model qwen3-asr-0.6b \
-  --language zh
-```
-
-Apple Silicon 默认优先 MPS，加载失败会明确回退 CPU。可用 `AIWORK_QWEN3_ASR_DEVICE=mps|cpu|auto` 固定设备，并通过 `AIWORK_QWEN3_ASR_PYTHON` 指向其他隔离环境。
+PyTorch Provider 使用 `qwen3-asr`，Apple Silicon 默认优先 MPS，加载失败回退 CPU。可用 `AIWORK_QWEN3_ASR_DEVICE=mps|cpu|auto` 固定设备；MLX Provider 固定使用 Metal，并可通过 `AIWORK_QWEN3_ASR_MLX_PYTHON` 指向其他隔离环境。
 
 ### 6. 准备 Kokoro TTS
 

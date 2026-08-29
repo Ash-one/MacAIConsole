@@ -44,10 +44,16 @@ struct SettingsView: View {
             Section("语音转文字 · STT") {
                 Toggle("启用 Qwen3-ASR 0.6B", isOn: $qwen3ASR06BEnabled)
                     .accessibilityLabel("启用 Qwen3-ASR 0.6B 语音转文字")
-                    .accessibilityHint("控制 Qwen3-ASR 0.6B 是否作为可用的语音转文字选项")
-                Text("开启后，Qwen3-ASR 0.6B 可作为语音识别模型使用。")
+                    .accessibilityHint("控制 Qwen3-ASR 是否作为可用的语音转文字选项")
+                Text("同时装配 MLX 8-bit 与 PyTorch Provider；本机优先使用 MLX 8-bit，PyTorch 保留为兼容回退。修改后需要重启 aiworkd。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Button {
+                    controller.restartDaemon()
+                } label: {
+                    Label("重启并应用 STT 设置", systemImage: "arrow.clockwise.circle")
+                }
+                .buttonStyle(.borderedProminent)
             }
 
             Section("关于") {

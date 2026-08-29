@@ -75,7 +75,7 @@ struct LoadModelRequest {
     name: Option<String>,
     /// llm（默认）/ stt / tts。
     model_type: Option<String>,
-    /// 显式推理后端。STT 支持 whisper.cpp（默认）与 qwen3-asr。
+    /// 显式推理后端。STT 支持 whisper.cpp（默认）、qwen3-asr 与 qwen3-asr-mlx。
     provider: Option<String>,
     context_length: Option<u64>,
     keep_alive: Option<String>,
@@ -479,6 +479,7 @@ async fn register_and_load_model(
         ("llm", None | Some("llama.cpp")) => "llama.cpp",
         ("stt", None | Some("whisper.cpp")) => "whisper.cpp",
         ("stt", Some("qwen3-asr")) => "qwen3-asr",
+        ("stt", Some("qwen3-asr-mlx")) => "qwen3-asr-mlx",
         ("tts", None | Some("kokoro-mlx")) => "kokoro-mlx",
         (other_type, None) => {
             return api_error(
@@ -526,6 +527,11 @@ async fn register_and_load_model(
                 return provider_error(error);
             }
         }
+        "qwen3-asr-mlx" => {
+            if let Err(error) = providers::qwen3_asr::validate_mlx_8bit_model_dir(&path) {
+                return provider_error(error);
+            }
+        }
         _ => {}
     }
 
@@ -553,6 +559,12 @@ async fn register_and_load_model(
             Some("qwen3-asr"),
             Some("always"),
             Some(6 * 1024 * 1024 * 1024),
+        ),
+        // 8-bit weights are ~1 GiB; reserve 2 GiB for MLX activations and caches.
+        "qwen3-asr-mlx" => (
+            Some("qwen3-asr-mlx-8bit"),
+            Some("always"),
+            Some(2 * 1024 * 1024 * 1024),
         ),
         _ => (None, Some("always"), Some(size_bytes)),
     };
@@ -843,10 +855,12 @@ async fn audio_transcriptions(State(state): State<AppState>, mut multipart: Mult
                 if bytes.is_empty() {
                     return api_error(AIError::InvalidRequest, "uploaded audio is empty");
                 }
+                let audio_duration_ms = wav_duration_ms(&bytes);
                 let uploaded = UploadedAudio::new(
                     state.runtime.next_request_id(),
                     file_name,
                     bytes.len() as u64,
+                    audio_duration_ms,
                 );
                 if let Err(error) = tokio::fs::write(&uploaded.path, &bytes).await {
                     return api_error(
@@ -915,6 +929,7 @@ async fn audio_transcriptions(State(state): State<AppState>, mut multipart: Mult
             &request,
             Some(upload.file_name.clone()),
             Some(upload.file_size_bytes),
+            upload.audio_duration_ms,
         ),
     );
     match state.runtime.transcribe(request, task).await {
@@ -955,16 +970,65 @@ struct UploadedAudio {
     path: PathBuf,
     file_name: String,
     file_size_bytes: u64,
+    audio_duration_ms: Option<u64>,
 }
 
 impl UploadedAudio {
-    fn new(request_id: String, file_name: String, file_size_bytes: u64) -> Self {
+    fn new(
+        request_id: String,
+        file_name: String,
+        file_size_bytes: u64,
+        audio_duration_ms: Option<u64>,
+    ) -> Self {
         Self {
             path: std::env::temp_dir().join(format!("macai-upload-{request_id}.wav")),
             file_name,
             file_size_bytes,
+            audio_duration_ms,
         }
     }
+}
+
+/// 从 RIFF/WAVE 的 `fmt ` 与 `data` chunk 计算输入音频时长。
+/// 当前 STT endpoint 只接收 PCM WAV；解析失败仅省略任务指标，不影响转写。
+fn wav_duration_ms(bytes: &[u8]) -> Option<u64> {
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+
+    let mut offset = 12usize;
+    let mut byte_rate = None;
+    let mut data_bytes = None;
+    while offset.checked_add(8)? <= bytes.len() {
+        let chunk_id = bytes.get(offset..offset + 4)?;
+        let chunk_size =
+            u32::from_le_bytes(bytes.get(offset + 4..offset + 8)?.try_into().ok()?) as usize;
+        let chunk_start = offset + 8;
+        let chunk_end = chunk_start.checked_add(chunk_size)?;
+        if chunk_end > bytes.len() {
+            return None;
+        }
+
+        if chunk_id == b"fmt " && chunk_size >= 12 {
+            byte_rate = Some(u32::from_le_bytes(
+                bytes
+                    .get(chunk_start + 8..chunk_start + 12)?
+                    .try_into()
+                    .ok()?,
+            ));
+        } else if chunk_id == b"data" {
+            data_bytes = Some(chunk_size as u64);
+        }
+
+        offset = chunk_end.checked_add(chunk_size % 2)?;
+    }
+
+    let byte_rate = u64::from(byte_rate?);
+    let data_bytes = data_bytes?;
+    if byte_rate == 0 || data_bytes == 0 {
+        return None;
+    }
+    Some((data_bytes.saturating_mul(1_000) + byte_rate / 2) / byte_rate)
 }
 
 impl Drop for UploadedAudio {
@@ -1040,6 +1104,32 @@ mod tests {
         );
         assert_eq!(recursive_path_size(&path).unwrap(), 6);
         std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn derives_pcm_wav_duration_from_header() {
+        let sample_rate = 16_000u32;
+        let channels = 1u16;
+        let bits_per_sample = 16u16;
+        let byte_rate = sample_rate * u32::from(channels) * u32::from(bits_per_sample) / 8;
+        let data_size = byte_rate * 2;
+        let mut wav = Vec::with_capacity(44 + data_size as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_size).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&channels.to_le_bytes());
+        wav.extend_from_slice(&sample_rate.to_le_bytes());
+        wav.extend_from_slice(&byte_rate.to_le_bytes());
+        wav.extend_from_slice(&(channels * bits_per_sample / 8).to_le_bytes());
+        wav.extend_from_slice(&bits_per_sample.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_size.to_le_bytes());
+        wav.resize(44 + data_size as usize, 0);
+
+        assert_eq!(wav_duration_ms(&wav), Some(2_000));
+        assert_eq!(wav_duration_ms(b"not a wav"), None);
     }
 
     fn mock_model() -> ai_core::model::ModelSpec {
