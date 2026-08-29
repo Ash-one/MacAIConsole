@@ -53,6 +53,11 @@ enum Format {
         return duration(milliseconds: milliseconds)
     }
 
+    static func realTimeFactor(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        return String(format: "%.2f×", value)
+    }
+
     static func runningDuration(startedAtMs: UInt64) -> String {
         let now = UInt64(max(Date().timeIntervalSince1970 * 1_000.0, 0))
         return duration(milliseconds: now >= startedAtMs ? now - startedAtMs : 0)

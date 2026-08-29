@@ -104,6 +104,8 @@ pub struct TaskSummary {
     pub started_at_ms: u64,
     pub completed_at_ms: Option<u64>,
     pub duration_ms: Option<u64>,
+    /// STT 输入音频时长（毫秒）；其他任务类型或无法解析时为空。
+    pub audio_duration_ms: Option<u64>,
     pub error: Option<String>,
 }
 
@@ -115,6 +117,8 @@ pub struct TaskRequestDetail {
     pub input_text: Option<String>,
     pub file_name: Option<String>,
     pub file_size_bytes: Option<u64>,
+    /// STT 输入音频时长（毫秒），由 daemon 从 WAV 元数据计算。
+    pub audio_duration_ms: Option<u64>,
     pub language: Option<String>,
     pub voice: Option<String>,
     pub format: Option<String>,
@@ -167,6 +171,7 @@ impl TaskDetail {
             started_at_ms: self.started_at_ms,
             completed_at_ms: self.completed_at_ms,
             duration_ms: self.duration_ms,
+            audio_duration_ms: self.request.audio_duration_ms,
             error: self.error.clone(),
         }
     }

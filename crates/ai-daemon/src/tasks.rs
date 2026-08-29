@@ -321,10 +321,12 @@ pub fn transcription_request_detail(
     request: &TranscriptionRequest,
     file_name: Option<String>,
     file_size_bytes: Option<u64>,
+    audio_duration_ms: Option<u64>,
 ) -> TaskRequestDetail {
     TaskRequestDetail {
         file_name,
         file_size_bytes,
+        audio_duration_ms,
         language: request.language.clone(),
         format: request.response_format.clone(),
         ..TaskRequestDetail::default()
@@ -421,6 +423,31 @@ mod tests {
         assert_eq!(detail.status, "succeeded");
         assert_eq!(detail.result.output_text.as_deref(), Some("world"));
         assert!(detail.duration_ms.is_some());
+    }
+
+    #[test]
+    fn stt_audio_duration_reaches_task_summary() {
+        let registry = TaskRegistry::new();
+        let request = TranscriptionRequest {
+            model: "whisper-large-v3-turbo".to_string(),
+            file: Some("meeting.wav".to_string()),
+            language: Some("zh".to_string()),
+            response_format: Some("json".to_string()),
+        };
+        let detail = transcription_request_detail(
+            &request,
+            Some("meeting.wav".to_string()),
+            Some(502_444),
+            Some(15_700),
+        );
+        let _handle = registry.start("task-stt", "stt", request.model, detail);
+
+        let list = registry.list(100);
+        assert_eq!(list.running[0].audio_duration_ms, Some(15_700));
+        assert_eq!(
+            registry.get("task-stt").unwrap().request.audio_duration_ms,
+            Some(15_700)
+        );
     }
 
     #[test]

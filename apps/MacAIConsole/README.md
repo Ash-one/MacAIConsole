@@ -8,7 +8,7 @@ MacAIConsole 是 MacAI 的原生 macOS 控制台。应用只通过本地 HTTP AP
 - 任务：当前运行及最近完成的 Chat / STT / TTS 请求，支持查看输入、输出、耗时和错误
 - 模型管理：按 LLM / STT / TTS 分组显示模型仓库和注册状态，支持加载、卸载、改名与删除注册
 - 日志：查看 GUI 与 daemon 最近日志，默认显示 Info，可启用 Debug，并按日志级别着色
-- 设置：daemon 路径、自动启动、内存预算和日志目录
+- 设置：daemon 路径、自动启动、内存预算、Qwen3-ASR（MLX 8-bit 优先）开关和日志目录
 
 运行状态中的模型条目可进入详细设置页，调整 keep-alive、LLM 上下文长度和 TTS 默认音色。
 

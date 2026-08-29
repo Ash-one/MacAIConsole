@@ -149,6 +149,7 @@ struct InferenceTaskSummary: Decodable, Identifiable, Hashable {
     var startedAtMs: UInt64
     var completedAtMs: UInt64?
     var durationMs: UInt64?
+    var audioDurationMs: UInt64?
     var error: String?
 
     enum CodingKeys: String, CodingKey {
@@ -157,9 +158,17 @@ struct InferenceTaskSummary: Decodable, Identifiable, Hashable {
         case startedAtMs = "started_at_ms"
         case completedAtMs = "completed_at_ms"
         case durationMs = "duration_ms"
+        case audioDurationMs = "audio_duration_ms"
     }
 
     var isRunning: Bool { status == "running" }
+
+    var realTimeFactor: Double? {
+        guard kind == "stt", status == "succeeded",
+              let durationMs, let audioDurationMs, audioDurationMs > 0
+        else { return nil }
+        return Double(durationMs) / Double(audioDurationMs)
+    }
 
     var kindTitle: String {
         switch kind {
@@ -190,6 +199,7 @@ struct InferenceTaskRequest: Decodable {
     var inputText: String?
     var fileName: String?
     var fileSizeBytes: UInt64?
+    var audioDurationMs: UInt64?
     var language: String?
     var voice: String?
     var format: String?
@@ -203,6 +213,7 @@ struct InferenceTaskRequest: Decodable {
         case inputText = "input_text"
         case fileName = "file_name"
         case fileSizeBytes = "file_size_bytes"
+        case audioDurationMs = "audio_duration_ms"
         case language, voice, format, speed, stream, temperature
         case maxTokens = "max_tokens"
     }
@@ -267,6 +278,7 @@ struct InferenceTaskDetail: Decodable, Identifiable {
             startedAtMs: startedAtMs,
             completedAtMs: completedAtMs,
             durationMs: durationMs,
+            audioDurationMs: request?.audioDurationMs,
             error: error
         )
     }
