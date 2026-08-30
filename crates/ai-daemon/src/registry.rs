@@ -182,3 +182,166 @@ impl RegistryStore {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    fn temp_db(label: &str) -> PathBuf {
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        std::env::temp_dir().join(format!(
+            "macai-registry-test-{}-{}-{}.db",
+            label,
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    fn spec(id: &str) -> ModelSpec {
+        ModelSpec {
+            id: id.to_string(),
+            name: format!("{id} name"),
+            model_type: "llm".to_string(),
+            provider: "llama.cpp".to_string(),
+            source: Some("hf:test/repo".to_string()),
+            path: Some(format!("/Models/llm/{id}.gguf")),
+            format: Some("gguf".to_string()),
+            size_bytes: Some(1024),
+            memory_estimate: Some(2048),
+            keep_alive: Some("5m".to_string()),
+            context_length: Some(4096),
+            default_voice: None,
+        }
+    }
+
+    fn cleanup(path: &Path) {
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// 绕过 store 直接读库，观察持久化结果而不是内存缓存。
+    fn persisted(path: &Path, sql: &str, id: &str) -> Option<String> {
+        let conn = Connection::open(path).ok()?;
+        let value: rusqlite::types::Value = conn.query_row(sql, [id], |row| row.get(0)).ok()?;
+        Some(match value {
+            rusqlite::types::Value::Integer(i) => i.to_string(),
+            rusqlite::types::Value::Real(f) => f.to_string(),
+            rusqlite::types::Value::Text(s) => s,
+            _ => return None,
+        })
+    }
+
+    #[test]
+    fn upsert_then_load_roundtrips_every_spec_field() {
+        let path = temp_db("roundtrip");
+        let store = RegistryStore::open(&path).unwrap();
+        let mut s = spec("qwen3");
+        s.default_voice = Some("zf_001".to_string());
+        store.upsert(&s, 111, Some(222));
+
+        let loaded = store.load_all();
+        assert_eq!(loaded.len(), 1);
+        let (loaded_spec, last_used_at) = &loaded[0];
+        assert_eq!(loaded_spec.id, "qwen3");
+        assert_eq!(loaded_spec.name, "qwen3 name");
+        assert_eq!(loaded_spec.model_type, "llm");
+        assert_eq!(loaded_spec.provider, "llama.cpp");
+        assert_eq!(loaded_spec.source.as_deref(), Some("hf:test/repo"));
+        assert_eq!(loaded_spec.path.as_deref(), Some("/Models/llm/qwen3.gguf"));
+        assert_eq!(loaded_spec.format.as_deref(), Some("gguf"));
+        assert_eq!(loaded_spec.size_bytes, Some(1024));
+        assert_eq!(loaded_spec.memory_estimate, Some(2048));
+        assert_eq!(loaded_spec.keep_alive.as_deref(), Some("5m"));
+        assert_eq!(loaded_spec.context_length, Some(4096));
+        assert_eq!(loaded_spec.default_voice.as_deref(), Some("zf_001"));
+        assert_eq!(*last_used_at, Some(222));
+        drop(store);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn load_all_resets_persisted_state_to_unloaded() {
+        // daemon 重启后没有任何 worker 进程存活，持久化的 ready 只是陈旧记录。
+        let path = temp_db("state-reset");
+        let store = RegistryStore::open(&path).unwrap();
+        store.upsert(&spec("m"), 100, None);
+        store.set_state("m", "ready");
+        assert_eq!(
+            persisted(&path, "SELECT state FROM models WHERE id = ?1", "m").as_deref(),
+            Some("ready")
+        );
+
+        store.load_all();
+        assert_eq!(
+            persisted(&path, "SELECT state FROM models WHERE id = ?1", "m").as_deref(),
+            Some("unloaded")
+        );
+        drop(store);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn upsert_conflict_updates_fields_but_preserves_timestamps() {
+        let path = temp_db("conflict");
+        let store = RegistryStore::open(&path).unwrap();
+        store.upsert(&spec("m"), 111, Some(222));
+
+        let mut renamed = spec("m");
+        renamed.name = "renamed".to_string();
+        renamed.keep_alive = Some("always".to_string());
+        store.upsert(&renamed, 999, Some(888));
+
+        let (loaded_spec, last_used_at) = &store.load_all()[0];
+        assert_eq!(loaded_spec.name, "renamed");
+        assert_eq!(loaded_spec.keep_alive.as_deref(), Some("always"));
+        // installed_at / last_used_at 只属于首次安装，重新 upsert 不能覆盖。
+        assert_eq!(
+            persisted(&path, "SELECT installed_at FROM models WHERE id = ?1", "m").as_deref(),
+            Some("111")
+        );
+        assert_eq!(*last_used_at, Some(222));
+        drop(store);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn partial_updates_and_remove_touch_only_the_target_row() {
+        let path = temp_db("partial");
+        let store = RegistryStore::open(&path).unwrap();
+        store.upsert(&spec("a"), 1, None);
+        store.upsert(&spec("b"), 1, None);
+
+        store.set_state("a", "failed");
+        assert_eq!(
+            persisted(&path, "SELECT state FROM models WHERE id = ?1", "a").as_deref(),
+            Some("failed")
+        );
+        assert_eq!(
+            persisted(&path, "SELECT state FROM models WHERE id = ?1", "b").as_deref(),
+            Some("unloaded")
+        );
+
+        store.set_keep_alive("a", None);
+        store.set_default_voice("a", Some("zf_001"));
+        store.touch("a", 777);
+        let loaded: Vec<(ModelSpec, Option<u64>)> = store
+            .load_all()
+            .into_iter()
+            .filter(|(spec, _)| spec.id == "a")
+            .collect();
+        assert_eq!(loaded[0].0.keep_alive, None);
+        assert_eq!(loaded[0].0.default_voice.as_deref(), Some("zf_001"));
+        assert_eq!(loaded[0].1, Some(777));
+
+        store.remove("a");
+        let ids: Vec<String> = store
+            .load_all()
+            .into_iter()
+            .map(|(spec, _)| spec.id)
+            .collect();
+        assert_eq!(ids, vec!["b".to_string()]);
+        drop(store);
+        cleanup(&path);
+    }
+}

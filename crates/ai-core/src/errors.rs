@@ -80,3 +80,49 @@ impl ApiErrorBody {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// as_str 字符串与 HTTP 状态码是 API 对外契约（GUI/CLI 按它归类错误），
+    /// 任何调整都必须同步客户端解码逻辑，这里固化当前映射。
+    #[test]
+    fn wire_names_and_http_status_are_stable() {
+        let expected = [
+            (AIError::ModelNotFound, "model_not_found", 404),
+            (AIError::TaskNotFound, "task_not_found", 404),
+            (AIError::InvalidRequest, "invalid_request", 400),
+            (AIError::ProviderUnavailable, "provider_unavailable", 503),
+            (AIError::OutOfMemory, "out_of_memory", 503),
+            (AIError::ModelLoadFailed, "model_load_failed", 500),
+            (AIError::DownloadFailed, "download_failed", 502),
+            (AIError::BackendCrashed, "backend_crashed", 502),
+            (AIError::Timeout, "timeout", 504),
+            (AIError::Internal, "internal", 500),
+        ];
+        for (error, name, status) in expected {
+            assert_eq!(error.as_str(), name, "{name} wire name changed");
+            assert_eq!(error.to_string(), name, "{name} Display changed");
+            assert_eq!(error.http_status(), status, "{name} http status changed");
+        }
+    }
+
+    #[test]
+    fn api_error_body_serializes_to_documented_shape() {
+        let body = ApiErrorBody::new(AIError::ModelNotFound, "model 'x' is not registered");
+        let value = serde_json::to_value(&body).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "error": {
+                    "type": "model_not_found",
+                    "message": "model 'x' is not registered",
+                }
+            })
+        );
+        let decoded: ApiErrorBody = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.error.error_type, "model_not_found");
+        assert_eq!(decoded.error.message, "model 'x' is not registered");
+    }
+}

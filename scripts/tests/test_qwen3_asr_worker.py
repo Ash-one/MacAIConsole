@@ -1,4 +1,6 @@
 import importlib.util
+import io
+import json
 import math
 import os
 import struct
@@ -7,6 +9,7 @@ import tempfile
 import types
 import unittest
 import wave
+from array import array
 from pathlib import Path
 from unittest import mock
 
@@ -102,6 +105,106 @@ class InferenceLogicTests(unittest.TestCase):
         with mock.patch.dict(sys.modules, {"numpy": fake_numpy_module}):
             with self.assertRaisesRegex(RuntimeError, "no transcription result"):
                 worker.transcribe(loaded, [0.0], 16_000, None)
+
+
+class DecodeAndNormalizeTests(unittest.TestCase):
+    def test_decode_pcm_sign_extends_24bit_and_rejects_unknown_width(self):
+        # 24 位样本的符号扩展：-1 (0xFFFFFF) 与 1 (0x000001)。
+        negative = worker._decode_pcm(b"\xff\xff\xff", 3)
+        self.assertAlmostEqual(negative[0], -1.0 / 8_388_608.0)
+        positive = worker._decode_pcm(b"\x01\x00\x00", 3)
+        self.assertAlmostEqual(positive[0], 1.0 / 8_388_608.0)
+
+        with self.assertRaisesRegex(worker.AudioInputError, "8, 16, 24, or 32"):
+            worker._decode_pcm(b"\x00" * 5, 5)
+
+    def test_downmix_rejects_invalid_channel_layout(self):
+        with self.assertRaisesRegex(worker.AudioInputError, "channel layout"):
+            worker._downmix(array("f", [0.0, 0.0, 0.0]), 2)
+        with self.assertRaisesRegex(worker.AudioInputError, "channel layout"):
+            worker._downmix(array("f", [0.0]), 0)
+
+        mono = array("f", [0.25])
+        self.assertEqual(worker._downmix(mono, 1), mono)
+
+    def test_resample_linear_lengths_and_invalid_rates(self):
+        samples = array("f", [0.0, 0.5, -0.5])
+        # 相同采样率原样返回（同一对象，避免多余拷贝）。
+        self.assertIs(worker._resample_linear(samples, 16_000, 16_000), samples)
+
+        # 8k -> 16k 长度翻倍，端点保留。
+        up = worker._resample_linear(array("f", [0.0, 1.0]), 8_000, 16_000)
+        self.assertEqual(len(up), 4)
+        self.assertAlmostEqual(up[0], 0.0)
+        self.assertAlmostEqual(up[2], 1.0)
+
+        # 单样本按目标长度复制。
+        single = worker._resample_linear(array("f", [0.5]), 8_000, 16_000)
+        self.assertEqual(single, array("f", [0.5, 0.5]))
+
+        with self.assertRaisesRegex(worker.AudioInputError, "sample rate"):
+            worker._resample_linear(samples, 0, 16_000)
+
+
+class ServeProtocolTests(unittest.TestCase):
+    """daemon（qwen3_asr.rs）按错误码分流 invalid_request / invalid_audio，
+    这里在 worker 侧固化 serve() 协议帧的产生逻辑。"""
+
+    def run_serve(self, lines, loaded):
+        stdin = io.StringIO("".join(line + "\n" for line in lines))
+        stdout = io.StringIO()
+        with mock.patch.object(sys, "stdin", stdin), mock.patch.object(
+            sys, "stdout", stdout
+        ):
+            worker.serve(loaded)
+        return [json.loads(line) for line in stdout.getvalue().splitlines()]
+
+    def test_error_frames_use_documented_codes(self):
+        loaded = worker.LoadedModel(model=None, device="cpu")
+        frames = self.run_serve(
+            ["not json", '{"id": "x"}', '{"id": 1}'],
+            loaded,
+        )
+        # 非法 JSON：id 为 None 的 invalid_request 帧，且 worker 不退出。
+        self.assertEqual(frames[0]["ok"], False)
+        self.assertIsNone(frames[0]["id"])
+        self.assertEqual(frames[0]["error"]["code"], "invalid_request")
+        # id 非整数 → invalid_request；缺 audio 路径 → invalid_audio。
+        self.assertEqual(frames[1]["error"]["code"], "invalid_request")
+        self.assertEqual(frames[2]["error"]["code"], "invalid_audio")
+
+    def test_error_frame_shape_matches_daemon_decoder(self):
+        frame = worker.error_frame(3, "invalid_audio", "bad wav")
+        self.assertEqual(
+            frame, {"id": 3, "ok": False, "error": {"code": "invalid_audio", "message": "bad wav"}}
+        )
+
+    def test_success_frame_round_trips_transcription(self):
+        class FakeModel:
+            def transcribe(self, **kwargs):
+                self.kwargs = kwargs
+                return [types.SimpleNamespace(text="  你好  ", language="Chinese")]
+
+        fake_numpy_module = types.ModuleType("numpy")
+        setattr(fake_numpy_module, "float32", "float32")
+        setattr(fake_numpy_module, "asarray", lambda samples, dtype=None: list(samples))
+        with tempfile.TemporaryDirectory() as directory:
+            wav = os.path.join(directory, "in.wav")
+            write_wav(wav, 1, 16_000, [(1_000,)])
+            fake_model = FakeModel()
+            loaded = worker.LoadedModel(fake_model, "cpu")
+            request = json.dumps({"id": 7, "audio": wav, "language": "Chinese"})
+            with mock.patch.dict(sys.modules, {"numpy": fake_numpy_module}):
+                frames = self.run_serve([request], loaded)
+
+        self.assertEqual(len(frames), 1)
+        frame = frames[0]
+        self.assertTrue(frame["ok"])
+        self.assertEqual(frame["id"], 7)
+        self.assertEqual(frame["text"], "你好")
+        self.assertEqual(frame["language"], "Chinese")
+        self.assertEqual(frame["device"], "cpu")
+        self.assertEqual(fake_model.kwargs["language"], "Chinese")
 
 
 if __name__ == "__main__":

@@ -42,3 +42,31 @@ pub struct SpeechRequest {
     pub format: Option<String>, // wav / mp3 ...
     pub speed: Option<f64>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// OpenAI 客户端常省略可选字段；容器级 `#[serde(default)]` 保证
+    /// 缺字段（甚至空对象）的请求仍可解码，这里是兼容性契约。
+    #[test]
+    fn partial_json_decodes_with_defaults() {
+        let chat: ChatRequest = serde_json::from_str(r#"{"model": "qwen3"}"#).unwrap();
+        assert_eq!(chat.model, "qwen3");
+        assert!(chat.messages.is_empty());
+        assert!(!chat.stream);
+        assert!(chat.temperature.is_none());
+        assert!(chat.max_tokens.is_none());
+
+        let speech: SpeechRequest =
+            serde_json::from_str(r#"{"model": "kokoro", "input": "你好"}"#).unwrap();
+        assert_eq!(speech.input, "你好");
+        assert!(speech.voice.is_none());
+        assert!(speech.format.is_none());
+        assert!(speech.speed.is_none());
+
+        let transcription: TranscriptionRequest = serde_json::from_str("{}").unwrap();
+        assert_eq!(transcription.model, "");
+        assert!(transcription.file.is_none());
+    }
+}
