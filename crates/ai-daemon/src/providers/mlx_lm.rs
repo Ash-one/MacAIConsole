@@ -216,6 +216,8 @@ struct WorkerFrame {
     #[serde(default)]
     tokens: Option<u64>,
     #[serde(default)]
+    finish_reason: Option<String>,
+    #[serde(default)]
     error: Option<WorkerError>,
 }
 
@@ -227,11 +229,21 @@ enum WorkerEvent {
     Final {
         prompt_tokens: Option<u64>,
         tokens: Option<u64>,
+        finish_reason: Option<String>,
     },
     Failed {
         kind: AIError,
         message: String,
     },
+}
+
+/// OpenAI finish_reason 语义：max_tokens 截断报 "length"，自然结束报 "stop"。
+/// 缺失或未知值（旧版 worker）按 "stop" 处理。
+fn normalize_finish_reason(reason: Option<&str>) -> &'static str {
+    match reason {
+        Some("length") => "length",
+        _ => "stop",
+    }
 }
 
 #[derive(Debug)]
@@ -269,6 +281,7 @@ fn classify_frame(expected_id: u64, line: &str) -> Result<WorkerEvent, FrameFail
         return Ok(WorkerEvent::Final {
             prompt_tokens: frame.prompt_tokens,
             tokens: frame.tokens,
+            finish_reason: frame.finish_reason,
         });
     }
     if frame.ok == Some(false) {
@@ -747,13 +760,14 @@ impl ChatProvider for MlxLmProvider {
                     Ok(WorkerEvent::Final {
                         prompt_tokens,
                         tokens,
+                        finish_reason,
                     }) => {
                         yield Ok(chunk(
                             &completion_id,
                             created,
                             &model,
                             ChatChunkDelta::default(),
-                            Some("stop"),
+                            Some(normalize_finish_reason(finish_reason.as_deref())),
                             Some(final_usage(prompt_tokens, tokens)),
                         ));
                         return;
@@ -825,14 +839,25 @@ mod tests {
 
         let final_frame = classify_frame(
             7,
-            r#"{"id": 7, "ok": true, "text": "Hello", "prompt_tokens": 9, "tokens": 4}"#,
+            r#"{"id": 7, "ok": true, "text": "Hello", "prompt_tokens": 9, "tokens": 4,
+                "finish_reason": "length"}"#,
         )
         .unwrap();
         assert!(matches!(
             final_frame,
             WorkerEvent::Final {
                 prompt_tokens: Some(9),
-                tokens: Some(4)
+                tokens: Some(4),
+                finish_reason: Some(reason)
+            } if reason == "length"
+        ));
+
+        // 旧版 worker 不带 finish_reason 字段也能解析。
+        assert!(matches!(
+            classify_frame(7, r#"{"id": 7, "ok": true, "text": "Hi"}"#).unwrap(),
+            WorkerEvent::Final {
+                finish_reason: None,
+                ..
             }
         ));
 
@@ -901,6 +926,15 @@ mod tests {
 
         let missing = final_usage(None, None);
         assert_eq!(missing.total_tokens, 0);
+    }
+
+    #[test]
+    fn finish_reason_normalizes_to_openai_semantics() {
+        assert_eq!(normalize_finish_reason(Some("length")), "length");
+        assert_eq!(normalize_finish_reason(Some("stop")), "stop");
+        // 未知值与缺失字段（旧版 worker）都按自然结束处理。
+        assert_eq!(normalize_finish_reason(Some("weird")), "stop");
+        assert_eq!(normalize_finish_reason(None), "stop");
     }
 
     #[test]
