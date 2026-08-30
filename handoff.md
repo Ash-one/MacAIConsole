@@ -3017,3 +3017,62 @@ performance strategy
 时停止实验，继续实现。
 
 优先交付可以实际运行的端到端路径。
+
+---
+
+# 70. Decision: STT 音频格式在 Daemon 入口归一化
+
+## 问题
+
+最初接入 STT 时（`666d01e`）端点只接收扩展名为 `.wav` 的 PCM WAV 上传。
+用户持有 mp3 / m4a / flac / ogg 等常见格式时必须先手动转码。该限制并非推理
+引擎的真实能力边界（pinned 版 whisper.cpp 的 miniaudio 本身支持
+wav/mp3/flac/ogg；mlx-audio 自带 miniaudio 解码），而是实现期约束，且与
+§15 承诺的 OpenAI `/v1/audio/transcriptions` 契约（接受
+flac/m4a/mp3/mp4/oga/ogg/wav/webm）相矛盾。当时 `.wav` 校验散布在 CLI、
+daemon 端点与两个 provider 共四处，格式裁决没有唯一 owner。
+
+## 决策
+
+`/v1/audio/transcriptions` 在 daemon 入口把上传音频完整解码并重写为规范的
+16-bit PCM WAV（保原始采样率与声道数，不重采样、不下混），再交给 STT
+provider（`crates/ai-daemon/src/audio.rs`，symphonia 纯 Rust 解码）。CLI
+删除客户端 `.wav` 校验，multipart 透传真实文件名；provider 层的扩展名
+校验一并删除。格式裁决的 owner 只有 daemon 入口一处；provider 契约
+始终保持"只接收 PCM WAV"。
+
+支持的容器/编解码：wav、mp3、flac、ogg（Vorbis）、m4a（AAC-LC）、ALAC，
+与 `ai-daemon` 的 symphonia features 一一对应。探测与解码以文件内容为准，
+扩展名只作容器探测提示，改名伪装的文件可正确解码。
+
+## 被放弃的方案
+
+* 外部 ffmpeg 转码：覆盖 opus/HE-AAC/WebM，但为本地单用户应用引入系统级
+  二进制依赖与版本漂移，违背低依赖原则。
+* 逐 provider 放宽校验、各用已有解码器：零依赖，但三条 provider 路径的
+  格式集合不一致（m4a 仅部分路径可用），API 无法给出单一格式承诺；
+  whisper.cpp 需重编译才支持 ffmpeg 回退格式。
+
+## 后果与已知边界
+
+* opus、HE-AAC、WebM 音轨不受支持（symphonia 未实现），返回明确的
+  `InvalidRequest` 并列出支持格式；未来若确有需求，可在入口归一化之上
+  增补"系统存在 ffmpeg 时额外支持"，无需改动 provider。
+* 解码发生在 daemon 进程内（blocking 线程池），symphonia 为安全 Rust；
+  上传体量与解码时长对内存的压力与既有 wav 路径同级。
+* 非 WAV 压缩格式的时长指标来自归一化后的 WAV，对 mp3/m4a 含编码器帧
+  填充（±1~2 帧）；RTF 指标因此对所有受支持格式可用。
+* 临时文件固定写 `.wav` 现在与内容一致；`file_name` 任务详情仍记录用户
+  上传的原始文件名。
+
+## 验证
+
+* 单元：`cargo test -p ai-daemon audio::` 覆盖规范 PCM WAV 往返、时长
+  指标、垃圾/截断输入拒绝，以及 mp3/flac/m4a/ogg 真实编码 fixtures 的
+  完整探测+解码路径（fixtures 由 `scripts/tests/generate_audio_fixtures.py`
+  生成并随仓库提交）。
+* 端到端：Kokoro TTS 生成语音 → 转码 mp3/m4a/flac/ogg → `POST
+  /v1/audio/transcriptions`（whisper.cpp provider）五种格式转写文本一致，
+  任务详情 `audio_duration_ms` 全部有值；垃圾文件返回 400
+  `invalid_request` 而非 `backend_crashed`；`macai transcribe` 对 m4a
+  成功、对垃圾文件转发 daemon 的 400。

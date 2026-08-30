@@ -30,6 +30,7 @@ OpenAI-compatible SDK ┘                      ├── whisper.cpp ─> Core M
 
 - 默认监听 `127.0.0.1:11435`
 - OpenAI-compatible Chat、STT 和 TTS endpoints
+- STT 上传支持 wav / mp3 / flac / ogg / m4a；daemon 在入口解码归一化为 PCM WAV 后交给 provider
 - Chat Completion 与逐 token SSE streaming
 - SQLite 模型注册表，重启后保存
 - 模型 load / unload、busy guard 和请求期 model lease

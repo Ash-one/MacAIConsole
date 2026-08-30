@@ -134,7 +134,7 @@ enum Commands {
         #[arg(long)]
         max_tokens: Option<u64>,
     },
-    /// 使用本地 STT 模型转写 PCM WAV。
+    /// 使用本地 STT 模型转写音频（wav / mp3 / flac / ogg / m4a）。
     Transcribe {
         file: String,
         #[arg(long, default_value = "whisper-base")]
@@ -794,18 +794,28 @@ fn cmd_transcribe(
     model: &str,
     language: Option<&str>,
 ) -> Result<(), String> {
+    // 音频格式校验归 daemon 一处所有（入口解码归一化），CLI 只透传真实文件名。
     let path = Path::new(file)
         .canonicalize()
         .map_err(|error| format!("cannot open audio '{file}': {error}"))?;
-    if path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.eq_ignore_ascii_case("wav"))
-        != Some(true)
-    {
-        return Err("transcribe currently accepts .wav files".to_string());
-    }
     let audio = std::fs::read(&path).map_err(|error| format!("cannot read audio: {error}"))?;
+    let upload_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.replace(['\r', '\n', '"'], " "))
+        .unwrap_or_else(|| "audio".to_string());
+    let content_type = match path.extension().and_then(|value| value.to_str()) {
+        Some(ext) => match ext.to_ascii_lowercase().as_str() {
+            "wav" => "audio/wav",
+            "mp3" | "mpga" | "mpeg" => "audio/mpeg",
+            "m4a" | "mp4" | "aac" => "audio/mp4",
+            "flac" => "audio/flac",
+            "ogg" | "oga" | "opus" => "audio/ogg",
+            "webm" => "audio/webm",
+            _ => "application/octet-stream",
+        },
+        None => "application/octet-stream",
+    };
     let boundary = format!(
         "----macai-{}-{}",
         std::process::id(),
@@ -822,7 +832,7 @@ fn cmd_transcribe(
     append_multipart_text(&mut body, &boundary, "response_format", "json");
     body.extend_from_slice(
         format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n"
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{upload_name}\"\r\nContent-Type: {content_type}\r\n\r\n"
         )
         .as_bytes(),
     );

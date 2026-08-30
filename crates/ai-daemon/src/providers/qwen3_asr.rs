@@ -489,12 +489,6 @@ impl STTProvider for Qwen3AsrProvider {
         let audio = Path::new(audio).canonicalize().map_err(|_| {
             ProviderError::new(AIError::InvalidRequest, "transcription audio was not found")
         })?;
-        if audio.extension().and_then(|value| value.to_str()) != Some("wav") {
-            return Err(ProviderError::new(
-                AIError::InvalidRequest,
-                "Qwen3-ASR currently accepts PCM WAV input",
-            ));
-        }
         if audio.metadata().map(|value| value.len()).unwrap_or(0) == 0 {
             return Err(ProviderError::new(
                 AIError::InvalidRequest,
