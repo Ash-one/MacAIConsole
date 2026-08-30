@@ -7,7 +7,7 @@ struct ModelsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: Theme.Space.sectionSpacing) {
                 if controller.phase != .online {
                     OfflineHint { controller.startDaemon() }
                 }
@@ -20,7 +20,7 @@ struct ModelsView: View {
                 registeredSection
                 repoSection
             }
-            .padding(24)
+            .padding(Theme.Space.page)
         }
         .navigationTitle("模型管理")
         .toolbar {
@@ -103,7 +103,11 @@ struct ModelsView: View {
     }
 
     private var recommendedSection: some View {
-        GroupBox {
+        SectionCard(
+            title: "推荐模型",
+            icon: "sparkles",
+            subtitle: "已选择适配 MacAI Provider 的版本，可直接下载到模型仓库"
+        ) {
             VStack(spacing: 0) {
                 ForEach(pendingRecommendations) { model in
                     RecommendedModelRow(
@@ -119,29 +123,20 @@ struct ModelsView: View {
                         }
                     }
                     if model.id != pendingRecommendations.last?.id {
-                        Divider().opacity(0.25)
+                        HairlineDivider()
                     }
                 }
             }
-        } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("推荐模型")
-                    .font(.title3.weight(.semibold))
-                Text("已选择适配 MacAI Provider 的版本，可直接下载到模型仓库")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.bottom, 8)
         }
     }
 
     private var registeredSection: some View {
-        GroupBox {
+        SectionCard(title: "模型注册 ID", icon: "number.square", infoText: "调用时使用的模型 ID") {
             if controller.registeredModels.isEmpty {
-                Text(controller.phase == .online ? "注册表为空" : "守护进程离线，暂无数据")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 44)
+                EmptyHint(
+                    text: controller.phase == .online ? "注册表为空" : "守护进程离线，暂无数据",
+                    systemImage: "number.square"
+                )
             } else {
                 VStack(spacing: 10) {
                     ForEach(groupedTypes, id: \.self) { type in
@@ -152,28 +147,48 @@ struct ModelsView: View {
                                     isLoaded: loadedIDs.contains(entry.id),
                                     isWorkerProcess: isWorker(entry)
                                 )
-                                if entry.id != entries(ofType: type).last?.id { Divider().opacity(0.25) }
+                                if entry.id != entries(ofType: type).last?.id { HairlineDivider() }
                             }
                         }
                     }
                 }
             }
-        } label: {
-            Text("模型注册 ID")
-                .font(.title3.weight(.semibold))
-                .padding(.bottom, 8)
         }
     }
 
     private var repoSection: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 0) {
+        SectionCard(
+            title: "模型仓库",
+            icon: "archivebox",
+            infoText: "自动识别到路径中的模型",
+            accessory: {
+                Button {
+                    openModelRepository()
+                } label: {
+                    Label("打开路径", systemImage: "folder")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("在访达中打开模型保存路径")
+            }
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 6) {
-                    Text("路径：\(ModelRepository.baseURL.path)")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                    Text(ModelRepository.baseURL.path)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Theme.inset)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .strokeBorder(Theme.hairline)
+                        )
                         .help(ModelRepository.baseURL.path)
                     Button {
                         let pasteboard = NSPasteboard.general
@@ -186,11 +201,9 @@ struct ModelsView: View {
                     .buttonStyle(.borderless)
                     .foregroundStyle(.tertiary)
                     .help("复制完整路径")
-                    .padding(.trailing, 2)
+                    .accessibilityLabel("复制完整路径")
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 4)
-                .padding(.vertical, 4)
 
                 if repoModels.isEmpty {
                     VStack(spacing: 8) {
@@ -221,7 +234,7 @@ struct ModelsView: View {
                                                 $0.matches(repositoryModel: model)
                                             }
                                         )
-                                        if model.id != entries.last?.id { Divider().opacity(0.25) }
+                                        if model.id != entries.last?.id { HairlineDivider() }
                                     }
                                 }
                             }
@@ -229,24 +242,6 @@ struct ModelsView: View {
                     }
                 }
             }
-            .padding(.horizontal, 4)
-            .padding(.bottom, 6)
-        } label: {
-            HStack {
-                Text("模型仓库")
-                    .font(.title3.weight(.semibold))
-                Spacer()
-                Button {
-                    openModelRepository()
-                } label: {
-                    Label("打开路径", systemImage: "folder")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
-                .font(.callout.weight(.medium))
-                .help("在访达中打开模型保存路径")
-            }
-            .padding(.bottom, 8)
         }
     }
 
@@ -284,12 +279,8 @@ struct ModelTypeSection<Content: View>: View {
                     .font(.body.weight(.semibold))
                     .foregroundStyle(dimmed ? Color(nsColor: .secondaryLabelColor) : .primary)
                 Spacer(minLength: 8)
-                Text("\(count) 个")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(Color.primary.opacity(0.06)))
+                Chip(text: "\(count) 个")
+                    .opacity(dimmed ? 0.55 : 1)
             }
             // 折叠头与子条目行同高：与行内 padding 对齐，保证收起时占位一致。
             .padding(.vertical, 10)
@@ -322,7 +313,6 @@ struct RegisteredModelRow: View {
     /// true 表示 Provider 为 worker 隔离：加载=拉起独立子进程，卸载=结束该进程。
     let isWorkerProcess: Bool
 
-    @State private var isHovering = false
     @State private var showRenameSheet = false
     @State private var renameDraft = ""
 
@@ -342,12 +332,7 @@ struct RegisteredModelRow: View {
                     Text(entry.id)
                         .font(.body.weight(.semibold))
                     if isWorkerProcess {
-                        Text("独立进程")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(Color.accentColor)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.10)))
+                        Chip(text: "独立进程", color: Theme.accent)
                     }
                 }
                 Text(entry.ownedBy)
@@ -357,22 +342,20 @@ struct RegisteredModelRow: View {
             Spacer(minLength: 12)
             if isLoaded {
                 HStack(spacing: 5) {
-                    Circle()
-                        .fill(.green)
-                        .frame(width: 6, height: 6)
-                        .shadow(color: .green.opacity(0.7), radius: 2.5)
+                    StatusDot(color: Theme.success, size: 6, glow: true)
                     Text(isWorkerProcess ? "运行中" : "已加载")
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Theme.success)
                 }
                 .help(isWorkerProcess ? "独立进程正在运行" : "模型已加载到内存")
                 if controller.busyModelIDs.contains(entry.id) {
                     ProgressView()
+                        .controlSize(.small)
                 } else {
                     GhostActionButton(
                         systemImage: isWorkerProcess ? "stop.circle" : "eject.circle",
                         help: isWorkerProcess ? "停止独立进程" : "卸载",
-                        activeTint: .red,
+                        activeTint: Theme.danger,
                         isDisabled: controller.phase != .online
                     ) {
                         Task { await controller.unload(entry.id) }
@@ -381,11 +364,12 @@ struct RegisteredModelRow: View {
             } else {
                 if controller.busyModelIDs.contains(entry.id) {
                     ProgressView()
+                        .controlSize(.small)
                 } else {
                     GhostActionButton(
                         systemImage: "play.circle",
                         help: isWorkerProcess ? "启动独立进程" : "加载",
-                        activeTint: .green,
+                        activeTint: Theme.success,
                         isDisabled: controller.phase != .online
                     ) {
                         Task { await controller.loadRegistered(entry.id) }
@@ -394,12 +378,8 @@ struct RegisteredModelRow: View {
             }
         }
         .padding(.vertical, 10)
-        .padding(.horizontal, 6)
-        .contentShape(Rectangle())
-        .background(isHovering ? Color.primary.opacity(0.05) : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .onHover { isHovering = $0 }
-        .animation(.snappy(duration: 0.15), value: isHovering)
+        .padding(.horizontal, 8)
+        .hoverableRow()
         .contextMenu {
             Button {
                 renameDraft = entry.id
@@ -467,7 +447,7 @@ struct RenameModelSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button("确定") { submit() }
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(ProminentButtonStyle())
                     .disabled(!isValid)
             }
         }
@@ -496,7 +476,6 @@ struct RepoModelRow: View {
     @State private var contextDraft = ""
     @State private var isReloading = false
     @State private var isPreviewing = false
-    @State private var isHovering = false
 
     private var isLLM: Bool { model.modelType == "llm" }
     private var isTTS: Bool { model.modelType == "tts" }
@@ -536,12 +515,8 @@ struct RepoModelRow: View {
             loadControls
         }
         .padding(.vertical, 10)
-        .padding(.horizontal, 6)
-        .contentShape(Rectangle())
-        .background(isHovering ? Color.primary.opacity(0.05) : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .onHover { isHovering = $0 }
-        .animation(.snappy(duration: 0.15), value: isHovering)
+        .padding(.horizontal, 8)
+        .hoverableRow()
         .onAppear { contextDraft = Self.displayValue(ModelRepository.contextLength(for: model.modelID)) }
     }
 
@@ -626,17 +601,17 @@ struct RepoModelRow: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
             .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.secondary.opacity(0.12))
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Theme.inset)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(Color.secondary.opacity(0.18))
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Theme.hairlineStrong)
             )
             .onSubmit(applyContext)
             if contextChanged, parsedContext != nil {
                 Button(isReloading ? "重载中…" : "应用") { applyContext() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(ProminentButtonStyle())
                     .controlSize(.small)
                     .disabled(!isValidContext || isReloading || controller.phase != .online)
             }
@@ -682,13 +657,10 @@ struct RepoModelRow: View {
     private var loadControls: some View {
         if isLoaded && !contextChanged {
             HStack(spacing: 5) {
-                Circle()
-                    .fill(.green)
-                    .frame(width: 6, height: 6)
-                    .shadow(color: .green.opacity(0.7), radius: 2.5)
+                StatusDot(color: Theme.success, size: 6, glow: true)
                 Text("已加载")
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Theme.success)
             }
             .help("模型已加载到内存")
         }
@@ -699,7 +671,7 @@ struct RepoModelRow: View {
                 Task { await register() }
             }
             .buttonStyle(.bordered)
-            .tint(isRegistered ? Color(nsColor: .secondaryLabelColor) : Color.accentColor)
+            .tint(isRegistered ? Color(nsColor: .secondaryLabelColor) : Theme.accent)
             .font(.callout.weight(isRegistered ? .regular : .medium))
             .help(isRegistered ? "以当前设置重新注册并加载" : "注册到运行时并立即加载")
             .disabled(controller.phase != .online)
@@ -730,8 +702,6 @@ struct RecommendedModelRow: View {
     let providerAvailable: Bool
     let action: () -> Void
 
-    @State private var isHovering = false
-
     private var isBusy: Bool {
         controller.busyRecommendationIDs.contains(model.id)
     }
@@ -746,22 +716,12 @@ struct RecommendedModelRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.accentColor.opacity(0.10))
-                    .frame(width: 36, height: 36)
-                ModelTypeIcon(type: model.modelType)
-            }
+            ModelTypeIcon(type: model.modelType)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 7) {
                     Text(model.title)
                         .font(.body.weight(.semibold))
-                    Text(model.provider)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.primary.opacity(0.06)))
+                    Chip(text: model.provider)
                 }
                 Text(model.summary)
                     .font(.caption)
@@ -772,7 +732,7 @@ struct RecommendedModelRow: View {
                     Link("Hugging Face", destination: model.repositoryURL)
                     if !providerAvailable {
                         Text("· Provider 环境未就绪，当前仅下载")
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Theme.warning)
                     }
                 }
                 .font(.caption2)
@@ -780,9 +740,12 @@ struct RecommendedModelRow: View {
             }
             Spacer(minLength: 12)
             if isLoaded {
-                Label("运行中", systemImage: "checkmark.circle.fill")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.green)
+                HStack(spacing: 5) {
+                    StatusDot(color: Theme.success, size: 6, glow: true)
+                    Text("运行中")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Theme.success)
+                }
             } else if isBusy {
                 HStack(spacing: 7) {
                     ProgressView().controlSize(.small)
@@ -792,17 +755,13 @@ struct RecommendedModelRow: View {
                 }
             } else {
                 Button(buttonTitle, action: action)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(ProminentButtonStyle())
                     .controlSize(.small)
                     .disabled(controller.phase != .online || (model.isDownloaded && !providerAvailable))
             }
         }
         .padding(.vertical, 11)
-        .padding(.horizontal, 6)
-        .contentShape(Rectangle())
-        .background(isHovering ? Color.primary.opacity(0.05) : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .onHover { isHovering = $0 }
-        .animation(.snappy(duration: 0.15), value: isHovering)
+        .padding(.horizontal, 8)
+        .hoverableRow()
     }
 }

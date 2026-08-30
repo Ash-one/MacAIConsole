@@ -7,7 +7,7 @@ struct TasksView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: Theme.Space.sectionSpacing) {
                 if controller.phase != .online {
                     OfflineHint { controller.startDaemon() }
                 }
@@ -17,7 +17,7 @@ struct TasksView: View {
                 runningSection
                 completedSection
             }
-            .padding(24)
+            .padding(Theme.Space.page)
         }
         .navigationTitle("任务记录")
         .sheet(item: $selectedTask) { task in
@@ -30,46 +30,42 @@ struct TasksView: View {
     }
 
     private var runningSection: some View {
-        GroupBox {
+        SectionCard(title: "正在运行", icon: "bolt", accessory: {
+            Chip(text: "\(controller.runningTasks.count)")
+        }) {
             if controller.runningTasks.isEmpty {
-                Text(controller.phase == .online ? "当前没有正在运行的任务" : "守护进程离线，暂无数据")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 44)
+                EmptyHint(
+                    text: controller.phase == .online ? "当前没有正在运行的任务" : "守护进程离线，暂无数据",
+                    systemImage: "bolt.slash"
+                )
             } else {
                 VStack(spacing: 0) {
                     ForEach(controller.runningTasks) { task in
                         TaskRow(task: task) { selectedTask = task }
-                        if task.id != controller.runningTasks.last?.id { Divider() }
+                        if task.id != controller.runningTasks.last?.id { HairlineDivider() }
                     }
                 }
             }
-        } label: {
-            Text("正在运行 · \(controller.runningTasks.count)")
-                .font(.title3.weight(.semibold))
-                .padding(.bottom, 8)
         }
     }
 
     private var completedSection: some View {
-        GroupBox {
+        SectionCard(title: "最近完成", icon: "checkmark.circle", accessory: {
+            Chip(text: "\(controller.completedTasks.count)")
+        }) {
             if controller.completedTasks.isEmpty {
-                Text(controller.phase == .online ? "当前 aiworkd 会话中还没有已完成任务" : "守护进程离线，暂无数据")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 44)
+                EmptyHint(
+                    text: controller.phase == .online ? "当前 aiworkd 会话中还没有已完成任务" : "守护进程离线，暂无数据",
+                    systemImage: "checkmark.circle"
+                )
             } else {
                 VStack(spacing: 0) {
                     ForEach(controller.completedTasks) { task in
                         TaskRow(task: task) { selectedTask = task }
-                        if task.id != controller.completedTasks.last?.id { Divider() }
+                        if task.id != controller.completedTasks.last?.id { HairlineDivider() }
                     }
                 }
             }
-        } label: {
-            Text("最近完成 · \(controller.completedTasks.count)")
-                .font(.title3.weight(.semibold))
-                .padding(.bottom, 8)
         }
     }
 }
@@ -77,8 +73,6 @@ struct TasksView: View {
 private struct TaskRow: View {
     let task: InferenceTaskSummary
     let onSelect: () -> Void
-
-    @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -93,13 +87,11 @@ private struct TaskRow: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
-                HStack(spacing: 6) {
-                    Text(modelLine)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
+                Text(modelLine)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 if let sttMetricsLine {
                     Text(sttMetricsLine)
                         .font(.caption.monospacedDigit())
@@ -109,22 +101,9 @@ private struct TaskRow: View {
             }
             Spacer(minLength: 12)
             if task.isRunning {
-                ProgressView()
-                    .controlSize(.small)
-                Text("运行中")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.orange)
-                    .lineLimit(1)
-                    .fixedSize()
+                runningPill
             } else {
-                Text(task.statusTitle)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(statusColor)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(statusColor.opacity(0.13)))
-                    .lineLimit(1)
-                    .fixedSize()
+                Chip(text: task.statusTitle, color: statusColor)
             }
             VStack(alignment: .trailing, spacing: 2) {
                 Text(durationText)
@@ -142,14 +121,24 @@ private struct TaskRow: View {
             }
         }
         .padding(.vertical, 9)
-        .padding(.horizontal, 6)
-        .contentShape(Rectangle())
-        .background(isHovering ? Color.primary.opacity(0.05) : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .onHover { isHovering = $0 }
-        .animation(.snappy(duration: 0.15), value: isHovering)
+        .padding(.horizontal, 8)
+        .hoverableRow()
         .onTapGesture(perform: onSelect)
         .help("点击查看任务详情")
+    }
+
+    /// 运行中状态药丸：脉冲圆点 + amber 文字。
+    private var runningPill: some View {
+        HStack(spacing: 5) {
+            StatusDot(color: Theme.warning, size: 6, pulse: true)
+            Text("运行中")
+                .font(.caption2.weight(.semibold))
+        }
+        .foregroundStyle(Theme.warning)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2.5)
+        .background(Capsule().fill(Theme.warning.opacity(0.13)))
+        .overlay(Capsule().strokeBorder(Theme.warning.opacity(0.22)))
     }
 
     private var modelLine: String {
@@ -174,9 +163,9 @@ private struct TaskRow: View {
 
     private var statusColor: Color {
         switch task.status {
-        case "succeeded": .green
-        case "failed": .red
-        case "cancelled": .orange
+        case "succeeded": Theme.success
+        case "failed": Theme.danger
+        case "cancelled": Theme.warning
         default: .secondary
         }
     }
@@ -211,15 +200,23 @@ private struct TaskDetailSheet: View {
                 inputSection
                 outputSection
                 if let error = detail?.error ?? displaySummary.error {
-                    GroupBox {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("错误信息", systemImage: "exclamationmark.triangle.fill")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(Theme.danger)
                         Text(error)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
-                            .padding(2)
-                    } label: {
-                        Label("错误信息", systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
                     }
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                            .fill(Theme.danger.opacity(0.08))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                            .strokeBorder(Theme.danger.opacity(0.30))
+                    )
                 }
                 if detail == nil, loadError == nil {
                     HStack(spacing: 8) {
@@ -230,7 +227,7 @@ private struct TaskDetailSheet: View {
                     }
                 }
             }
-            .padding(22)
+            .padding(Theme.Space.page)
         }
         .frame(minWidth: 600, minHeight: 560)
         .navigationTitle("任务详情")
@@ -251,12 +248,7 @@ private struct TaskDetailSheet: View {
                 HStack(spacing: 8) {
                     Text(displaySummary.kindTitle)
                         .font(.title2.weight(.semibold))
-                    Text(displaySummary.statusTitle)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(statusColor)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(statusColor.opacity(0.13)))
+                    Chip(text: displaySummary.statusTitle, color: statusColor)
                 }
                 HStack(spacing: 7) {
                     Text(displaySummary.id)
@@ -281,7 +273,7 @@ private struct TaskDetailSheet: View {
     }
 
     private var basicInfo: some View {
-        GroupBox {
+        SectionCard(title: "基本信息", icon: "info.circle") {
             VStack(alignment: .leading, spacing: 7) {
                 LabeledContent("模型", value: displaySummary.model)
                 LabeledContent("Provider", value: displaySummary.provider ?? "—")
@@ -298,16 +290,12 @@ private struct TaskDetailSheet: View {
                     )
                 }
             }
-            .padding(2)
-        } label: {
-            Text("基本信息")
-                .font(.headline)
         }
     }
 
     @ViewBuilder
     private var inputSection: some View {
-        GroupBox {
+        SectionCard(title: "输入内容", icon: "arrow.down.to.line") {
             if let request = detail?.request {
                 switch displaySummary.kind {
                 case "chat": chatInput(request)
@@ -319,9 +307,6 @@ private struct TaskDetailSheet: View {
                 Text("详情暂不可用")
                     .foregroundStyle(.secondary)
             }
-        } label: {
-            Text("输入内容")
-                .font(.headline)
         }
     }
 
@@ -379,7 +364,7 @@ private struct TaskDetailSheet: View {
 
     @ViewBuilder
     private var outputSection: some View {
-        GroupBox {
+        SectionCard(title: "输出内容", icon: "arrow.up.forward") {
             if let result = detail?.result {
                 VStack(alignment: .leading, spacing: 8) {
                     if let outputText = result.outputText, !outputText.isEmpty {
@@ -421,9 +406,6 @@ private struct TaskDetailSheet: View {
                 Text(displaySummary.isRunning ? "正在生成…" : "没有结果")
                     .foregroundStyle(.secondary)
             }
-        } label: {
-            Text("输出内容")
-                .font(.headline)
         }
     }
 
@@ -433,10 +415,17 @@ private struct TaskDetailSheet: View {
             Text(text)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
-                .padding(8)
+                .padding(10)
         }
         .frame(maxHeight: 190)
-        .background(RoundedRectangle(cornerRadius: 7).fill(Color.secondary.opacity(0.08)))
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                .fill(Theme.inset)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                .strokeBorder(Theme.hairline)
+        )
     }
 
     @ViewBuilder
@@ -457,7 +446,7 @@ private struct TaskDetailSheet: View {
         if isTruncated {
             Text("内容过长，仅保留前 64 KiB")
                 .font(.caption)
-                .foregroundStyle(.orange)
+                .foregroundStyle(Theme.warning)
         }
     }
 
@@ -469,10 +458,10 @@ private struct TaskDetailSheet: View {
 
     private var statusColor: Color {
         switch displaySummary.status {
-        case "succeeded": .green
-        case "failed": .red
-        case "cancelled": .orange
-        case "running": .orange
+        case "succeeded": Theme.success
+        case "failed": Theme.danger
+        case "cancelled": Theme.warning
+        case "running": Theme.warning
         default: .secondary
         }
     }

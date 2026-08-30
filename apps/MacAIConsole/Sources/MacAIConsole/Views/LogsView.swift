@@ -14,7 +14,7 @@ struct LogsView: View {
             metadata
             logContent
         }
-        .padding(24)
+        .padding(Theme.Space.page)
         .navigationTitle("最近日志")
         .task(id: source) {
             while !Task.isCancelled {
@@ -73,10 +73,20 @@ struct LogsView: View {
     private var metadata: some View {
         HStack(spacing: 8) {
             Text(source.fileURL.path)
-                .font(.caption.monospaced())
+                .font(.caption2.monospaced())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Theme.inset)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(Theme.hairline)
+                )
                 .textSelection(.enabled)
                 .help(source.fileURL.path)
             Spacer(minLength: 12)
@@ -94,7 +104,7 @@ struct LogsView: View {
             ErrorBanner(text: loadError, onClose: { self.loadError = nil })
         }
 
-        GroupBox {
+        SectionCard(title: source == .gui ? "MacAIConsole GUI" : "aiworkd daemon", icon: "terminal") {
             if visibleEntries.isEmpty {
                 ContentUnavailableView(
                     "暂无日志",
@@ -127,8 +137,9 @@ struct LogsView: View {
                             )
                             .padding(10)
                         }
-                        .background(Color(nsColor: .textBackgroundColor).opacity(0.55))
-                        .clipShape(RoundedRectangle(cornerRadius: 7))
+                        .background(Theme.inset)
+                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.hairline))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .onAppear {
                             proxy.scrollTo("log-bottom", anchor: .bottom)
                         }
@@ -141,10 +152,6 @@ struct LogsView: View {
                     }
                 }
             }
-        } label: {
-            Text(source == .gui ? "MacAIConsole GUI" : "aiworkd daemon")
-                .font(.title3.weight(.semibold))
-                .padding(.bottom, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -195,10 +202,10 @@ struct LogsView: View {
 
     private func color(for level: LogLevel) -> Color {
         switch level {
-        case .debug: .secondary
-        case .info: .primary
-        case .warning: .orange
-        case .error: .red
+        case .debug: Color.white.opacity(0.35)
+        case .info: Color.white.opacity(0.85)
+        case .warning: Theme.warning
+        case .error: Theme.danger
         }
     }
 }

@@ -25,9 +25,10 @@ struct MenuBarContentView: View {
                     VStack(alignment: .leading, spacing: 5) {
                         ForEach(info.loadedModels) { model in
                             HStack(spacing: 6) {
-                                Circle()
-                                    .fill(model.state == "ready" ? Color.green : Color.orange)
-                                    .frame(width: 6, height: 6)
+                                StatusDot(
+                                    color: model.state == "ready" ? Theme.success : Theme.warning,
+                                    size: 6
+                                )
                                 Text(model.id)
                                     .font(.callout.weight(.medium))
                                     .lineLimit(1)
