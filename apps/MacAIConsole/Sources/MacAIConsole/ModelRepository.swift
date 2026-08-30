@@ -95,6 +95,13 @@ enum ModelRepository {
             return nil
         }
         if type == "tts" { return "kokoro-mlx" }
+        if type == "llm" {
+            // MLX LLM 目录（config.json + safetensors）；sharded 权重经 index 文件加载。
+            guard fm.fileExists(atPath: url.appendingPathComponent("config.json").path) else {
+                return nil
+            }
+            return "mlx-lm"
+        }
         guard type == "stt",
               fm.fileExists(atPath: url.appendingPathComponent("preprocessor_config.json").path),
               let data = try? Data(contentsOf: url.appendingPathComponent("config.json")),

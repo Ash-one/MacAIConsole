@@ -23,8 +23,8 @@ use ai_core::response::{
 use ai_core::AIError;
 
 use crate::providers::{
-    KokoroMlxProvider, LlamaCppProvider, MacOSSayProvider, MockProvider, Qwen3AsrProvider,
-    WhisperCppProvider,
+    KokoroMlxProvider, LlamaCppProvider, MacOSSayProvider, MlxLmProvider, MockProvider,
+    Qwen3AsrProvider, WhisperCppProvider,
 };
 use crate::registry::RegistryStore;
 use crate::scheduler;
@@ -134,14 +134,17 @@ impl Runtime {
         let llama = Arc::new(LlamaCppProvider::from_env());
         let whisper = Arc::new(WhisperCppProvider::from_env());
         let kokoro = Arc::new(KokoroMlxProvider::from_env());
+        let mlx_lm = Arc::new(MlxLmProvider::from_env());
 
         let mut providers: HashMap<String, Arc<dyn Provider>> = HashMap::new();
         providers.insert("llama.cpp".to_string(), llama.clone());
         providers.insert("whisper.cpp".to_string(), whisper.clone());
         providers.insert("kokoro-mlx".to_string(), kokoro.clone());
+        providers.insert("mlx-lm".to_string(), mlx_lm.clone());
 
         let mut chat_providers: HashMap<String, Arc<dyn ChatProvider>> = HashMap::new();
         chat_providers.insert("llama.cpp".to_string(), llama);
+        chat_providers.insert("mlx-lm".to_string(), mlx_lm);
 
         let mut stt_providers: HashMap<String, Arc<dyn STTProvider>> = HashMap::new();
         stt_providers.insert("whisper.cpp".to_string(), whisper);
@@ -234,13 +237,17 @@ impl Runtime {
             }
         }
         // 已加载则先卸载（在拿写锁之前做，避免同任务内锁升级死锁）。
-        if let Some(entry) = self.registry.read().await.get(id) {
-            if matches!(
-                entry.state.as_str(),
-                "loading" | "ready" | "busy" | "idle" | "unloading"
-            ) {
-                self.unload_model(id).await?;
-            }
+        // 读守卫必须在 unload 前释放：if let 的 scrutinee 临时值会存活到整个
+        // if let 结束，带着读锁调 unload_model 会在 set_state 的写锁上死锁。
+        let loaded_state = {
+            let registry = self.registry.read().await;
+            registry.get(id).map(|entry| entry.state.clone())
+        };
+        if matches!(
+            loaded_state.as_deref(),
+            Some("loading" | "ready" | "busy" | "idle" | "unloading")
+        ) {
+            self.unload_model(id).await?;
         }
         let mut entry = {
             let mut registry = self.registry.write().await;
@@ -270,15 +277,18 @@ impl Runtime {
                 format!("model '{id}' not found"),
             ));
         }
-        // 已加载则先卸载，避免孤儿 worker。
-        if let Some(entry) = self.registry.read().await.get(id) {
-            let state = entry.state.clone();
-            if matches!(
-                state.as_str(),
-                "loading" | "ready" | "busy" | "idle" | "unloading"
-            ) {
-                self.unload_model(id).await?;
-            }
+        // 已加载则先卸载，避免孤儿 worker。读守卫必须在 unload 前释放，理由同
+        // rename_model：if let 的 scrutinee 临时值会在 unload 期间占住读锁，
+        // 与 unload_model -> set_state 的写锁互等死锁。
+        let loaded_state = {
+            let registry = self.registry.read().await;
+            registry.get(id).map(|entry| entry.state.clone())
+        };
+        if matches!(
+            loaded_state.as_deref(),
+            Some("loading" | "ready" | "busy" | "idle" | "unloading")
+        ) {
+            self.unload_model(id).await?;
         }
         self.registry.write().await.remove(id);
         if let Some(store) = &self.store {
@@ -1039,6 +1049,7 @@ mod tests {
                 "kokoro-mlx",
                 "llama.cpp",
                 "macos-say",
+                "mlx-lm",
                 "mock",
                 "qwen3-asr",
                 "qwen3-asr-mlx",

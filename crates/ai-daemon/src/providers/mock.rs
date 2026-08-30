@@ -154,6 +154,7 @@ impl ChatProvider for MockProvider {
                             },
                             finish_reason: None,
                         }],
+                        usage: None,
                     };
                     Some((Ok(chunk), (chars, i + 1, false, id, created, model)))
                 } else {
@@ -167,6 +168,7 @@ impl ChatProvider for MockProvider {
                             delta: ChatChunkDelta::default(),
                             finish_reason: Some("stop".to_string()),
                         }],
+                        usage: None,
                     };
                     // 下一轮进入 finished=true → 终止。
                     Some((
