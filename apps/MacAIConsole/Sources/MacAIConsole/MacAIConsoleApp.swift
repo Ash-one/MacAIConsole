@@ -4,12 +4,14 @@ import SwiftUI
 struct MacAIConsoleApp: App {
     @State private var router = AppRouter()
     private let controller = DaemonController()
+    @State private var pythonEnvironments = PythonEnvironmentManager()
 
     var body: some Scene {
         WindowGroup(id: "main") {
             RootView()
                 .environment(controller)
                 .environment(router)
+                .environment(pythonEnvironments)
                 .frame(minWidth: 780, minHeight: 520)
                 .tint(Theme.accent)
                 .preferredColorScheme(.dark)
