@@ -112,12 +112,7 @@ struct SectionCard<Content: View, Accessory: View>: View {
             Text(title)
                 .font(.callout.weight(.semibold))
             if let infoText {
-                Image(systemName: "info.circle")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(3)
-                    .contentShape(Rectangle())
-                    .help(infoText)
+                InfoTip(text: infoText)
             }
             if let subtitle {
                 Text(subtitle)
@@ -128,6 +123,75 @@ struct SectionCard<Content: View, Accessory: View>: View {
             Spacer(minLength: 8)
             accessory
         }
+    }
+}
+
+/// 标题旁的信息气泡：悬停 info 图标后在上方弹出说明。
+/// 系统原生 `.help` 的浮层无法定制动画，这里自绘：弹入带轻微缩放回弹，
+/// 移开立即收起；「减弱动态效果」开启时退化为纯透明度过渡。
+/// 气泡向上展开，只会覆盖绘制顺序在前的相邻卡片，天然处于顶层不被遮挡；
+/// `fixedSize` 让气泡按文字自然大小显示——overlay 会把图标自身的 ~20pt
+/// 尺寸作为提案传下来，接受提案会把文字挤到不可见，因此 infoText 需保持一行短句。
+struct InfoTip: View {
+    let text: String
+
+    @State private var isHovering = false
+    @State private var isVisible = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Image(systemName: "info.circle")
+            .font(.caption)
+            .foregroundStyle(isVisible ? Theme.accent : Color.primary.opacity(0.35))
+            .padding(4)
+            .contentShape(Rectangle())
+            .overlay(alignment: .bottom) {
+                if isVisible {
+                    bubble
+                        .offset(y: -28)
+                        .transition(popTransition)
+                }
+            }
+            .onHover { isHovering = $0 }
+            .task(id: isHovering) {
+                if isHovering {
+                    // 悬停片刻才触发，光标扫过标题行时任务会被取消，不会误弹。
+                    try? await Task.sleep(for: .milliseconds(300))
+                    guard !Task.isCancelled else { return }
+                    withAnimation(popIn) { isVisible = true }
+                } else {
+                    withAnimation(popOut) { isVisible = false }
+                }
+            }
+            .accessibilityLabel(text)
+    }
+
+    private var bubble: some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(Color.primary.opacity(0.85))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Theme.elevatedSurface)
+                    .shadow(color: .black.opacity(0.35), radius: 9, y: 4)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Theme.hairlineStrong)
+            )
+            .fixedSize()
+    }
+
+    private var popIn: Animation {
+        reduceMotion ? .easeIn(duration: 0.12) : .snappy(duration: 0.28, extraBounce: 0.1)
+    }
+
+    private var popOut: Animation { .easeOut(duration: 0.12) }
+
+    private var popTransition: AnyTransition {
+        reduceMotion ? .opacity : .scale(scale: 0.88, anchor: .bottom).combined(with: .opacity)
     }
 }
 

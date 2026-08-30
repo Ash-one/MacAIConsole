@@ -15,6 +15,8 @@ enum Theme {
     static let surfaceHover = Color.white.opacity(0.06)
     /// 内嵌面板（日志正文、文本块、输入框）：比页面底色更深一档。
     static let inset = Color(red: 0.038, green: 0.049, blue: 0.044)
+    /// 悬浮层（信息气泡等临时浮层）：比卡片表面亮一档，配合投影表达悬浮。
+    static let elevatedSurface = Color(red: 0.153, green: 0.173, blue: 0.162)
 
     /// 发丝描边：分隔线、卡片边框。
     static let hairline = Color.white.opacity(0.08)
