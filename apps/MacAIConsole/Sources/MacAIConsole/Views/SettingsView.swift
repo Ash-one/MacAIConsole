@@ -72,7 +72,7 @@ struct SettingsView: View {
                 } label: {
                     Label("应用设置并重启 aiworkd", systemImage: "arrow.clockwise.circle")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(ProminentButtonStyle())
                 .disabled(!settingsAreValid)
             }
 

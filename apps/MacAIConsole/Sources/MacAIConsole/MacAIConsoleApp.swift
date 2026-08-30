@@ -9,12 +9,16 @@ struct MacAIConsoleApp: App {
             RootView()
                 .environment(controller)
                 .frame(minWidth: 780, minHeight: 520)
+                .tint(Theme.accent)
+                .preferredColorScheme(.dark)
         }
         .windowResizability(.contentMinSize)
 
         MenuBarExtra {
             MenuBarContentView()
                 .environment(controller)
+                .tint(Theme.accent)
+                .preferredColorScheme(.dark)
         } label: {
             Image(systemName: menuBarIcon)
         }
@@ -23,6 +27,8 @@ struct MacAIConsoleApp: App {
         Settings {
             SettingsView()
                 .environment(controller)
+                .tint(Theme.accent)
+                .preferredColorScheme(.dark)
         }
     }
 

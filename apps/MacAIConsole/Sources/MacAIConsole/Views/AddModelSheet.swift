@@ -79,7 +79,7 @@ struct AddModelSheet: View {
                 Button("取消", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button(isWorking ? "加载中…" : "添加并加载") { submit() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(ProminentButtonStyle())
                     .keyboardShortcut(.defaultAction)
                     .disabled(!isValid || isWorking)
             }
