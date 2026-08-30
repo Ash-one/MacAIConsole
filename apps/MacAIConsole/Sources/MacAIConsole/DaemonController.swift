@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Observation
+import SystemConfiguration
 
 /// 守护进程生命周期 + 数据轮询的状态机。
 ///
@@ -31,6 +32,7 @@ final class DaemonController {
         }
     }
     var busyModelIDs: Set<String> = []
+    var busyRecommendationIDs: Set<String> = []
 
     let api: DaemonAPI
 
@@ -244,10 +246,56 @@ final class DaemonController {
         try await api.voices(id)
     }
 
-    func registerAndLoad(path: String, id: String, contextLength: Int, keepAlive: String?, modelType: String? = nil) async throws {
-        _ = try await api.registerAndLoad(path: path, id: id, name: nil, contextLength: contextLength, keepAlive: keepAlive, modelType: modelType)
+    func registerAndLoad(path: String, id: String, contextLength: Int, keepAlive: String?, modelType: String? = nil, provider: String? = nil) async throws {
+        _ = try await api.registerAndLoad(path: path, id: id, name: nil, contextLength: contextLength, keepAlive: keepAlive, modelType: modelType, provider: provider)
         logInfo("已注册并加载模型：\(id)")
         await refreshAfterSuccessfulMutation()
+    }
+
+    func providerIsAvailable(_ providerID: String) -> Bool {
+        providers.first { $0.descriptor.id == providerID }?.status.available == true
+    }
+
+    /// 推荐模型的一键流程：下载 → 注册 → 启动。Provider 环境未就绪时先完成下载，
+    /// 保留本地模型，等环境可用后再次点击即可注册启动。
+    @discardableResult
+    func installRecommended(_ model: RecommendedModel) async -> Bool {
+        guard !busyRecommendationIDs.contains(model.id) else { return false }
+        busyRecommendationIDs.insert(model.id)
+        defer { busyRecommendationIDs.remove(model.id) }
+        lastError = nil
+        do {
+            let isLoaded = info?.loadedModels.contains { $0.id == model.id } == true
+            if !model.isDownloaded {
+                // 已驻留模型补充新增清单文件时只下载，避免无意义重启；首次下载则直接注册启动。
+                let autoLoad = providerIsAvailable(model.provider) && !isLoaded
+                _ = try await api.pull(model, autoLoad: autoLoad)
+                logInfo(autoLoad
+                    ? "已下载并启动推荐模型：\(model.id)"
+                    : "已补全推荐模型文件：\(model.id)")
+            } else if isLoaded {
+                return true
+            } else if registeredModels.contains(where: { $0.id == model.id }) {
+                _ = try await api.loadRegistered(model.id)
+                logInfo("已启动推荐模型：\(model.id)")
+            } else {
+                _ = try await api.registerAndLoad(
+                    path: model.downloadedURL?.path ?? model.localURL.path,
+                    id: model.id,
+                    name: model.title,
+                    contextLength: nil,
+                    keepAlive: nil,
+                    modelType: model.modelType,
+                    provider: model.provider
+                )
+                logInfo("已注册并启动推荐模型：\(model.id)")
+            }
+            await refreshAfterSuccessfulMutation()
+            return true
+        } catch {
+            lastError = "推荐模型操作失败：\(Self.message(for: error))"
+            return false
+        }
     }
 
     func setLogLevel(_ level: LogLevel) async throws {
@@ -373,11 +421,92 @@ final class DaemonController {
 
     // MARK: - 子进程
 
+    static func environmentByApplyingSystemProxy(
+        _ settings: [String: Any],
+        to base: [String: String]
+    ) -> [String: String] {
+        var environment = base
+
+        func proxyURL(enable: String, host: String, port: String) -> String? {
+            guard (settings[enable] as? NSNumber)?.boolValue == true,
+                  let hostname = settings[host] as? String,
+                  !hostname.isEmpty,
+                  let portNumber = settings[port] as? NSNumber else { return nil }
+            return "http://\(hostname):\(portNumber.intValue)"
+        }
+
+        if environment["HTTP_PROXY"] == nil,
+           environment["http_proxy"] == nil,
+           let proxy = proxyURL(enable: "HTTPEnable", host: "HTTPProxy", port: "HTTPPort") {
+            environment["HTTP_PROXY"] = proxy
+        }
+        if environment["HTTPS_PROXY"] == nil,
+           environment["https_proxy"] == nil,
+           let proxy = proxyURL(enable: "HTTPSEnable", host: "HTTPSProxy", port: "HTTPSPort") {
+            environment["HTTPS_PROXY"] = proxy
+        }
+
+        return environmentByAddingLocalProxyExclusions(environment)
+    }
+
+    static func environmentByApplyingProxyMode(
+        _ mode: ProxyMode,
+        httpProxy: String?,
+        httpsProxy: String?,
+        systemSettings: [String: Any]?,
+        to base: [String: String]
+    ) -> [String: String] {
+        switch mode {
+        case .system:
+            guard let systemSettings else { return base }
+            return environmentByApplyingSystemProxy(systemSettings, to: base)
+        case .disabled:
+            var environment = base
+            for key in ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] {
+                environment.removeValue(forKey: key)
+            }
+            return environment
+        case .manual:
+            var environment = environmentByApplyingProxyMode(
+                .disabled,
+                httpProxy: nil,
+                httpsProxy: nil,
+                systemSettings: nil,
+                to: base
+            )
+            if let httpProxy { environment["HTTP_PROXY"] = httpProxy }
+            if let httpsProxy { environment["HTTPS_PROXY"] = httpsProxy }
+            return environmentByAddingLocalProxyExclusions(environment)
+        }
+    }
+
+    private static func environmentByAddingLocalProxyExclusions(
+        _ base: [String: String]
+    ) -> [String: String] {
+        var environment = base
+        let localHosts = ["127.0.0.1", "localhost", "::1"]
+        var exclusions = (environment["NO_PROXY"] ?? environment["no_proxy"] ?? "")
+            .split(separator: ",")
+            .map(String.init)
+        for host in localHosts where !exclusions.contains(host) {
+            exclusions.append(host)
+        }
+        environment["NO_PROXY"] = exclusions.joined(separator: ",")
+        return environment
+    }
+
     private static func spawn(binary: URL) throws -> (Process, FileHandle) {
         let process = Process()
         process.executableURL = binary
 
-        var environment = ProcessInfo.processInfo.environment
+        let systemSettings = SCDynamicStoreCopyProxies(nil) as? [String: Any]
+        var environment = environmentByApplyingProxyMode(
+            AppSettings.proxyMode,
+            httpProxy: AppSettings.httpProxy,
+            httpsProxy: AppSettings.httpsProxy,
+            systemSettings: systemSettings,
+            to: ProcessInfo.processInfo.environment
+        )
         environment["RUST_LOG"] = AppSettings.logLevel.rawValue
         if let budget = AppSettings.parseMemoryBudget(AppSettings.memoryBudgetText) {
             environment["AIWORKD_MEMORY_BUDGET"] = String(budget)

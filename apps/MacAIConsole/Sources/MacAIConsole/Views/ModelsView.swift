@@ -14,6 +14,9 @@ struct ModelsView: View {
                 if let error = controller.lastError {
                     ErrorBanner(text: error)
                 }
+                if !pendingRecommendations.isEmpty {
+                    recommendedSection
+                }
                 registeredSection
                 repoSection
             }
@@ -65,6 +68,10 @@ struct ModelsView: View {
         Set(controller.registeredModels.compactMap(\.path))
     }
 
+    private var pendingRecommendations: [RecommendedModel] {
+        RecommendedModel.builtIns.filter { !$0.isDownloaded }
+    }
+
     /// 按类型分组展示顺序：llm → stt → tts，其余未知类型按字母序殿后。
     private let typeOrder = ["llm", "stt", "tts"]
 
@@ -93,6 +100,39 @@ struct ModelsView: View {
         let provider = entry.ownedBy.split(separator: "/").last.map(String.init) ?? entry.ownedBy
         return controller.providers.first { $0.descriptor.id == provider }?
             .descriptor.isolation == "worker"
+    }
+
+    private var recommendedSection: some View {
+        GroupBox {
+            VStack(spacing: 0) {
+                ForEach(pendingRecommendations) { model in
+                    RecommendedModelRow(
+                        model: model,
+                        isRegistered: registeredIDs.contains(model.id),
+                        isLoaded: loadedIDs.contains(model.id),
+                        providerAvailable: controller.providerIsAvailable(model.provider)
+                    ) {
+                        Task {
+                            if await controller.installRecommended(model) {
+                                rescanRepo()
+                            }
+                        }
+                    }
+                    if model.id != pendingRecommendations.last?.id {
+                        Divider().opacity(0.25)
+                    }
+                }
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("推荐模型")
+                    .font(.title3.weight(.semibold))
+                Text("已选择适配 MacAI Provider 的版本，可直接下载到模型仓库")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.bottom, 8)
+        }
     }
 
     private var registeredSection: some View {
@@ -176,7 +216,10 @@ struct ModelsView: View {
                                             model: model,
                                             // 仓库行只关心「是否已注册」，不同步展示运行时加载状态。
                                             isLoaded: false,
-                                            isRegistered: registeredPaths.contains(model.path)
+                                            isRegistered: registeredPaths.contains(model.path),
+                                            isRecommended: RecommendedModel.builtIns.contains {
+                                                $0.matches(repositoryModel: model)
+                                            }
                                         )
                                         if model.id != entries.last?.id { Divider().opacity(0.25) }
                                     }
@@ -190,16 +233,17 @@ struct ModelsView: View {
             .padding(.bottom, 6)
         } label: {
             HStack {
-                Text("模型仓库（Models/llm · tts · stt）")
+                Text("模型仓库")
                     .font(.title3.weight(.semibold))
                 Spacer()
                 Button {
                     openModelRepository()
                 } label: {
-                    Label("打开", systemImage: "folder")
+                    Label("打开路径", systemImage: "folder")
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.small)
+                .controlSize(.regular)
+                .font(.callout.weight(.medium))
                 .help("在访达中打开模型保存路径")
             }
             .padding(.bottom, 8)
@@ -447,6 +491,7 @@ struct RepoModelRow: View {
     let model: RepoModel
     let isLoaded: Bool
     let isRegistered: Bool
+    let isRecommended: Bool
 
     @State private var contextDraft = ""
     @State private var isReloading = false
@@ -465,9 +510,17 @@ struct RepoModelRow: View {
             ModelTypeIcon(type: model.modelType)
                 .opacity(isRegistered ? 0.55 : 1)
             VStack(alignment: .leading, spacing: 3) {
-                Text(model.fileName)
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(isRegistered ? .secondary : .primary)
+                HStack(spacing: 6) {
+                    Text(model.fileName)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(isRegistered ? .secondary : .primary)
+                    if isRecommended {
+                        Image(systemName: "star.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.yellow)
+                            .help("推荐模型")
+                    }
+                }
                 Text("\(Format.bytes(model.sizeBytes)) · Models/\(model.modelType)/")
                     .font(.caption)
                     .foregroundStyle(isRegistered ? .quaternary : .tertiary)
@@ -660,10 +713,96 @@ struct RepoModelRow: View {
                 id: model.modelID,
                 contextLength: ModelRepository.contextLength(for: model.modelID),
                 keepAlive: nil,
-                modelType: isLLM ? nil : model.modelType
+                modelType: isLLM ? nil : model.modelType,
+                provider: model.provider
             )
         } catch {
             controller.lastError = "加载失败：\(DaemonController.message(for: error))"
         }
+    }
+}
+
+struct RecommendedModelRow: View {
+    @Environment(DaemonController.self) private var controller
+    let model: RecommendedModel
+    let isRegistered: Bool
+    let isLoaded: Bool
+    let providerAvailable: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    private var isBusy: Bool {
+        controller.busyRecommendationIDs.contains(model.id)
+    }
+
+    private var buttonTitle: String {
+        if !model.isDownloaded {
+            return isRegistered ? "补全文件" : (providerAvailable ? "下载并启动" : "下载模型")
+        }
+        if isRegistered { return "启动" }
+        return "注册并启动"
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.accentColor.opacity(0.10))
+                    .frame(width: 36, height: 36)
+                ModelTypeIcon(type: model.modelType)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 7) {
+                    Text(model.title)
+                        .font(.body.weight(.semibold))
+                    Text(model.provider)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.primary.opacity(0.06)))
+                }
+                Text(model.summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    Text(Format.bytes(model.estimatedSizeBytes))
+                    Text("·")
+                    Link("Hugging Face", destination: model.repositoryURL)
+                    if !providerAvailable {
+                        Text("· Provider 环境未就绪，当前仅下载")
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 12)
+            if isLoaded {
+                Label("运行中", systemImage: "checkmark.circle.fill")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.green)
+            } else if isBusy {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.small)
+                    Text(model.isDownloaded ? "正在启动…" : "正在下载…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Button(buttonTitle, action: action)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(controller.phase != .online || (model.isDownloaded && !providerAvailable))
+            }
+        }
+        .padding(.vertical, 11)
+        .padding(.horizontal, 6)
+        .contentShape(Rectangle())
+        .background(isHovering ? Color.primary.opacity(0.05) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .onHover { isHovering = $0 }
+        .animation(.snappy(duration: 0.15), value: isHovering)
     }
 }

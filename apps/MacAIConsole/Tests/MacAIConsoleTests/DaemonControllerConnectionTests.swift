@@ -5,6 +5,64 @@ import XCTest
 
 @MainActor
 final class DaemonControllerConnectionTests: XCTestCase {
+    func testSystemProxySettingsArePassedToDaemonWithoutOverridingExplicitEnvironment() {
+        let settings: [String: Any] = [
+            "HTTPEnable": 1,
+            "HTTPProxy": "127.0.0.1",
+            "HTTPPort": 6152,
+            "HTTPSEnable": 1,
+            "HTTPSProxy": "127.0.0.1",
+            "HTTPSPort": 6152,
+        ]
+
+        let inferred = DaemonController.environmentByApplyingSystemProxy(
+            settings,
+            to: ["PATH": "/usr/bin"]
+        )
+        XCTAssertEqual(inferred["HTTP_PROXY"], "http://127.0.0.1:6152")
+        XCTAssertEqual(inferred["HTTPS_PROXY"], "http://127.0.0.1:6152")
+        XCTAssertEqual(inferred["NO_PROXY"], "127.0.0.1,localhost,::1")
+
+        let explicit = DaemonController.environmentByApplyingSystemProxy(
+            settings,
+            to: [
+                "HTTPS_PROXY": "http://proxy.example:8080",
+                "NO_PROXY": "example.internal",
+            ]
+        )
+        XCTAssertEqual(explicit["HTTPS_PROXY"], "http://proxy.example:8080")
+        XCTAssertEqual(explicit["NO_PROXY"], "example.internal,127.0.0.1,localhost,::1")
+    }
+
+    func testManualAndDisabledProxyModesOverrideInheritedProxyEnvironment() {
+        let inherited = [
+            "HTTP_PROXY": "http://old.example:8080",
+            "HTTPS_PROXY": "http://old.example:8080",
+            "ALL_PROXY": "socks5://old.example:1080",
+        ]
+        let manual = DaemonController.environmentByApplyingProxyMode(
+            .manual,
+            httpProxy: "http://127.0.0.1:6152",
+            httpsProxy: "http://127.0.0.1:6152",
+            systemSettings: nil,
+            to: inherited
+        )
+        XCTAssertEqual(manual["HTTP_PROXY"], "http://127.0.0.1:6152")
+        XCTAssertEqual(manual["HTTPS_PROXY"], "http://127.0.0.1:6152")
+        XCTAssertNil(manual["ALL_PROXY"])
+
+        let disabled = DaemonController.environmentByApplyingProxyMode(
+            .disabled,
+            httpProxy: nil,
+            httpsProxy: nil,
+            systemSettings: nil,
+            to: inherited
+        )
+        XCTAssertNil(disabled["HTTP_PROXY"])
+        XCTAssertNil(disabled["HTTPS_PROXY"])
+        XCTAssertNil(disabled["ALL_PROXY"])
+    }
+
     func testRuntimeTimeoutKeepsHealthyDaemonOnline() async throws {
         let controller = try makeController()
 

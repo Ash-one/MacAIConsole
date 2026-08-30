@@ -33,4 +33,23 @@ final class AppSettingsTests: XCTestCase {
         let secondReload = UserDefaults(suiteName: suiteName)!
         XCTAssertFalse(AppSettings.qwen3ASR06BEnabled(in: secondReload))
     }
+
+    func testProxyDefaultsToSystemAndLoadsSavedMode() {
+        XCTAssertEqual(AppSettings.proxyMode(in: defaults), .system)
+        defaults.set(ProxyMode.manual.rawValue, forKey: AppSettings.proxyModeKey)
+        XCTAssertEqual(AppSettings.proxyMode(in: defaults), .manual)
+    }
+
+    func testProxyURLNormalizationAcceptsNewbieFriendlyHostAndRejectsInvalidSchemes() {
+        XCTAssertEqual(
+            AppSettings.normalizedProxyURL("127.0.0.1:6152"),
+            "http://127.0.0.1:6152"
+        )
+        XCTAssertEqual(
+            AppSettings.normalizedProxyURL(" https://proxy.example:8443 "),
+            "https://proxy.example:8443"
+        )
+        XCTAssertNil(AppSettings.normalizedProxyURL("socks5://127.0.0.1:6153"))
+        XCTAssertNil(AppSettings.normalizedProxyURL("   "))
+    }
 }
