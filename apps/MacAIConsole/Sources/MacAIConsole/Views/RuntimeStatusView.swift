@@ -2,7 +2,7 @@ import SwiftUI
 
 struct RuntimeStatusView: View {
     @Environment(DaemonController.self) private var controller
-    @Environment(\.openSettings) private var openSettings
+    @Environment(AppRouter.self) private var router
     @State private var selectedModel: LoadedModel?
 
     var body: some View {
@@ -61,10 +61,11 @@ struct RuntimeStatusView: View {
             StatCard(title: "PID", value: info.map { "\($0.pid)" } ?? "—", icon: "number")
             StatCard(title: "运行时长", value: info.map { Format.uptime($0.uptimeSecs) } ?? "—", icon: "clock")
             StatCard(title: "活跃请求", value: info.map { "\($0.activeRequests)" } ?? "—", icon: "bolt")
+            StatCard(title: "累计任务", value: controller.cumulativeTaskCountText, icon: "list.bullet.rectangle")
             if let budget = info?.memoryBudget, budget > 0 {
             MemoryBudgetCard(
                 value: Format.bytes(budget),
-                onEdit: { openSettings() }
+                onEdit: { router.page = .settings }
             )
             }
         }
@@ -482,7 +483,7 @@ struct RunningModelSettingsView: View {
             }
         }
         .task(id: model.id) {
-            repoModel = ModelRepository.scan().first { $0.modelID == model.id }
+            repoModel = await ModelRepository.scanInBackground().first { $0.modelID == model.id }
             guard modelType == "tts", !voicesLoaded else { return }
             defer { voicesLoaded = true }
             if let response = try? await controller.voices(for: model.id) {

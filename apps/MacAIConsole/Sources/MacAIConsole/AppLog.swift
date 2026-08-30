@@ -167,6 +167,13 @@ enum RecentLogReader {
         try read(url: source.fileURL, maxLines: maxLines, maxBytes: maxBytes)
     }
 
+    /// read 的后台版本：读文件与解析离开主线程，供日志页的轮询刷新调用。
+    static func readInBackground(source: LogSource) async throws -> RecentLogSnapshot {
+        try await Task.detached(priority: .userInitiated) {
+            try read(source: source)
+        }.value
+    }
+
     static func read(
         url: URL,
         maxLines: Int = 500,

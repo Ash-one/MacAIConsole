@@ -17,7 +17,6 @@ enum ProxyMode: String, CaseIterable, Identifiable {
 }
 
 enum AppSettings {
-    static let aiworkdPathKey = "aiworkdPath"
     static let autoStartKey = "autoStartDaemon"
     static let memoryBudgetKey = "memoryBudget"
     static let logLevelKey = "logLevel"
@@ -25,12 +24,6 @@ enum AppSettings {
     static let proxyModeKey = "proxyMode"
     static let httpProxyKey = "httpProxy"
     static let httpsProxyKey = "httpsProxy"
-
-    static var aiworkdPath: String? {
-        let value = UserDefaults.standard.string(forKey: aiworkdPathKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (value?.isEmpty == false) ? value : nil
-    }
 
     static var autoStartDaemon: Bool {
         UserDefaults.standard.object(forKey: autoStartKey) as? Bool ?? true

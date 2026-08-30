@@ -25,6 +25,17 @@ final class DaemonController {
     private(set) var runningTasks: [InferenceTaskSummary] = []
     private(set) var completedTasks: [InferenceTaskSummary] = []
     private(set) var tasksError: String?
+
+    /// 与 daemon 端 MAX_COMPLETED_TASKS 对齐的完成历史上限；刷新按此值拉取。
+    /// 历史到上限后旧任务被淘汰，累计数无法区分「恰好」与「更多」，文案按「N+」呈现。
+    static let completedHistoryLimit = 100
+
+    /// 累计任务统计（当前 daemon 会话）：运行中 + 最近完成。
+    var cumulativeTaskCountText: String {
+        let total = runningTasks.count + completedTasks.count
+        return total >= Self.completedHistoryLimit ? "\(total)+" : "\(total)"
+    }
+
     var lastError: String? {
         didSet {
             guard let lastError, lastError != oldValue else { return }
@@ -74,7 +85,7 @@ final class DaemonController {
     func startDaemon() {
         guard phase == .offline else { return }
         guard let binary = Self.resolveBinary() else {
-            lastError = "未找到 aiworkd 可执行文件。请先在 MacAI 仓库构建（cargo build），或在「设置」中指定路径。"
+            lastError = "未找到 aiworkd 可执行文件。请先在 MacAI 仓库构建（cargo build --release -p ai-daemon），或设置 AIWORKD_PATH 环境变量。"
             return
         }
         lastError = nil
@@ -135,7 +146,7 @@ final class DaemonController {
         async let infoRequest = api.runtimeInfo()
         async let modelsRequest = api.models()
         async let providersRequest = api.providers()
-        async let tasksRequest = api.tasks(completedLimit: 100)
+        async let tasksRequest = api.tasks(completedLimit: Self.completedHistoryLimit)
 
         let info = try await infoRequest
         let models = try? await modelsRequest
@@ -551,12 +562,8 @@ final class DaemonController {
         AppLogger.error(message)
     }
 
-    /// 二进制探测顺序：设置中指定的路径 → AIWORKD_PATH 环境变量 → 仓库 target/release、target/debug。
+    /// 二进制探测顺序：AIWORKD_PATH 环境变量 → 仓库 target/release、target/debug。
     static func resolveBinary() -> URL? {
-        if let configured = AppSettings.aiworkdPath,
-           FileManager.default.isExecutableFile(atPath: configured) {
-            return URL(fileURLWithPath: configured)
-        }
         var candidates: [String] = []
         if let envPath = ProcessInfo.processInfo.environment["AIWORKD_PATH"] {
             candidates.append(envPath)

@@ -3138,3 +3138,62 @@ remove/rename 的 HTTP 契约测试，以及 AppSettings 的缺省值契约测�
 * 负向搜索：`keep_alive_secs`、`parse_duration` 及全部被删测试名在
   crates/apps/scripts 零命中；`qwen3_asr_enabled_value` 与
   `MacOSSayProvider::available()` 的生产引用保持不变。
+
+---
+
+# 72. Decision: 设置合并进主窗口并裁剪冗余设置项
+
+## 问题
+
+设置以独立 `Settings` scene（Cmd+, 弹窗）存在，与主窗口四大页面割裂：
+修改内存预算要从运行状态页弹到另一个窗口。同时设置表单混入了三项不
+ earn 维护成本的入口：aiworkd 路径选择器与自动探测（`AIWORKD_PATH` env
+→ `target/release` → `target/debug`）构成两套指定机制；「打开日志文件夹」
+与日志页「在访达中显示」重复；「关于 · 版本 0.1.0」是永不更新的硬编码
+假版本（daemon 真实版本已展示在运行状态页与菜单栏）。
+
+## 决策
+
+设置的主 owner 是主窗口侧边栏「设置」页（`RootView` 的 `Page.settings`，
+经 `AppRouter` 共享导航状态）；独立 `Settings` scene、菜单栏「设置…」
+入口（`SettingsLink`）删除，Cmd+, 快捷键保留在主窗口内。运行状态页
+内存预算卡片的「修改」经 `AppRouter` 跳转设置页。
+
+逐项裁决：
+
+* 移除「aiworkd 可执行文件路径」选择器：`DaemonController.resolveBinary`
+  的探测链（env → release → debug）是路径指定的唯一 owner；需要自定义
+  二进制时用 `AIWORKD_PATH`。旧版本存入 UserDefaults 的路径偏好不再
+  被读取。保留「自动探测结果」展示作为探测链的可见性窗口。
+* 移除「打开日志文件夹」：日志页是日志目录入口的 owner。
+* 移除「关于 · 版本」：daemon 版本由运行状态页与菜单栏从 `/api/runtime`
+  展示；保留「API 地址」（应用内唯一的本地 endpoint 展示位）。
+* 保留自动拉起开关（重启 GUI 时不强行复活已手动停止的 daemon）、内存
+  预算（§23 要求可配置）、Qwen3-ASR 0.6B 开关（重型 Provider 的显式
+  opt-in；daemon 端缺省开启，GUI 传 0 是唯一关闭途径）、网络代理三模式
+  （模型下载前置条件，契约已由 DaemonControllerConnectionTests 固化）。
+
+## 被放弃的方案
+
+* 保留独立 Settings scene + 侧边栏页双入口：同一表单两个 surface，无
+  独有能力，制造展示不一致（520pt 窗口 vs 全宽页面）。
+* 菜单栏保留「设置…」并做跨 scene 导航：需要把路由状态穿透进
+  MenuBarExtra，收益只是省一次点击；「打开主窗口」已可达。
+
+## 后果与已知边界
+
+* 曾在旧设置窗口指定过自定义 aiworkd 路径的安装：偏好被静默忽略，
+  需改用 `AIWORKD_PATH`（`launchctl setenv` 或终端启动）。
+* `aiworkdPath` 键残留在个别用户的 UserDefaults 中，应用不再读写；
+  不做迁移。
+* 设置无独立窗口后，菜单栏小窗不能直达设置，需先打开主窗口。
+
+## 验证
+
+* `swift build` 通过；`swift test --enable-xctest` 通过（24 个测试，
+  数量与 §71 记录一致；AppSettingsTests 固化的 qwen3 缺省、代理缺省与
+  归一化契约不受影响）。
+* 负向搜索：`aiworkdPath`、`aiworkdPathKey`、`SettingsLink`、
+  `openSettings`、「打开日志文件夹」在 apps/MacAIConsole 源码零命中。
+* 运行 MacAIConsole.app：侧边栏出现「设置」页，Cmd+, 聚焦设置页，
+  运行状态页内存预算「修改」跳转设置页。

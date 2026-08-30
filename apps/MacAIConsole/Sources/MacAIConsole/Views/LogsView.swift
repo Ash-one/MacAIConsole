@@ -18,7 +18,7 @@ struct LogsView: View {
         .navigationTitle("最近日志")
         .task(id: source) {
             while !Task.isCancelled {
-                reload()
+                await reload()
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }
@@ -51,6 +51,8 @@ struct LogsView: View {
                 Text("Debug").tag(LogLevel.debug.rawValue)
             }
             .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityLabel("日志级别")
             .frame(width: 150)
             .help("Info 显示常规、警告和错误日志；Debug 显示全部日志")
 
@@ -63,7 +65,7 @@ struct LogsView: View {
             }
 
             Button {
-                reload()
+                Task { await reload() }
             } label: {
                 Label("刷新", systemImage: "arrow.clockwise")
             }
@@ -179,11 +181,15 @@ struct LogsView: View {
         }
     }
 
-    private func reload() {
+    /// 后台线程读日志；来源切换会取消旧 task，读完后检查取消避免旧结果覆盖新来源。
+    private func reload() async {
         do {
-            snapshot = try RecentLogReader.read(source: source)
+            let newSnapshot = try await RecentLogReader.readInBackground(source: source)
+            guard !Task.isCancelled else { return }
+            snapshot = newSnapshot
             loadError = nil
         } catch {
+            guard !Task.isCancelled else { return }
             loadError = "读取日志失败：\(error.localizedDescription)"
         }
     }
