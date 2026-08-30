@@ -3,6 +3,7 @@
 //! 对外提供 OpenAI-compatible chat API；管理面提供 Provider 状态与模型
 //! load/unload。默认只绑定 127.0.0.1:11435。
 
+mod audio;
 mod process_memory;
 mod providers;
 mod pull;
@@ -832,17 +833,6 @@ async fn audio_transcriptions(State(state): State<AppState>, mut multipart: Mult
         match name.as_str() {
             "file" => {
                 let file_name = field.file_name().unwrap_or("audio.wav").to_string();
-                if FilePath::new(&file_name)
-                    .extension()
-                    .and_then(|value| value.to_str())
-                    .map(|value| value.eq_ignore_ascii_case("wav"))
-                    != Some(true)
-                {
-                    return api_error(
-                        AIError::InvalidRequest,
-                        "STT currently accepts .wav uploads",
-                    );
-                }
                 let bytes = match field.bytes().await {
                     Ok(bytes) => bytes,
                     Err(error) => {
@@ -855,14 +845,38 @@ async fn audio_transcriptions(State(state): State<AppState>, mut multipart: Mult
                 if bytes.is_empty() {
                     return api_error(AIError::InvalidRequest, "uploaded audio is empty");
                 }
-                let audio_duration_ms = wav_duration_ms(&bytes);
+                let upload_size = bytes.len() as u64;
+                let extension = FilePath::new(&file_name)
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .map(|value| value.to_ascii_lowercase());
+                // 解码是 CPU 密集操作；放 blocking 线程，避免拖住 daemon 的事件循环。
+                // Bytes → Vec 在引用计数为 1 时零拷贝。
+                let bytes: Vec<u8> = bytes.into();
+                let normalized = match tokio::task::spawn_blocking(move || {
+                    audio::normalize_to_pcm_wav(bytes, extension.as_deref())
+                })
+                .await
+                {
+                    Ok(Ok(data)) => data,
+                    Ok(Err(audio::NormalizeError(reason))) => {
+                        return api_error(AIError::InvalidRequest, reason)
+                    }
+                    Err(error) => {
+                        return api_error(
+                            AIError::Internal,
+                            format!("audio normalization failed: {error}"),
+                        )
+                    }
+                };
+                let audio_duration_ms = audio::wav_duration_ms(&normalized);
                 let uploaded = UploadedAudio::new(
                     state.runtime.next_request_id(),
                     file_name,
-                    bytes.len() as u64,
+                    upload_size,
                     audio_duration_ms,
                 );
-                if let Err(error) = tokio::fs::write(&uploaded.path, &bytes).await {
+                if let Err(error) = tokio::fs::write(&uploaded.path, &normalized).await {
                     return api_error(
                         AIError::Internal,
                         format!("cannot stage uploaded audio: {error}"),
@@ -989,48 +1003,6 @@ impl UploadedAudio {
     }
 }
 
-/// 从 RIFF/WAVE 的 `fmt ` 与 `data` chunk 计算输入音频时长。
-/// 当前 STT endpoint 只接收 PCM WAV；解析失败仅省略任务指标，不影响转写。
-fn wav_duration_ms(bytes: &[u8]) -> Option<u64> {
-    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
-        return None;
-    }
-
-    let mut offset = 12usize;
-    let mut byte_rate = None;
-    let mut data_bytes = None;
-    while offset.checked_add(8)? <= bytes.len() {
-        let chunk_id = bytes.get(offset..offset + 4)?;
-        let chunk_size =
-            u32::from_le_bytes(bytes.get(offset + 4..offset + 8)?.try_into().ok()?) as usize;
-        let chunk_start = offset + 8;
-        let chunk_end = chunk_start.checked_add(chunk_size)?;
-        if chunk_end > bytes.len() {
-            return None;
-        }
-
-        if chunk_id == b"fmt " && chunk_size >= 12 {
-            byte_rate = Some(u32::from_le_bytes(
-                bytes
-                    .get(chunk_start + 8..chunk_start + 12)?
-                    .try_into()
-                    .ok()?,
-            ));
-        } else if chunk_id == b"data" {
-            data_bytes = Some(chunk_size as u64);
-        }
-
-        offset = chunk_end.checked_add(chunk_size % 2)?;
-    }
-
-    let byte_rate = u64::from(byte_rate?);
-    let data_bytes = data_bytes?;
-    if byte_rate == 0 || data_bytes == 0 {
-        return None;
-    }
-    Some((data_bytes.saturating_mul(1_000) + byte_rate / 2) / byte_rate)
-}
-
 impl Drop for UploadedAudio {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
@@ -1128,8 +1100,8 @@ mod tests {
         wav.extend_from_slice(&data_size.to_le_bytes());
         wav.resize(44 + data_size as usize, 0);
 
-        assert_eq!(wav_duration_ms(&wav), Some(2_000));
-        assert_eq!(wav_duration_ms(b"not a wav"), None);
+        assert_eq!(audio::wav_duration_ms(&wav), Some(2_000));
+        assert_eq!(audio::wav_duration_ms(b"not a wav"), None);
     }
 
     fn mock_model() -> ai_core::model::ModelSpec {

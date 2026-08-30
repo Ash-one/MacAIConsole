@@ -213,12 +213,6 @@ impl STTProvider for WhisperCppProvider {
                 format!("cannot open audio '{audio}': {error}"),
             )
         })?;
-        if audio.extension().and_then(|value| value.to_str()) != Some("wav") {
-            return Err(ProviderError::new(
-                AIError::InvalidRequest,
-                "whisper.cpp STT currently accepts PCM WAV input",
-            ));
-        }
 
         let output = TempOutput::new("whisper-result");
         let mut command = Command::new(&binary);
