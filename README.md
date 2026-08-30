@@ -188,6 +188,8 @@ ggml-large-v3-turbo-encoder.mlmodelc/
 
 Qwen3-ASR 提供两个独立 Provider：Apple Silicon 优先使用 MLX 8-bit，PyTorch MPS FP16 保留为兼容回退。
 
+Python 环境也可以在 MacAIConsole「设置 → Python 运行环境」中一键安装（需本机有 Python 3.12，依赖版本与本节一致）；以下为手动步骤。
+
 MLX 8-bit 环境与权重：
 
 ```bash
@@ -228,7 +230,7 @@ PyTorch Provider 使用 `qwen3-asr`，Apple Silicon 默认优先 MPS，加载失
 
 ### 6. 准备 Kokoro TTS
 
-创建 Python 环境：
+创建 Python 环境（也可在 MacAIConsole「设置 → Python 运行环境」中一键安装）：
 
 ```bash
 python3.12 -m venv .build/kokoro-venv

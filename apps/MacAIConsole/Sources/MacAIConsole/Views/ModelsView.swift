@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ModelsView: View {
     @Environment(DaemonController.self) private var controller
+    @Environment(PythonEnvironmentManager.self) private var pythonEnvironments
     @State private var repoModels: [RepoModel] = []
     @State private var showingAddSheet = false
 
@@ -112,11 +113,15 @@ struct ModelsView: View {
         ) {
             VStack(spacing: 0) {
                 ForEach(pendingRecommendations) { model in
+                    let diagnostics = providerDiagnostics(for: model)
                     RecommendedModelRow(
                         model: model,
                         isRegistered: registeredIDs.contains(model.id),
                         isLoaded: loadedIDs.contains(model.id),
-                        providerAvailable: controller.providerIsAvailable(model.provider)
+                        providerAvailable: controller.providerIsAvailable(model.provider),
+                        providerMissing: diagnostics.missing,
+                        unavailableReason: diagnostics.reason,
+                        pythonSpec: diagnostics.spec
                     ) {
                         Task {
                             if await controller.installRecommended(model) {
@@ -130,6 +135,21 @@ struct ModelsView: View {
                 }
             }
         }
+    }
+
+    /// 推荐模型行的 Provider 诊断：区分「未装配」（如 Qwen3-ASR 开关未开）与
+    /// 「环境未就绪」（缺 Python venv），并给出对应的 Python 环境规格。
+    private func providerDiagnostics(for model: RecommendedModel)
+        -> (missing: Bool, reason: String?, spec: PythonEnvironmentSpec?)
+    {
+        let spec = PythonEnvironmentSpec.spec(forProvider: model.provider)
+        guard let entry = controller.providers.first(where: { $0.descriptor.id == model.provider }) else {
+            return (true, "Provider 未装配：在「设置」中开启对应开关并重启 aiworkd", spec)
+        }
+        if !entry.status.available {
+            return (false, entry.status.reason ?? entry.status.installHint, spec)
+        }
+        return (false, nil, spec)
     }
 
     private var registeredSection: some View {
@@ -668,10 +688,17 @@ struct RepoModelRow: View {
 
 struct RecommendedModelRow: View {
     @Environment(DaemonController.self) private var controller
+    @Environment(PythonEnvironmentManager.self) private var pythonEnvironments
     let model: RecommendedModel
     let isRegistered: Bool
     let isLoaded: Bool
     let providerAvailable: Bool
+    /// true 表示 daemon 未装配该 Provider（如 Qwen3-ASR 开关未开），需先去设置启用。
+    let providerMissing: Bool
+    /// Provider 不可用的具体原因，来自 daemon 的 reason / install_hint。
+    let unavailableReason: String?
+    /// 对应的 Python 环境规格；nil 表示该 Provider 不依赖 Python（如 whisper.cpp）。
+    let pythonSpec: PythonEnvironmentSpec?
     let action: () -> Void
 
     private var isBusy: Bool {
@@ -687,7 +714,7 @@ struct RecommendedModelRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             ModelTypeIcon(type: model.modelType)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 7) {
@@ -703,12 +730,14 @@ struct RecommendedModelRow: View {
                     Text("·")
                     Link("Hugging Face", destination: model.repositoryURL)
                     if !providerAvailable {
-                        Text("· Provider 环境未就绪，当前仅下载")
-                            .foregroundStyle(Theme.warning)
+                        Text("· 当前仅下载，无法启动")
                     }
                 }
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
+                if !providerAvailable {
+                    providerGuidance
+                }
             }
             Spacer(minLength: 12)
             if isLoaded {
@@ -735,5 +764,49 @@ struct RecommendedModelRow: View {
         .padding(.vertical, 11)
         .padding(.horizontal, 8)
         .hoverableRow()
+    }
+
+    /// Provider 不可用时的引导：缺失说明去设置启用；缺 Python 环境就提供就地安装。
+    @ViewBuilder
+    private var providerGuidance: some View {
+        HStack(spacing: 8) {
+            Label(
+                unavailableReason ?? "Provider 环境未就绪",
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .font(.caption2)
+            .foregroundStyle(Theme.warning)
+
+            if let spec = pythonSpec, !providerMissing {
+                envInstallControls(for: spec)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func envInstallControls(for spec: PythonEnvironmentSpec) -> some View {
+        let state = pythonEnvironments.state(for: spec)
+        switch state.phase {
+        case .creatingVenv, .installingPackages:
+            ProgressView().controlSize(.small)
+            Text(state.stepText)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Button("取消") { pythonEnvironments.cancel(spec) }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+        case .failed:
+            Button("重试安装环境") { pythonEnvironments.install(spec) }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help(state.errorMessage ?? "")
+        case .idle:
+            if !pythonEnvironments.isInstalled(spec) {
+                Button("安装运行环境") { pythonEnvironments.install(spec) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("在仓库 .build/ 下创建 Python 3.12 环境并安装固定版本依赖")
+            }
+        }
     }
 }

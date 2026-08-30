@@ -8,6 +8,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.httpProxyKey) private var httpProxy = ""
     @AppStorage(AppSettings.httpsProxyKey) private var httpsProxy = ""
     @Environment(DaemonController.self) private var controller
+    @Environment(PythonEnvironmentManager.self) private var pythonEnvironments
 
     var body: some View {
         Form {
@@ -34,7 +35,19 @@ struct SettingsView: View {
                 Toggle("启用 Qwen3-ASR 0.6B", isOn: $qwen3ASR06BEnabled)
                     .accessibilityLabel("启用 Qwen3-ASR 0.6B 语音转文字")
                     .accessibilityHint("控制 Qwen3-ASR 是否作为可用的语音转文字选项")
-                Text("同时装配 MLX 8-bit 与 PyTorch Provider；本机优先使用 MLX 8-bit，PyTorch 保留为兼容回退。修改后需要重启 aiworkd。")
+                Text("同时装配 MLX 8-bit 与 PyTorch Provider；本机优先使用 MLX 8-bit，PyTorch 保留为兼容回退。首次使用需在下方「Python 运行环境」安装对应环境，并下载模型。修改后需要重启 aiworkd。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Python 运行环境") {
+                ForEach(PythonEnvironmentSpec.all) { spec in
+                    PythonEnvironmentRow(spec: spec)
+                    if spec.id != PythonEnvironmentSpec.all.last?.id {
+                        Divider()
+                    }
+                }
+                Text("Qwen3-ASR 与 Kokoro 的 worker 依赖仓库 .build/ 下的 Python 3.12 环境，安装需联网下载数百 MB 至数 GB 依赖。已用 AIWORK_*_PYTHON 指向自定义环境的无需安装。安装完成后重启 aiworkd 生效。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -109,5 +122,86 @@ struct SettingsView: View {
                 ? "留空其中一项即可只配置一种协议；未填写协议不会使用代理。"
                 : "请至少填写一个有效地址；可省略 http:// 前缀。"
         }
+    }
+}
+
+/// 「Python 运行环境」区块的一行：环境名 + 就绪状态 + 安装/取消/重试。
+/// 安装是显式触发的长任务，进度以步骤文案 + 输出尾部呈现（pip 不提供百分比）。
+struct PythonEnvironmentRow: View {
+    @Environment(PythonEnvironmentManager.self) private var pythonEnvironments
+    let spec: PythonEnvironmentSpec
+
+    private var state: PythonEnvironmentManager.InstallState {
+        pythonEnvironments.state(for: spec)
+    }
+
+    private var isInstalled: Bool {
+        pythonEnvironments.isInstalled(spec)
+    }
+
+    private var isInstalling: Bool {
+        state.phase == .creatingVenv || state.phase == .installingPackages
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(spec.label)
+                    .font(.body.weight(.medium))
+                Text(spec.summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if isInstalling {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text(state.stepText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let message = state.errorMessage {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(Theme.danger)
+                    if !state.outputTail.isEmpty {
+                        Text(lastOutputLine)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(2)
+                            .truncationMode(.head)
+                            .help(state.outputTail)
+                    }
+                }
+            }
+            Spacer(minLength: 12)
+            if isInstalled {
+                HStack(spacing: 5) {
+                    StatusDot(color: Theme.success, size: 6, glow: true)
+                    Text("已就绪")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Theme.success)
+                }
+            } else if isInstalling {
+                Button("取消") { pythonEnvironments.cancel(spec) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            } else {
+                Button(state.phase == .failed ? "重试" : "安装") {
+                    pythonEnvironments.install(spec)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// 失败时 pip 的关键报错通常在输出末尾，展示最后一行非空内容。
+    private var lastOutputLine: String {
+        state.outputTail
+            .split(separator: "\n")
+            .reversed()
+            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map(String.init) ?? ""
     }
 }
