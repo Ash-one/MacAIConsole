@@ -1,22 +1,34 @@
 //! HF 模型拉取（handoff §20）。
 //!
-//! `POST /api/models/pull`：下载 HuggingFace 单文件到模型仓库对应类型
-//! 文件夹，完成后立即注册加载。支持断点续传（.part 临时文件 + Range）。
+//! `POST /api/models/pull`：下载 HuggingFace 单文件或目录模型清单到模型仓库，
+//! 可在完成后立即注册加载。支持断点续传（.part 临时文件 + Range）。
 
 use std::path::{Path, PathBuf};
 
+use futures::StreamExt;
+use reqwest::{header, StatusCode};
 use serde::Deserialize;
+use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Deserialize)]
 pub struct PullRequest {
     /// HF 仓库，如 "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
     pub repo: String,
     /// 仓库内文件路径，如 "qwen2.5-0.5b-instruct-q4_k_m.gguf"
-    pub filename: String,
+    pub filename: Option<String>,
+    /// 目录模型所需文件清单；与 directory 一起使用，并保留仓库内相对路径。
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// 目录模型在 Models/<type>/ 下的目标文件夹名。
+    pub directory: Option<String>,
     /// llm / stt / tts
     pub model_type: String,
     /// 注册 ID；缺省用文件名去扩展名
     pub id: Option<String>,
+    /// 显式 Provider，例如 qwen3-asr-mlx。
+    pub provider: Option<String>,
+    /// 下载后是否立即注册加载；默认保持原有 pull 行为。
+    pub auto_load: Option<bool>,
 }
 
 /// 校验 repo/filename，防止路径穿越：只允许字母数字与 . _ - /
@@ -34,6 +46,35 @@ pub fn validate_pull_parts(repo: &str, filename: &str) -> Result<(), String> {
         return Err(format!("invalid filename '{filename}'"));
     }
     Ok(())
+}
+
+/// 单文件与目录清单二选一，且所有相对路径都必须通过穿越校验。
+pub fn validate_pull_request(request: &PullRequest) -> Result<(), String> {
+    match (
+        request.filename.as_deref(),
+        request.files.is_empty(),
+        request.directory.as_deref(),
+    ) {
+        (Some(filename), true, None) => validate_pull_parts(&request.repo, filename),
+        (None, false, Some(directory)) => {
+            validate_pull_parts(&request.repo, directory)?;
+            if directory.contains('/') {
+                return Err("directory must be a single folder name".to_string());
+            }
+            for filename in &request.files {
+                validate_pull_parts(&request.repo, filename)?;
+            }
+            let unique = request.files.iter().collect::<std::collections::HashSet<_>>();
+            if unique.len() != request.files.len() {
+                return Err("files must not contain duplicates".to_string());
+            }
+            Ok(())
+        }
+        _ => Err(
+            "use either filename for a single-file model, or directory + files for a directory model"
+                .to_string(),
+        ),
+    }
 }
 
 /// 模型仓库根目录（与 GUI 的 ModelRepository 一致）。
@@ -59,6 +100,37 @@ pub fn pull_target(model_type: &str, filename: &str) -> (PathBuf, PathBuf) {
     (dest, part)
 }
 
+/// 返回最终模型路径，以及每个 HF 相对路径对应的本地目标。
+pub fn pull_targets(request: &PullRequest) -> Result<(PathBuf, Vec<(String, PathBuf)>), String> {
+    validate_pull_request(request)?;
+    if let Some(filename) = &request.filename {
+        let (dest, _) = pull_target(&request.model_type, filename);
+        return Ok((dest.clone(), vec![(filename.clone(), dest)]));
+    }
+
+    let root = models_dir()
+        .join(&request.model_type)
+        .join(request.directory.as_deref().expect("validated directory"));
+    let targets = request
+        .files
+        .iter()
+        .map(|filename| (filename.clone(), root.join(filename)))
+        .collect();
+    Ok((root, targets))
+}
+
+fn part_path(dest: &Path) -> PathBuf {
+    let ext = dest
+        .extension()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if ext.is_empty() {
+        dest.with_extension("part")
+    } else {
+        dest.with_extension(format!("{ext}.part"))
+    }
+}
+
 /// HF resolve URL（跟随 redirect 到 CDN）。
 pub fn resolve_url(repo: &str, filename: &str) -> String {
     format!("https://huggingface.co/{repo}/resolve/main/{filename}")
@@ -80,6 +152,125 @@ pub fn resume_offset(part: &Path, dest: &Path, expected: Option<u64>) -> u64 {
         }
     }
     std::fs::metadata(part).map(|m| m.len()).unwrap_or(0)
+}
+
+/// 流式下载一个 HF 文件。目标旁保留 `.part`，网络中断后可续传。
+pub async fn download_file(repo: &str, filename: &str, dest: &Path) -> Result<(), String> {
+    if let Some(parent) = dest.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|error| format!("cannot create model dir {}: {error}", parent.display()))?;
+    }
+    let part = part_path(dest);
+    let url = resolve_url(repo, filename);
+    let client = reqwest::Client::builder()
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .build()
+        .map_err(|error| format!("http client: {error}"))?;
+    let expected_len =
+        match tokio::time::timeout(std::time::Duration::from_secs(30), client.head(&url).send())
+            .await
+        {
+            Ok(Ok(response)) if response.status().is_success() => response
+                .headers()
+                .get(header::CONTENT_LENGTH)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok()),
+            _ => None,
+        };
+
+    if dest.exists()
+        && expected_len.is_some_and(|expected| {
+            std::fs::metadata(dest).map(|value| value.len()).ok() == Some(expected)
+        })
+    {
+        tracing::info!(dest = %dest.display(), "pull target already complete");
+        return Ok(());
+    }
+
+    let mut offset = resume_offset(&part, dest, expected_len);
+    if expected_len.is_some_and(|expected| offset > expected) {
+        let _ = tokio::fs::remove_file(&part).await;
+        offset = 0;
+    }
+    if offset > 0 && expected_len == Some(offset) {
+        tokio::fs::rename(&part, dest)
+            .await
+            .map_err(|error| format!("rename failed for '{}': {error}", dest.display()))?;
+        tracing::info!(filename, dest = %dest.display(), bytes = offset, "pull complete");
+        return Ok(());
+    }
+    let mut get = client.get(&url);
+    if offset > 0 && expected_len.is_some() {
+        get = get.header(header::RANGE, format!("bytes={offset}-"));
+        tracing::info!(filename, offset, "resuming pull");
+    } else if offset > 0 {
+        let _ = tokio::fs::remove_file(&part).await;
+        offset = 0;
+    }
+
+    let response = get
+        .send()
+        .await
+        .map_err(|error| format!("download failed for '{filename}': {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("HF returned {} for {url}", response.status()));
+    }
+    let append = offset > 0 && response.status() == StatusCode::PARTIAL_CONTENT;
+    if !append {
+        offset = 0;
+    }
+    let total = response
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|length| length + offset)
+        .or(expected_len);
+    let mut file = if append {
+        tokio::fs::OpenOptions::new().append(true).open(&part).await
+    } else {
+        let _ = tokio::fs::remove_file(&part).await;
+        tokio::fs::File::create(&part).await
+    }
+    .map_err(|error| format!("cannot open '{}': {error}", part.display()))?;
+
+    let mut stream = response.bytes_stream();
+    let mut downloaded = offset;
+    let mut last_report = downloaded;
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|error| {
+            format!("download interrupted for '{filename}' at {downloaded} bytes: {error}")
+        })?;
+        file.write_all(&bytes)
+            .await
+            .map_err(|error| format!("write failed for '{}': {error}", part.display()))?;
+        downloaded += bytes.len() as u64;
+        if downloaded - last_report >= 16 * 1024 * 1024 {
+            tracing::info!(
+                filename,
+                downloaded,
+                total = total.unwrap_or(0),
+                "pull progress"
+            );
+            last_report = downloaded;
+        }
+    }
+    file.flush()
+        .await
+        .map_err(|error| format!("flush failed for '{}': {error}", part.display()))?;
+    if let Some(total) = total {
+        if downloaded != total {
+            return Err(format!(
+                "size mismatch for '{filename}': got {downloaded}, expected {total}"
+            ));
+        }
+    }
+    tokio::fs::rename(&part, dest)
+        .await
+        .map_err(|error| format!("rename failed for '{}': {error}", dest.display()))?;
+    tracing::info!(filename, dest = %dest.display(), bytes = downloaded, "pull complete");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -104,5 +295,31 @@ mod tests {
         let (dest, part) = pull_target("llm", "m.gguf");
         assert!(dest.ends_with("Models/llm/m.gguf"));
         assert!(part.to_string_lossy().ends_with("m.gguf.part"));
+    }
+
+    #[test]
+    fn builds_directory_model_targets_and_rejects_mixed_shapes() {
+        let request = PullRequest {
+            repo: "mlx-community/Qwen3-ASR-0.6B-8bit".to_string(),
+            filename: None,
+            files: vec![
+                "config.json".to_string(),
+                "voices/zf_001.safetensors".to_string(),
+            ],
+            directory: Some("qwen3-asr-mlx-8bit".to_string()),
+            model_type: "stt".to_string(),
+            id: Some("qwen3-asr-mlx-8bit".to_string()),
+            provider: Some("qwen3-asr-mlx".to_string()),
+            auto_load: Some(true),
+        };
+        let (root, targets) = pull_targets(&request).unwrap();
+        assert!(root.ends_with("Models/stt/qwen3-asr-mlx-8bit"));
+        assert!(targets[1]
+            .1
+            .ends_with("qwen3-asr-mlx-8bit/voices/zf_001.safetensors"));
+
+        let mut invalid = request;
+        invalid.filename = Some("model.bin".to_string());
+        assert!(validate_pull_request(&invalid).is_err());
     }
 }

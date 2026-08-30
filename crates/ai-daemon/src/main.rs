@@ -287,164 +287,49 @@ async fn provider_statuses(State(state): State<AppState>) -> Json<Value> {
     Json(json!({"data": providers}))
 }
 
-/// POST /api/models/pull —— 下载 HF 单文件到模型仓库并注册加载（handoff §20）。
+/// POST /api/models/pull —— 下载 HF 单文件或目录清单到模型仓库，可选择立即注册加载。
 async fn pull_model(
     State(state): State<AppState>,
     Json(request): Json<pull::PullRequest>,
 ) -> Response {
-    if let Err(error) = pull::validate_pull_parts(&request.repo, &request.filename) {
-        return api_error(AIError::InvalidRequest, error);
-    }
     if !matches!(request.model_type.as_str(), "llm" | "stt" | "tts") {
         return api_error(
             AIError::InvalidRequest,
             format!("unsupported model_type '{}'", request.model_type),
         );
     }
-    let (dest, part) = pull::pull_target(&request.model_type, &request.filename);
-    if let Some(parent) = dest.parent() {
-        if let Err(error) = tokio::fs::create_dir_all(parent).await {
-            return api_error(
-                AIError::Internal,
-                format!("cannot create model dir {}: {error}", parent.display()),
-            );
+    let (model_path, targets) = match pull::pull_targets(&request) {
+        Ok(value) => value,
+        Err(error) => return api_error(AIError::InvalidRequest, error),
+    };
+    for (filename, destination) in targets {
+        if let Err(error) = pull::download_file(&request.repo, &filename, &destination).await {
+            return api_error(AIError::Internal, error);
         }
     }
-
-    // HEAD 拿总大小；失败不阻塞下载（只是少了续传与完整校验）。
-    let url = pull::resolve_url(&request.repo, &request.filename);
-    let head_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .ok();
-    let expected_len: Option<u64> = match head_client.as_ref() {
-        Some(client) => match client.head(&url).send().await {
-            Ok(resp) => resp
-                .headers()
-                .get(header::CONTENT_LENGTH)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse().ok()),
-            Err(_) => None,
-        },
-        None => None,
-    };
-
-    // 目标已完整存在：幂等跳过下载。
-    if dest.exists() {
-        if let Some(expected) = expected_len {
-            if std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0) == expected {
-                tracing::info!(dest = %dest.display(), "pull target already complete");
-                return finish_pull(state, request, dest).await;
-            }
-        }
-    }
-
-    // 断点续传：从 .part 已有字节处继续。
-    let offset = part
-        .exists()
-        .then(|| std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0))
-        .unwrap_or(0);
-    let mut client_builder = reqwest::Client::builder();
-    if head_client.is_some() {
-        client_builder = client_builder.pool_idle_timeout(std::time::Duration::from_secs(90));
-    }
-    let download_client = match client_builder.build() {
-        Ok(client) => client,
-        Err(error) => return api_error(AIError::Internal, format!("http client: {error}")),
-    };
-    let mut get = download_client.get(&url);
-    if offset > 0 && expected_len.is_some() {
-        get = get.header(header::RANGE, format!("bytes={offset}-"));
-        tracing::info!(offset, "resuming pull");
-    } else if offset > 0 {
-        // 无期望大小时无法确认服务器支持 Range，保守从头下。
-        let _ = tokio::fs::remove_file(&part).await;
-    }
-
-    let response = match get.send().await {
-        Ok(response) => response,
-        Err(error) => return api_error(AIError::Internal, format!("download failed: {error}")),
-    };
-    if !response.status().is_success() {
-        return api_error(
-            AIError::ModelNotFound,
-            format!("HF returned {} for {url}", response.status()),
-        );
-    }
-    let total: Option<u64> = response
-        .headers()
-        .get(header::CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok())
-        .map(|len| len + offset);
-
-    let mut file = match (if offset > 0 && response.status() == StatusCode::PARTIAL_CONTENT {
-        tokio::fs::OpenOptions::new().append(true).open(&part).await
-    } else {
-        let _ = tokio::fs::remove_file(&part).await;
-        tokio::fs::File::create(&part).await
-    }) {
-        Ok(file) => file,
-        Err(error) => return api_error(AIError::Internal, format!("cannot open .part: {error}")),
-    };
-
-    let mut stream = response.bytes_stream();
-    let mut downloaded = offset;
-    let mut last_report = downloaded;
-    use futures::StreamExt;
-    use tokio::io::AsyncWriteExt;
-    while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(bytes) => {
-                if let Err(error) = file.write_all(&bytes).await {
-                    return api_error(AIError::Internal, format!("write failed: {error}"));
-                }
-                downloaded += bytes.len() as u64;
-                // 每 16MB 打一条进度日志，避免刷屏。
-                if downloaded - last_report >= 16 * 1024 * 1024 {
-                    tracing::info!(downloaded, total = total.unwrap_or(0), "pull progress");
-                    last_report = downloaded;
-                }
-            }
-            Err(error) => {
-                tracing::warn!(%error, "pull interrupted; .part kept for resume");
-                return api_error(
-                    AIError::Internal,
-                    format!("download interrupted at {downloaded} bytes: {error}"),
-                );
-            }
-        }
-    }
-    if let Some(total) = total {
-        if downloaded != total {
-            return api_error(
-                AIError::Internal,
-                format!("size mismatch: got {downloaded}, expected {total}"),
-            );
-        }
-    }
-    if let Err(error) = tokio::fs::rename(&part, &dest).await {
-        return api_error(AIError::Internal, format!("rename failed: {error}"));
-    }
-    tracing::info!(dest = %dest.display(), bytes = downloaded, "pull complete");
-
-    finish_pull(state, request, dest).await
+    finish_pull(state, request, model_path).await
 }
 
 /// 下载完成后的公共尾部：按类型注册并加载。
 async fn finish_pull(state: AppState, request: pull::PullRequest, dest: PathBuf) -> Response {
-    let id = request.id.clone().unwrap_or_else(|| {
-        dest.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("pulled-model")
-            .to_string()
-    });
+    let id = request
+        .id
+        .clone()
+        .unwrap_or_else(|| default_model_id(&dest));
+    if request.auto_load == Some(false) {
+        return Json(json!({
+            "id": id,
+            "state": "downloaded",
+            "path": dest,
+        }))
+        .into_response();
+    }
     let load_request = LoadModelRequest {
         path: dest.to_string_lossy().into_owned(),
         id: Some(id),
         name: None,
         model_type: Some(request.model_type.clone()),
-        provider: None,
+        provider: request.provider.clone(),
         context_length: None,
         keep_alive: None,
     };
@@ -1076,6 +961,14 @@ mod tests {
         );
         assert_eq!(recursive_path_size(&path).unwrap(), 6);
         std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn default_model_id_removes_only_the_last_file_extension() {
+        let path = std::env::temp_dir().join("whisper.large-v3.q5_0.bin");
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(default_model_id(&path), "whisper.large-v3.q5_0");
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
