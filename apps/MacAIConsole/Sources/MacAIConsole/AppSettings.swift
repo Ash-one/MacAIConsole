@@ -1,11 +1,30 @@
 import Foundation
 
+enum ProxyMode: String, CaseIterable, Identifiable {
+    case system
+    case disabled
+    case manual
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .system: "系统代理"
+        case .disabled: "不使用代理"
+        case .manual: "手动设置"
+        }
+    }
+}
+
 enum AppSettings {
     static let aiworkdPathKey = "aiworkdPath"
     static let autoStartKey = "autoStartDaemon"
     static let memoryBudgetKey = "memoryBudget"
     static let logLevelKey = "logLevel"
     static let qwen3ASR06BEnabledKey = "qwen3ASR06BEnabled"
+    static let proxyModeKey = "proxyMode"
+    static let httpProxyKey = "httpProxy"
+    static let httpsProxyKey = "httpsProxy"
 
     static var aiworkdPath: String? {
         let value = UserDefaults.standard.string(forKey: aiworkdPathKey)?
@@ -32,8 +51,37 @@ enum AppSettings {
         qwen3ASR06BEnabled(in: .standard)
     }
 
+    static var proxyMode: ProxyMode {
+        proxyMode(in: .standard)
+    }
+
+    static var httpProxy: String? {
+        normalizedProxyURL(UserDefaults.standard.string(forKey: httpProxyKey) ?? "")
+    }
+
+    static var httpsProxy: String? {
+        normalizedProxyURL(UserDefaults.standard.string(forKey: httpsProxyKey) ?? "")
+    }
+
     static func qwen3ASR06BEnabled(in defaults: UserDefaults) -> Bool {
         defaults.object(forKey: qwen3ASR06BEnabledKey) as? Bool ?? false
+    }
+
+    static func proxyMode(in defaults: UserDefaults) -> ProxyMode {
+        let rawValue = defaults.string(forKey: proxyModeKey) ?? ProxyMode.system.rawValue
+        return ProxyMode(rawValue: rawValue) ?? .system
+    }
+
+    static func normalizedProxyURL(_ text: String) -> String? {
+        var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        if !value.contains("://") {
+            value = "http://\(value)"
+        }
+        guard let components = URLComponents(string: value),
+              ["http", "https"].contains(components.scheme?.lowercased()),
+              components.host?.isEmpty == false else { return nil }
+        return components.string
     }
 
     /// 支持 B / K / M / G / T 后缀；无后缀按字节解析。

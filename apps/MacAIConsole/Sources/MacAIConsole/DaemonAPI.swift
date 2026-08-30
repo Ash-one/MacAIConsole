@@ -91,11 +91,10 @@ struct ModelEntry: Decodable, Identifiable, Hashable {
         case path
     }
 
-    /// 原始 ID = 注册来源文件名（去扩展名）。与改名无关，始终可恢复。
+    /// 原始 ID：文件去掉最后扩展名，目录保留完整名称。与改名无关。
     var originalID: String? {
         guard let path else { return nil }
-        let name = (path as NSString).lastPathComponent
-        return (name as NSString).deletingPathExtension
+        return ModelRepository.defaultModelID(forPath: path)
     }
 }
 
@@ -450,15 +449,36 @@ struct DaemonAPI {
         return try JSONDecoder().decode(InferenceTaskDetail.self, from: data)
     }
 
-    /// POST /api/models/load —— 注册并加载模型（llm→llama.cpp/.gguf，stt→whisper.cpp/.bin）
-    func registerAndLoad(path: String, id: String?, name: String?, contextLength: Int?, keepAlive: String?, modelType: String? = nil) async throws -> LoadResponse {
+    /// POST /api/models/load —— 注册并加载模型，可为 STT 显式选择 Whisper / Qwen Provider。
+    func registerAndLoad(path: String, id: String?, name: String?, contextLength: Int?, keepAlive: String?, modelType: String? = nil, provider: String? = nil) async throws -> LoadResponse {
         var body: [String: Any] = ["path": path]
         if let id { body["id"] = id }
         if let name { body["name"] = name }
         if let modelType { body["model_type"] = modelType }
+        if let provider { body["provider"] = provider }
         if let contextLength { body["context_length"] = contextLength }
         if let keepAlive { body["keep_alive"] = keepAlive }
         let data = try await postJSON("api/models/load", body: body, timeout: 180)
+        return try JSONDecoder().decode(LoadResponse.self, from: data)
+    }
+
+    /// POST /api/models/pull —— 下载推荐模型；目录模型会按内置清单保留子目录结构。
+    func pull(_ model: RecommendedModel, autoLoad: Bool) async throws -> LoadResponse {
+        var body: [String: Any] = [
+            "repo": model.repository,
+            "model_type": model.modelType,
+            "id": model.id,
+            "provider": model.provider,
+            "auto_load": autoLoad,
+        ]
+        if let directoryName = model.directoryName {
+            body["directory"] = directoryName
+            body["files"] = model.files
+        } else {
+            body["filename"] = model.files[0]
+        }
+        // 大模型下载允许长时间运行；daemon 内部以 .part 文件支持中断续传。
+        let data = try await postJSON("api/models/pull", body: body, timeout: 7_200)
         return try JSONDecoder().decode(LoadResponse.self, from: data)
     }
 

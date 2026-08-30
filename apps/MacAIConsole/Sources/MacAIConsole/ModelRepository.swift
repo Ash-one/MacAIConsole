@@ -6,12 +6,13 @@ import Foundation
 struct RepoModel: Identifiable, Hashable {
     let fileName: String
     let modelType: String   // llm / tts / stt
+    let provider: String
     let path: String
     let sizeBytes: UInt64
 
-    /// 注册到 daemon 时使用的模型 ID：去掉扩展名的文件名。
+    /// 注册到 daemon 时使用的模型 ID：文件去掉最后扩展名，目录保留完整名称。
     var modelID: String {
-        (fileName as NSString).deletingPathExtension
+        ModelRepository.defaultModelID(forPath: path)
     }
 
     var id: String { path }
@@ -19,6 +20,16 @@ struct RepoModel: Identifiable, Hashable {
 
 enum ModelRepository {
     static let folderNames = ["llm", "stt", "tts"]
+
+    static func defaultModelID(forPath path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            return url.lastPathComponent
+        }
+        return url.deletingPathExtension().lastPathComponent
+    }
 
     static var baseURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -45,18 +56,59 @@ enum ModelRepository {
                 var isDir: ObjCBool = false
                 guard fm.fileExists(atPath: item.path, isDirectory: &isDir) else { continue }
                 if isDir.boolValue {
-                    // 文件夹形态模型（如 Kokoro：model.safetensors + voices/）。
-                    // 目前仅 TTS 使用；目录内需有 model.safetensors 才视为有效模型。
-                    guard type == "tts",
-                          fm.fileExists(atPath: item.appendingPathComponent("model.safetensors").path) else { continue }
-                    models.append(RepoModel(fileName: item.lastPathComponent, modelType: type, path: item.path, sizeBytes: 0))
+                    // 文件夹形态模型：Kokoro TTS 或 Qwen3-ASR。Provider 由目录结构与
+                    // Qwen 量化配置推导，保证从仓库手动注册时仍能选择正确后端。
+                    guard let provider = directoryProvider(at: item, type: type) else { continue }
+                    models.append(RepoModel(
+                        fileName: item.lastPathComponent,
+                        modelType: type,
+                        provider: provider,
+                        path: item.path,
+                        sizeBytes: directorySize(at: item)
+                    ))
                     continue
                 }
                 let size = (try? item.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(UInt64.init) ?? 0
-                models.append(RepoModel(fileName: item.lastPathComponent, modelType: type, path: item.path, sizeBytes: size))
+                let provider = type == "llm" ? "llama.cpp" : "whisper.cpp"
+                models.append(RepoModel(fileName: item.lastPathComponent, modelType: type, provider: provider, path: item.path, sizeBytes: size))
             }
         }
         return models
+    }
+
+    private static func directoryProvider(at url: URL, type: String) -> String? {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.appendingPathComponent("model.safetensors").path) else {
+            return nil
+        }
+        if type == "tts" { return "kokoro-mlx" }
+        guard type == "stt",
+              fm.fileExists(atPath: url.appendingPathComponent("preprocessor_config.json").path),
+              let data = try? Data(contentsOf: url.appendingPathComponent("config.json")),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        let quantization = (json["quantization"] as? [String: Any])
+            ?? (json["quantization_config"] as? [String: Any])
+        return (quantization?["bits"] as? NSNumber)?.intValue == 8
+            ? "qwen3-asr-mlx"
+            : "qwen3-asr"
+    }
+
+    private static func directorySize(at url: URL) -> UInt64 {
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: Array(keys),
+            options: .skipsHiddenFiles
+        ) else { return 0 }
+        var total: UInt64 = 0
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: keys),
+                  values.isRegularFile == true,
+                  let size = values.fileSize else { continue }
+            total += UInt64(size)
+        }
+        return total
     }
 
     /// 把外部模型资源拷入对应类型的文件夹。同名资源直接覆盖（视为更新）。
