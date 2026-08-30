@@ -253,3 +253,120 @@ pub struct LoadedModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_device: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::request::ChatMessage;
+
+    fn detail(kind: &str) -> TaskDetail {
+        TaskDetail {
+            id: "req".to_string(),
+            kind: kind.to_string(),
+            status: "succeeded".to_string(),
+            model: "m".to_string(),
+            provider: None,
+            started_at_ms: 1_000,
+            completed_at_ms: Some(2_500),
+            duration_ms: Some(1_500),
+            request: TaskRequestDetail::default(),
+            result: TaskResultDetail::default(),
+            request_truncated: false,
+            result_truncated: false,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn chat_preview_prefers_last_user_message() {
+        let mut d = detail("chat");
+        d.request.messages = vec![
+            ChatMessage {
+                role: "user".into(),
+                content: "第一问".into(),
+            },
+            ChatMessage {
+                role: "assistant".into(),
+                content: "回答".into(),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: "第二问".into(),
+            },
+        ];
+        assert_eq!(d.summary().input_preview, "第二问");
+
+        // 对话里没有 user 消息时回退到最后一条消息。
+        d.request.messages = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: "系统提示".into(),
+            },
+            ChatMessage {
+                role: "assistant".into(),
+                content: "回复".into(),
+            },
+        ];
+        assert_eq!(d.summary().input_preview, "回复");
+    }
+
+    #[test]
+    fn stt_and_tts_previews_use_their_own_request_fields() {
+        let mut stt = detail("stt");
+        stt.request.file_name = Some("meeting.wav".into());
+        stt.request.audio_duration_ms = Some(15_700);
+        let summary = stt.summary();
+        assert_eq!(summary.input_preview, "meeting.wav");
+        assert_eq!(summary.audio_duration_ms, Some(15_700));
+
+        let mut tts = detail("tts");
+        tts.request.input_text = Some("朗读这段话".into());
+        let summary = tts.summary();
+        assert_eq!(summary.input_preview, "朗读这段话");
+        assert_eq!(summary.audio_duration_ms, None);
+    }
+
+    #[test]
+    fn unknown_kind_preview_falls_back_to_text_then_file() {
+        // 任务列表按字符串透传 kind；未知类型不能丢预览。
+        let mut d = detail("rerank");
+        d.request.input_text = Some("候选文本".into());
+        assert_eq!(d.summary().input_preview, "候选文本");
+
+        d.request.input_text = None;
+        d.request.file_name = Some("query.txt".into());
+        assert_eq!(d.summary().input_preview, "query.txt");
+    }
+
+    #[test]
+    fn preview_truncates_by_chars_not_bytes_and_appends_ellipsis() {
+        let mut d = detail("tts");
+        // 120 个 CJK 字符：按字节截断会切出非法 UTF-8，必须按字符数截断。
+        d.request.input_text = Some("汉".repeat(120));
+        let preview = d.summary().input_preview;
+        let chars: Vec<char> = preview.chars().collect();
+        assert_eq!(chars.len(), 118);
+        assert!(chars[..117].iter().all(|&c| c == '汉'));
+        assert_eq!(chars[117], '…');
+
+        // 恰好 117 字符不追加省略号。
+        d.request.input_text = Some("汉".repeat(117));
+        assert_eq!(d.summary().input_preview, "汉".repeat(117));
+    }
+
+    #[test]
+    fn summary_carries_identity_timestamps_and_error() {
+        let mut d = detail("chat");
+        d.provider = Some("llama.cpp".into());
+        d.error = Some("worker crashed".into());
+        let summary = d.summary();
+        assert_eq!(summary.id, "req");
+        assert_eq!(summary.kind, "chat");
+        assert_eq!(summary.status, "succeeded");
+        assert_eq!(summary.provider.as_deref(), Some("llama.cpp"));
+        assert_eq!(summary.started_at_ms, 1_000);
+        assert_eq!(summary.completed_at_ms, Some(2_500));
+        assert_eq!(summary.duration_ms, Some(1_500));
+        assert_eq!(summary.error.as_deref(), Some("worker crashed"));
+    }
+}

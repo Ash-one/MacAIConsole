@@ -76,6 +76,19 @@ mod tests {
     }
 
     #[test]
+    fn keep_alive_parsing_trims_whitespace_and_rejects_malformed_values() {
+        // 来自 GUI/设置文件的值可能有首尾空白；无法解析时从宽处理为 always。
+        assert_eq!(parse_keep_alive(Some("  always  ")), None);
+        assert_eq!(parse_keep_alive(Some(" 30m ")), Some(1800));
+        assert_eq!(parse_keep_alive(Some("-1")), None);
+        assert_eq!(parse_keep_alive(Some("10s")), Some(10));
+        assert_eq!(parse_keep_alive(Some("0s")), Some(0));
+        assert_eq!(parse_keep_alive(Some("5x")), None);
+        assert_eq!(parse_keep_alive(Some("1.5h")), None);
+        assert_eq!(parse_keep_alive(Some("m")), None);
+    }
+
+    #[test]
     fn budget_is_min_of_75pct_and_ram_minus_8g() {
         // 32GB 机器：min(24G, 24G) = 24G
         let total: u64 = 32 * 1024 * 1024 * 1024;

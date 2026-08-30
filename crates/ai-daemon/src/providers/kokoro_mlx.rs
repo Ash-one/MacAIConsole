@@ -69,6 +69,16 @@ struct KokoroState {
     worker: WorkerProcess,
 }
 
+/// 音色选择顺序：请求显式指定 > 模型注册默认 > worker 内置缺省；空白视为未指定。
+fn resolve_voice(request_voice: Option<&str>, default_voice: Option<&str>) -> String {
+    request_voice
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| default_voice.map(str::to_string))
+        .unwrap_or_else(|| "zf_001".to_string())
+}
+
 #[derive(Clone)]
 struct KokoroResident {
     model_id: String,
@@ -345,6 +355,68 @@ mod tests {
             .await
             .expect("memory observation must not wait for synthesis");
     }
+
+    #[test]
+    fn voice_resolution_prefers_request_then_model_default_then_builtin() {
+        assert_eq!(resolve_voice(Some("zf_002"), Some("zf_001")), "zf_002");
+        assert_eq!(resolve_voice(Some("  zm_010  "), Some("zf_001")), "zm_010");
+        // 空白请求值视为未指定，回落到模型默认音色。
+        assert_eq!(resolve_voice(Some("   "), Some("zf_001")), "zf_001");
+        assert_eq!(resolve_voice(None, Some("zm_009")), "zm_009");
+        assert_eq!(resolve_voice(None, None), "zf_001");
+    }
+
+    fn speech_request(input: &str, format: &str, speed: f64) -> SpeechRequest {
+        SpeechRequest {
+            model: "kokoro".to_string(),
+            input: input.to_string(),
+            voice: None,
+            format: Some(format.to_string()),
+            speed: Some(speed),
+        }
+    }
+
+    #[tokio::test]
+    async fn synthesize_rejects_invalid_input_before_touching_worker_state() {
+        let provider = KokoroMlxProvider::from_env();
+        let overlong = "字".repeat(5_001);
+        let cases = [
+            ("whitespace input", speech_request("   ", "wav", 1.0)),
+            ("overlong input", speech_request(&overlong, "wav", 1.0)),
+            ("unsupported format", speech_request("你好", "mp3", 1.0)),
+            ("slow speed", speech_request("你好", "wav", 0.24)),
+            ("fast speed", speech_request("你好", "wav", 4.01)),
+        ];
+        for (label, request) in cases {
+            let error = provider
+                .synthesize(request)
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("{label} must be rejected"));
+            assert_eq!(error.kind, AIError::InvalidRequest, "{label}");
+        }
+    }
+
+    #[tokio::test]
+    async fn synthesize_at_validation_boundaries_reaches_unloaded_model_error() {
+        let provider = KokoroMlxProvider::from_env();
+        // 5000 字符、0.25 与 4.0 倍速都是合法边界；校验通过后因未加载模型而失败，
+        // 若校验误拒会得到 InvalidRequest 而不是 ProviderUnavailable。
+        let boundary = "字".repeat(5_000);
+        let cases = [
+            ("5000 chars", speech_request(&boundary, "wav", 1.0)),
+            ("speed 0.25", speech_request("你好", "wav", 0.25)),
+            ("speed 4.0", speech_request("你好", "wav", 4.0)),
+        ];
+        for (label, request) in cases {
+            let error = provider
+                .synthesize(request)
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("{label} must fail on unloaded model"));
+            assert_eq!(error.kind, AIError::ProviderUnavailable, "{label}");
+        }
+    }
 }
 
 #[async_trait]
@@ -377,13 +449,7 @@ impl TTSProvider for KokoroMlxProvider {
             ));
         }
         let default_voice_guard = self.default_voice.lock().await;
-        let voice = request
-            .voice
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .or(default_voice_guard.as_deref())
-            .unwrap_or("zf_001");
+        let voice = resolve_voice(request.voice.as_deref(), default_voice_guard.as_deref());
         let request_id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
         let payload = serde_json::json!({
             "id": request_id,

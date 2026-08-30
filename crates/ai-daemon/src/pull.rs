@@ -322,4 +322,78 @@ mod tests {
         invalid.filename = Some("model.bin".to_string());
         assert!(validate_pull_request(&invalid).is_err());
     }
+
+    fn directory_request(files: Vec<&str>, directory: &str) -> PullRequest {
+        PullRequest {
+            repo: "r".to_string(),
+            filename: None,
+            files: files.into_iter().map(str::to_string).collect(),
+            directory: Some(directory.to_string()),
+            model_type: "llm".to_string(),
+            id: None,
+            provider: None,
+            auto_load: None,
+        }
+    }
+
+    #[test]
+    fn rejects_ambiguous_or_unsafe_request_shapes() {
+        // 清单重复会触发重复下载与相互覆盖。
+        let duplicate = directory_request(vec!["a.bin", "a.bin"], "dir");
+        assert!(validate_pull_request(&duplicate).is_err());
+
+        // 目录名必须是一层文件夹名，携带子路径会让目标目录逃出仓库根。
+        let nested = directory_request(vec!["a.bin"], "a/b");
+        assert!(validate_pull_request(&nested).is_err());
+
+        // 只有 directory 而没有文件清单同样无效。
+        let no_files = directory_request(vec![], "dir");
+        assert!(validate_pull_request(&no_files).is_err());
+
+        // 目录清单内的单个文件也不能穿越。
+        let mut traversal = directory_request(vec!["../escape.bin"], "dir");
+        assert!(validate_pull_request(&traversal).is_err());
+        traversal.files = vec!["ok.bin".to_string()];
+        traversal.repo = "../repo".to_string();
+        assert!(validate_pull_request(&traversal).is_err());
+    }
+
+    #[test]
+    fn pull_target_part_naming_handles_extensionless_and_multi_dot_files() {
+        let (dest, part) = pull_target("llm", "LICENSE");
+        assert!(dest.ends_with("Models/llm/LICENSE"));
+        assert!(part.to_string_lossy().ends_with("LICENSE.part"));
+
+        let (dest, part) = pull_target("llm", "nested/model.tar.gz");
+        assert!(dest.ends_with("Models/llm/model.tar.gz"));
+        assert!(part.to_string_lossy().ends_with("model.tar.gz.part"));
+    }
+
+    #[test]
+    fn resume_offset_skips_complete_dest_and_else_resumes_from_part() {
+        let dir = std::env::temp_dir().join(format!("macai-pull-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("dest.bin");
+        let part = dir.join("dest.bin.part");
+
+        // 没有 .part 时从头下载。
+        assert_eq!(resume_offset(&part, &dest, Some(100)), 0);
+
+        // .part 已有 40 字节 → 续传偏移 40。
+        std::fs::write(&part, vec![0u8; 40]).unwrap();
+        assert_eq!(resume_offset(&part, &dest, Some(100)), 40);
+
+        // dest 已完整存在（大小匹配期望）→ 幂等重入，不续传。
+        std::fs::write(&dest, vec![0u8; 100]).unwrap();
+        assert_eq!(resume_offset(&part, &dest, Some(100)), 0);
+
+        // 无期望大小时以 dest 存在为准。
+        assert_eq!(resume_offset(&part, &dest, None), 0);
+
+        // dest 大小与期望不符（异常状态）→ 以 .part 为准继续续传。
+        std::fs::write(&dest, vec![0u8; 10]).unwrap();
+        assert_eq!(resume_offset(&part, &dest, Some(100)), 40);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

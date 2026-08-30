@@ -1,11 +1,15 @@
 import importlib.util
+import io
+import json
 import os
 import struct
 import sys
 import tempfile
+import types
 import unittest
 import wave
 from pathlib import Path
+from unittest import mock
 
 WORKER_PATH = Path(__file__).resolve().parents[1] / "qwen3_asr_mlx_worker.py"
 SPEC = importlib.util.spec_from_file_location("qwen3_asr_mlx_worker", WORKER_PATH)
@@ -109,6 +113,62 @@ class InferenceLogicTests(unittest.TestCase):
             worker.transcribe(
                 worker.LoadedModel(model=Model()), "/tmp/input.wav", None
             )
+
+
+class ServeProtocolTests(unittest.TestCase):
+    """daemon 按错误码分流 invalid_request / invalid_audio / inference_error，
+    这里在 worker 侧固化 serve() 协议帧的产生逻辑（单次失败不退出 worker）。"""
+
+    def run_serve(self, lines, loaded):
+        stdin = io.StringIO("".join(line + "\n" for line in lines))
+        stdout = io.StringIO()
+        with mock.patch.object(sys, "stdin", stdin), mock.patch.object(
+            sys, "stdout", stdout
+        ):
+            worker.serve(loaded)
+        return [json.loads(line) for line in stdout.getvalue().splitlines()]
+
+    def test_error_frames_use_documented_codes_and_keep_worker_alive(self):
+        loaded = worker.LoadedModel(model=None)
+        frames = self.run_serve(
+            [
+                "not json",
+                '{"id": "x"}',
+                '{"id": 1}',
+                '{"id": 2, "audio": "/nonexistent.wav", "language": 3}',
+            ],
+            loaded,
+        )
+        self.assertIsNone(frames[0]["id"])
+        self.assertEqual(frames[0]["error"]["code"], "invalid_request")
+        self.assertEqual(frames[1]["error"]["code"], "invalid_request")
+        self.assertEqual(frames[2]["error"]["code"], "invalid_audio")
+        # language 非字符串在打开音频文件之前就被拒绝。
+        self.assertEqual(frames[3]["error"]["code"], "invalid_request")
+
+    def test_success_frame_round_trips_transcription(self):
+        class Result:
+            text = "  hello  "
+            language = ""
+
+        class Model:
+            def generate(self, *_args, **_kwargs):
+                return Result()
+
+        with tempfile.TemporaryDirectory() as directory:
+            wav = os.path.join(directory, "in.wav")
+            write_wav(wav)
+            loaded = worker.LoadedModel(model=Model(), device="cpu")
+            request = json.dumps({"id": 5, "audio": wav, "language": "English"})
+            frames = self.run_serve([request], loaded)
+
+        self.assertEqual(len(frames), 1)
+        frame = frames[0]
+        self.assertTrue(frame["ok"])
+        self.assertEqual(frame["id"], 5)
+        self.assertEqual(frame["text"], "hello")
+        self.assertEqual(frame["language"], "English")
+        self.assertEqual(frame["device"], "cpu")
 
 
 if __name__ == "__main__":
