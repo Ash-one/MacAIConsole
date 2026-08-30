@@ -60,7 +60,7 @@ class InferenceLogicTests(unittest.TestCase):
         self.assertEqual(text, "你好，世界。")
         self.assertEqual(language, "Chinese")
         self.assertEqual(model.audio, "/tmp/input.wav")
-        self.assertEqual(model.kwargs["max_tokens"], 256)
+        self.assertEqual(model.kwargs["max_tokens"], 8192)
         self.assertEqual(model.kwargs["batch_size"], 1)
         self.assertEqual(model.kwargs["temperature"], 0.0)
         self.assertEqual(model.kwargs["language"], "Chinese")
