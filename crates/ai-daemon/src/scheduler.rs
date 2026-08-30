@@ -87,17 +87,4 @@ mod tests {
         assert_eq!(parse_keep_alive(Some("1.5h")), None);
         assert_eq!(parse_keep_alive(Some("m")), None);
     }
-
-    #[test]
-    fn budget_is_min_of_75pct_and_ram_minus_8g() {
-        // 32GB 机器：min(24G, 24G) = 24G
-        let total: u64 = 32 * 1024 * 1024 * 1024;
-        let expected = (total * 3 / 4).min(total - 8 * 1024 * 1024 * 1024);
-        assert_eq!(expected, 24 * 1024 * 1024 * 1024);
-        // 8GB 机器：min(6G, 0) = 0 —— 预算被钳到 0，任何模型都放不下，
-        // 由调用方决定是否豁免（小模型仍应可运行，见 runtime 的豁免逻辑）。
-        let small: u64 = 8 * 1024 * 1024 * 1024;
-        let expected_small = (small * 3 / 4).min(small.saturating_sub(8 * 1024 * 1024 * 1024));
-        assert_eq!(expected_small, 0);
-    }
 }

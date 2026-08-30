@@ -3076,3 +3076,65 @@ provider（`crates/ai-daemon/src/audio.rs`，symphonia 纯 Rust 解码）。CLI
   任务详情 `audio_duration_ms` 全部有值；垃圾文件返回 400
   `invalid_request` 而非 `backend_crashed`；`macai transcribe` 对 m4a
   成功、对垃圾文件转发 daemon 的 400。
+
+---
+
+# 71. Decision: 测试套件精简与 keep_alive 解析 owner 唯一化
+
+## 问题
+
+测试随功能增长积累了若干零防护力或重复固化的条目，维护成本为正、回归防护为零：
+
+* ai-core 的 `ModelSpec::keep_alive_secs` 与 `parse_duration` 没有任何生产
+  消费方（daemon 实际使用 scheduler 的 `parse_keep_alive`），两个单元测试在
+  保护死代码；仓库同时存在两套 keep_alive 解析器，语义 owner 不唯一。
+* scheduler 的内存预算测试在测试内用与生产代码相同的公式重算期望值，从不
+  调用 `memory_budget()`，改坏生产公式时测试照常通过（自证）。
+* macos-say 的测试断言宿主机存在 `say`，是环境断言而非逻辑断言，CI runner
+  变化会误报。
+* 同一契约被双份固化：kokoro 音色清单在 DaemonAPIRequestTests 与
+  RecommendationPullTests 各固化一份；`wav_duration_ms` 的测试写在 HTTP 层
+  模块（daemon main.rs）且与 audio.rs 的覆盖重复。
+* 若干测试镜像声明或系统框架：CLI help 文本包含性检查与 chat 参数解析镜像
+  clap derive 声明（`debug_assert` 已覆盖结构有效性）；UserDefaults 写入
+  读出往返测的是系统框架；Runtime 任务计数测试只覆盖两个薄委托；
+  qwen3-asr feature flag 的表格测试镜像 `matches!` 字面量——flag 缺省开启
+  的行为已由 `exposes_all_provider_descriptors`（注册全量集合断言）端到端兜住。
+
+## 决策
+
+删除上述死代码与测试。keep_alive 字符串解析的唯一 owner 是
+`ai-daemon::scheduler::parse_keep_alive`；ai-core 不再暴露
+`keep_alive_secs` / `parse_duration`。kokoro 音色清单与下载体积口径的唯一
+固化点是 DaemonAPIRequestTests 的 pull payload 测试（文件数 105 + 抽样 +
+`estimatedSizeBytes`）；`wav_duration_ms` 的垃圾输入分支并入 audio.rs 的
+时长指标测试。保留 CLI 的 `clap_definition_is_valid`、`--help` 退出行为、
+remove/rename 的 HTTP 契约测试，以及 AppSettings 的缺省值契约测试。
+
+## 被放弃的方案
+
+* 为内存预算公式提取纯函数 `budget_for(total)` 再测：会引入无生产消费方的
+  测试专用 API，与删除 `keep_alive_secs` 的理由自相矛盾；公式本身已由
+  handoff §23 与 scheduler 模块文档承载。
+* 在 RecommendationPullTests 保留具名/编号音色全集合枚举：文件数（105）
+  加抽样断言已是充分的 tripwire，全集合枚举与 count 断言重复。
+
+## 后果与已知边界
+
+* keep_alive 语义（单位后缀、从宽处理、缺省 always）的回归防护完全依赖
+  `parse_keep_alive` 的现有测试；ai-core 层不再有独立解析路径。
+* macos-say 在宿主机缺 `say` 时的行为不再有测试观察点，由 `status()` 的
+  `available=false` 运行时路径兜底。
+* 音色清单增删文件时只需同步 pull payload 测试的 count 断言，单一修改点。
+* CLI help 文本与 chat 参数声明不再有测试观察点；结构有效性由
+  `debug_assert` 兜底。
+
+## 验证
+
+* `cargo fmt --all -- --check` 通过。
+* `cargo test --workspace` 通过：Rust 测试 83 → 74（macai 6→4、ai_core
+  10→8、aiworkd 67→62）。
+* `swift test --enable-xctest`（apps/MacAIConsole）通过：26 → 24。
+* 负向搜索：`keep_alive_secs`、`parse_duration` 及全部被删测试名在
+  crates/apps/scripts 零命中；`qwen3_asr_enabled_value` 与
+  `MacOSSayProvider::available()` 的生产引用保持不变。

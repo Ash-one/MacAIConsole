@@ -25,36 +25,8 @@ pub struct ModelSpec {
     pub default_voice: Option<String>,
 }
 
-impl ModelSpec {
-    /// 解析后的 keep_alive 时长（秒）。None 表示 always（不自动卸载）。
-    pub fn keep_alive_secs(&self) -> Option<u64> {
-        match self.keep_alive.as_deref() {
-            None | Some("always") => None,
-            Some("0") => Some(0),
-            Some(s) => parse_duration(s),
-        }
-    }
-}
-
-/// 解析 "5m" / "30s" / "2h" 形式的时长字符串。
-pub fn parse_duration(s: &str) -> Option<u64> {
-    let s = s.trim();
-    if let Some(v) = s.strip_suffix("ms") {
-        return v.parse::<u64>().ok().map(|n| n / 1000);
-    }
-    if let Some(v) = s.strip_suffix('s') {
-        return v.parse::<u64>().ok();
-    }
-    if let Some(v) = s.strip_suffix('m') {
-        return v.parse::<u64>().ok().map(|n| n * 60);
-    }
-    if let Some(v) = s.strip_suffix('h') {
-        return v.parse::<u64>().ok().map(|n| n * 3600);
-    }
-    s.parse::<u64>().ok()
-}
-
-/// 模型生命周期状态（文档 §22）。
+/// 模型生命周期状态（文档 §22）。keep_alive 字符串解析的唯一 owner 是
+/// ai-daemon::scheduler::parse_keep_alive（handoff §71）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModelState {
     Unloaded,
@@ -77,39 +49,5 @@ impl ModelState {
             ModelState::Unloading => "unloading",
             ModelState::Failed => "failed",
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_supported_durations() {
-        assert_eq!(parse_duration("30s"), Some(30));
-        assert_eq!(parse_duration("5m"), Some(300));
-        assert_eq!(parse_duration("2h"), Some(7200));
-        assert_eq!(parse_duration("1500ms"), Some(1));
-        assert_eq!(parse_duration("invalid"), None);
-    }
-
-    #[test]
-    fn always_keep_alive_has_no_deadline() {
-        let spec = ModelSpec {
-            id: "mock".to_string(),
-            name: "Mock".to_string(),
-            model_type: "llm".to_string(),
-            provider: "mock".to_string(),
-            source: None,
-            path: None,
-            format: Some("mock".to_string()),
-            size_bytes: None,
-            memory_estimate: Some(0),
-            keep_alive: Some("always".to_string()),
-            context_length: Some(4096),
-            default_voice: None,
-        };
-
-        assert_eq!(spec.keep_alive_secs(), None);
     }
 }

@@ -23,17 +23,6 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertFalse(AppSettings.qwen3ASR06BEnabled(in: defaults))
     }
 
-    func testQwen3ASR06BPreferenceLoadsSavedValue() {
-        defaults.set(true, forKey: AppSettings.qwen3ASR06BEnabledKey)
-
-        let reloadedDefaults = UserDefaults(suiteName: suiteName)!
-        XCTAssertTrue(AppSettings.qwen3ASR06BEnabled(in: reloadedDefaults))
-
-        reloadedDefaults.set(false, forKey: AppSettings.qwen3ASR06BEnabledKey)
-        let secondReload = UserDefaults(suiteName: suiteName)!
-        XCTAssertFalse(AppSettings.qwen3ASR06BEnabled(in: secondReload))
-    }
-
     func testProxyDefaultsToSystemAndLoadsSavedMode() {
         XCTAssertEqual(AppSettings.proxyMode(in: defaults), .system)
         defaults.set(ProxyMode.manual.rawValue, forKey: AppSettings.proxyModeKey)

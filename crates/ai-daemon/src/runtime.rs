@@ -953,25 +953,6 @@ mod tests {
         assert!(!status_confirms_resident(&worker, "model-a"));
     }
 
-    #[test]
-    fn qwen3_asr_feature_flag_defaults_on_and_parses_explicit_values() {
-        assert!(qwen3_asr_enabled_value(None));
-        assert!(qwen3_asr_enabled_value(Some("true")));
-        assert!(qwen3_asr_enabled_value(Some(" 1 ")));
-        assert!(!qwen3_asr_enabled_value(Some("false")));
-        assert!(!qwen3_asr_enabled_value(Some("0")));
-    }
-
-    #[tokio::test]
-    async fn task_registry_tracks_and_releases_active_request() {
-        let runtime = Arc::new(Runtime::new());
-        assert_eq!(runtime.runtime_info("test").await.active_requests, 0);
-        let task = runtime.start_task("chat", "mock", TaskRequestDetail::default());
-        assert_eq!(runtime.runtime_info("test").await.active_requests, 1);
-        drop(task);
-        assert_eq!(runtime.runtime_info("test").await.active_requests, 0);
-    }
-
     #[tokio::test]
     async fn audio_paths_finalize_tasks_when_model_lookup_fails() {
         let runtime = Arc::new(Runtime::new());

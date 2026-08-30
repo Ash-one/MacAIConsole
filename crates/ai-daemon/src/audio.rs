@@ -244,10 +244,12 @@ mod tests {
     }
 
     #[test]
-    fn normalized_output_exposes_duration_metric() {
+    fn normalized_output_exposes_duration_metric_and_rejects_garbage() {
         let input = raw_pcm_wav(&vec![0i16; 8_000], 8_000, 1);
         let output = normalize_to_pcm_wav(input, None).unwrap();
         assert_eq!(wav_duration_ms(&output), Some(1_000));
+        // 非 WAV 输入没有可解析的时长。
+        assert_eq!(wav_duration_ms(b"not a wav"), None);
     }
 
     #[test]
