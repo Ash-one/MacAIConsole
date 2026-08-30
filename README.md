@@ -13,7 +13,8 @@ MacAI 是面向 Apple Silicon 的本地 AI Runtime。Rust daemon `aiworkd` 统�
 ```text
 macai CLI ────────────┐
 MacAIConsole (SwiftUI) ├── HTTP ──> aiworkd ──┬── llama.cpp ──> GGUF / Metal
-OpenAI-compatible SDK ┘                      ├── whisper.cpp ─> Core ML / Metal
+OpenAI-compatible SDK ┘                      ├── mlx-lm ──────> MLX / Metal
+                                             ├── whisper.cpp ─> Core ML / Metal
                                              └── Kokoro MLX ──> local TTS
 
                                              ├── SQLite model registry
@@ -44,6 +45,7 @@ OpenAI-compatible SDK ┘                      ├── whisper.cpp ─> Core M
 | 能力 | Provider | 模型/输入 | 加速 |
 | --- | --- | --- | --- |
 | LLM | llama.cpp | GGUF | Metal / Accelerate |
+| LLM | mlx-lm | MLX 模型目录（safetensors） | MLX / Metal |
 | STT | whisper.cpp | `.bin` + PCM WAV | Core ML 优先，Metal 回退 |
 | TTS | Kokoro MLX | Kokoro 模型目录 | MLX / Metal GPU |
 
@@ -249,6 +251,28 @@ python3.12 -m venv .build/kokoro-venv
 ```
 
 也可以通过 `AIWORK_KOKORO_PYTHON` 指向其他 Python 环境。
+
+### 7. 准备 MLX-LM
+
+创建 Python 环境（也可在 MacAIConsole「设置 → Python 运行环境」中一键安装）：
+
+```bash
+python3.12 -m venv .build/mlx-lm-venv
+.build/mlx-lm-venv/bin/pip install "mlx-lm==0.31.3"
+```
+
+推荐模型（Qwen3 8B · MLX 4-bit）可在 MacAIConsole 模型页一键下载；或手动把
+MLX 格式模型目录（含 `config.json` 与 safetensors 权重，例如
+[mlx-community/Qwen3-8B-4bit](https://huggingface.co/mlx-community/Qwen3-8B-4bit)）放入：
+
+```text
+~/Library/Application Support/MacAIConsole/Models/llm/
+```
+
+注册时显式选择 provider `mlx-lm`（GGUF 与 MLX 格式互不通用：GGUF 走
+llama.cpp，MLX 走 mlx-lm）。可通过 `AIWORK_MLX_LM_PYTHON` 指向其他 Python
+环境；加载与推理超时分别由 `AIWORK_MLX_LM_LOAD_TIMEOUT_SECS` 与
+`AIWORK_MLX_LM_INFERENCE_TIMEOUT_SECS` 控制。
 
 ## MacAIConsole
 
@@ -579,8 +603,8 @@ handoff.md         # 目标架构与长期路线
 
 当前 handoff 中仍未完成的主要工作：
 
-- MLX-LM Provider 与 MLX-native ASR
-- LLM / STT / TTS benchmark 框架
+- MLX-native ASR（mlx-whisper / parakeet-mlx）
+- LLM / STT / TTS benchmark 框架（MLX vs llama.cpp 对比实验）
 - per-device 请求队列、独立 queue/execution deadline、持久任务和事件回放
 - GUI Chat、Speech 和 Hugging Face 下载界面
 - VAD、streaming STT 和 streaming TTS

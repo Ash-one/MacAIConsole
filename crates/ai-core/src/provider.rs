@@ -174,6 +174,7 @@ pub trait ChatProvider: Provider {
                     finish_reason: c.finish_reason,
                 })
                 .collect(),
+            usage: None,
         };
         Ok(Box::pin(futures::stream::once(async { Ok(chunk) })))
     }

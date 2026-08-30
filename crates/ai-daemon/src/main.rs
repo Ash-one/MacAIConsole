@@ -363,6 +363,7 @@ async fn register_and_load_model(
     let requested_provider = request.provider.as_deref().map(str::trim);
     let provider = match (model_type, requested_provider) {
         ("llm", None | Some("llama.cpp")) => "llama.cpp",
+        ("llm", Some("mlx-lm")) => "mlx-lm",
         ("stt", None | Some("whisper.cpp")) => "whisper.cpp",
         ("stt", Some("qwen3-asr")) => "qwen3-asr",
         ("stt", Some("qwen3-asr-mlx")) => "qwen3-asr-mlx",
@@ -408,6 +409,11 @@ async fn register_and_load_model(
                 ),
             );
         }
+        "mlx-lm" => {
+            if let Err(error) = providers::mlx_lm::validate_model_dir(&path) {
+                return provider_error(error);
+            }
+        }
         "qwen3-asr" => {
             if let Err(error) = providers::qwen3_asr::validate_model_dir(&path) {
                 return provider_error(error);
@@ -439,6 +445,8 @@ async fn register_and_load_model(
     };
     let (format, keep_alive_default, memory_estimate) = match provider {
         "llama.cpp" => (Some("gguf"), Some("5m"), Some(size_bytes)),
+        // MLX 权重体积即内存占用主体；real RSS 由 worker 上报。
+        "mlx-lm" => (Some("mlx"), Some("5m"), Some(size_bytes)),
         "whisper.cpp" => (Some("bin"), Some("always"), Some(size_bytes)),
         // 6 GiB is MacAI's initial scheduling estimate; real RSS is reported from the worker.
         "qwen3-asr" => (
@@ -1125,5 +1133,26 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// 回归：卸载已加载模型时，unregister / rename 曾在 registry 读守卫内
+    /// 触发 set_state 写锁互等（tokio RwLock 写优先）导致请求永久挂起。
+    /// 用超时兜底，回归时快速失败而不是卡死测试套件。
+    #[tokio::test]
+    async fn unregister_loaded_model_completes_without_deadlock() {
+        let runtime = Arc::new(Runtime::new());
+        runtime.register(mock_model()).await;
+        runtime.load_model("mock-task").await.unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            unregister_model(
+                State(app_state(runtime.clone())),
+                AxumPath("mock-task".to_string()),
+            ),
+        )
+        .await
+        .expect("unregister of a loaded model must not deadlock");
+        assert_eq!(result.status(), StatusCode::OK);
+        assert!(runtime.get_model("mock-task").await.is_none());
     }
 }

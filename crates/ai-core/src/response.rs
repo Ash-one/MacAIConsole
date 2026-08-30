@@ -58,6 +58,10 @@ pub struct ChatChunk {
     pub created: u64,
     pub model: String,
     pub choices: Vec<ChatChunkChoice>,
+    /// 终帧的用量统计（OpenAI stream_options.include_usage 语义）；
+    /// 其余 chunk 恒为 None 且不出现在 wire 上。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ChatUsage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

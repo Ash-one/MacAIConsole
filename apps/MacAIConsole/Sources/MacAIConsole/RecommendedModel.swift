@@ -95,6 +95,27 @@ struct RecommendedModel: Identifiable, Hashable {
 
     static let builtIns: [RecommendedModel] = [
         RecommendedModel(
+            id: "qwen3-8b-mlx-4bit",
+            title: "Qwen3 8B · MLX 4-bit",
+            summary: "本地对话 LLM，Apple Silicon Metal 加速，使用 mlx-lm",
+            modelType: "llm",
+            provider: "mlx-lm",
+            repository: "mlx-community/Qwen3-8B-4bit",
+            files: [
+                "added_tokens.json",
+                "config.json",
+                "merges.txt",
+                "model.safetensors",
+                "model.safetensors.index.json",
+                "special_tokens_map.json",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "vocab.json",
+            ],
+            directoryName: "qwen3-8b-mlx-4bit",
+            estimatedSizeBytes: 4_623_782_544
+        ),
+        RecommendedModel(
             id: "qwen3-asr-mlx-8bit",
             title: "Qwen3-ASR 0.6B · MLX 8-bit",
             summary: "中文优先的高质量语音识别，Apple Silicon Metal 加速",
