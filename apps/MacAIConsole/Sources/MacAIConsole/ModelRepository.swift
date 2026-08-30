@@ -43,11 +43,9 @@ enum ModelRepository {
 
     /// 扫描仓库。目录不存在时自动创建三个分类文件夹。
     static func scan() -> [RepoModel] {
-        let fm = FileManager.default
-        try? fm.createDirectory(at: folder(for: "llm"), withIntermediateDirectories: true)
-        try? fm.createDirectory(at: folder(for: "tts"), withIntermediateDirectories: true)
-        try? fm.createDirectory(at: folder(for: "stt"), withIntermediateDirectories: true)
+        ensureFolders()
 
+        let fm = FileManager.default
         var models: [RepoModel] = []
         for type in folderNames {
             let url = folder(for: type)
@@ -74,6 +72,21 @@ enum ModelRepository {
             }
         }
         return models
+    }
+
+    /// 确保仓库根目录与 llm/stt/tts 子目录存在。只做 mkdir，不枚举文件。
+    static func ensureFolders() {
+        let fm = FileManager.default
+        for type in folderNames {
+            try? fm.createDirectory(at: folder(for: type), withIntermediateDirectories: true)
+        }
+    }
+
+    /// scan 的后台版本：递归枚举与大小统计离开主线程，模型目录大时避免卡住界面。
+    static func scanInBackground() async -> [RepoModel] {
+        await Task.detached(priority: .userInitiated) {
+            scan()
+        }.value
     }
 
     private static func directoryProvider(at url: URL, type: String) -> String? {

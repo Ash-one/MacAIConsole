@@ -7,8 +7,8 @@ MacAIConsole 是 MacAI 的原生 macOS 控制台。应用只通过本地 HTTP AP
 - 运行状态：版本、PID、内存预算、系统内存压力、活跃请求和已加载模型
 - 任务：当前运行及最近完成的 Chat / STT / TTS 请求，支持查看输入、输出、耗时和错误
 - 模型管理：按 LLM / STT / TTS 分组显示模型仓库和注册状态，支持加载、卸载、改名与删除注册
-- 日志：查看 GUI 与 daemon 最近日志，默认显示 Info，可启用 Debug，并按日志级别着色
-- 设置：daemon 路径、自动启动、内存预算、Qwen3-ASR（MLX 8-bit 优先）开关和日志目录
+- 日志：查看 GUI 与 daemon 最近日志，默认显示 Info，可启用 Debug，并按日志级别着色；"在访达中显示"可打开日志目录
+- 设置：自动拉起守护进程开关、内存预算、Qwen3-ASR（MLX 8-bit 优先）开关和网络代理
 
 运行状态中的模型条目可进入详细设置页，调整 keep-alive、LLM 上下文长度和 TTS 默认音色。
 
@@ -60,7 +60,7 @@ swift run
 http://127.0.0.1:11435
 ```
 
-GUI 可以连接已经运行的 daemon。需要由 GUI 自动启动时，请在设置中选择 `target/release/aiworkd` 的实际路径。
+GUI 可以连接已经运行的 daemon。GUI 自动启动时按顺序探测 `AIWORKD_PATH` 环境变量、仓库 `target/release/aiworkd` 与 `target/debug/aiworkd`。
 
 主要管理 endpoints：
 

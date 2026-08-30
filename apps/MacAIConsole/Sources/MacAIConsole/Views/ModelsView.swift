@@ -33,25 +33,27 @@ struct ModelsView: View {
                 .disabled(controller.phase != .online)
 
                 Button {
-                    rescanRepo()
-                    Task { try? await controller.refresh() }
+                    Task {
+                        await rescanRepo()
+                        try? await controller.refresh()
+                    }
                 } label: {
                     Label("刷新", systemImage: "arrow.clockwise")
                 }
             }
         }
-        .sheet(isPresented: $showingAddSheet, onDismiss: { rescanRepo() }) {
+        .sheet(isPresented: $showingAddSheet, onDismiss: { Task { await rescanRepo() } }) {
             AddModelSheet()
         }
         .task {
             controller.bootstrapIfNeeded()
-            rescanRepo()
+            await rescanRepo()
         }
     }
 
-    /// 每次都重新扫描仓库目录：放入文件的即刻可见。
-    private func rescanRepo() {
-        repoModels = ModelRepository.scan()
+    /// 每次都重新扫描仓库目录：放入文件的即刻可见。扫描在后台执行，结果回主线程赋值。
+    private func rescanRepo() async {
+        repoModels = await ModelRepository.scanInBackground()
     }
 
     private var loadedIDs: Set<String> {
@@ -118,7 +120,7 @@ struct ModelsView: View {
                     ) {
                         Task {
                             if await controller.installRecommended(model) {
-                                rescanRepo()
+                                await rescanRepo()
                             }
                         }
                     }
@@ -173,38 +175,6 @@ struct ModelsView: View {
             }
         ) {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 6) {
-                    Text(ModelRepository.baseURL.path)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(Theme.inset)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .strokeBorder(Theme.hairline)
-                        )
-                        .help(ModelRepository.baseURL.path)
-                    Button {
-                        let pasteboard = NSPasteboard.general
-                        pasteboard.clearContents()
-                        pasteboard.setString(ModelRepository.baseURL.path, forType: .string)
-                    } label: {
-                        Image(systemName: "doc.on.doc")
-                            .font(.caption2)
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.tertiary)
-                    .help("复制完整路径")
-                    .accessibilityLabel("复制完整路径")
-                    Spacer(minLength: 0)
-                }
-
                 if repoModels.isEmpty {
                     VStack(spacing: 8) {
                         Text("仓库为空——把 .gguf（llm）或 .bin（stt）文件放进对应文件夹，或点「添加模型」")
@@ -246,7 +216,9 @@ struct ModelsView: View {
     }
 
     private func openModelRepository() {
-        _ = ModelRepository.scan()
+        // 这里只需要目录存在（NSWorkspace.open 对缺失路径会失败），用轻量的 ensureFolders，
+        // 不必为建目录做一次全量扫描。
+        ModelRepository.ensureFolders()
         NSWorkspace.shared.open(ModelRepository.baseURL)
     }
 }

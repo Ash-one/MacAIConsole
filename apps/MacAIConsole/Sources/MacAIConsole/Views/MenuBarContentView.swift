@@ -84,11 +84,6 @@ struct MenuBarContentView: View {
 
             Divider()
 
-            SettingsLink {
-                Label("设置…", systemImage: "gearshape")
-            }
-            .keyboardShortcut(",")
-
             Button("退出 MacAIConsole") {
                 NSApp.terminate(nil)
             }

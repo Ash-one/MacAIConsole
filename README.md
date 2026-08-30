@@ -263,7 +263,7 @@ open build/MacAIConsole.app
 apps/MacAIConsole/build/MacAIConsole.app
 ```
 
-GUI 可以连接已经运行的 `aiworkd`。如需由 GUI 自动启动 daemon，请在设置中选择 `target/release/aiworkd` 的实际路径。
+GUI 可以连接已经运行的 `aiworkd`。GUI 自动启动 daemon 时按顺序探测 `AIWORKD_PATH` 环境变量、仓库 `target/release/aiworkd` 与 `target/debug/aiworkd`。
 
 ## HTTP API
 

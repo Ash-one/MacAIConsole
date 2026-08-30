@@ -2,12 +2,14 @@ import SwiftUI
 
 @main
 struct MacAIConsoleApp: App {
+    @State private var router = AppRouter()
     private let controller = DaemonController()
 
     var body: some Scene {
         WindowGroup(id: "main") {
             RootView()
                 .environment(controller)
+                .environment(router)
                 .frame(minWidth: 780, minHeight: 520)
                 .tint(Theme.accent)
                 .preferredColorScheme(.dark)
@@ -23,13 +25,6 @@ struct MacAIConsoleApp: App {
             Image(systemName: menuBarIcon)
         }
         .menuBarExtraStyle(.window)
-
-        Settings {
-            SettingsView()
-                .environment(controller)
-                .tint(Theme.accent)
-                .preferredColorScheme(.dark)
-        }
     }
 
     private var menuBarIcon: String {
