@@ -103,9 +103,10 @@ class FakeSampleUtils:
 
 
 class Response:
-    def __init__(self, text, generation_tokens):
+    def __init__(self, text, generation_tokens, finish_reason=None):
         self.text = text
         self.generation_tokens = generation_tokens
+        self.finish_reason = finish_reason
 
 
 class ServeProtocolTests(unittest.TestCase):
@@ -138,7 +139,20 @@ class ServeProtocolTests(unittest.TestCase):
         self.assertEqual(frames[2]["prompt_tokens"], 3)
         self.assertEqual(frames[2]["tokens"], 2)
         self.assertEqual(frames[2]["device"], "metal")
+        # fake 响应未携带 finish_reason 时按自然结束处理。
+        self.assertEqual(frames[2]["finish_reason"], "stop")
         self.assertEqual(fake_mlx.observed, {"prompt": [101, 7, 9], "max_tokens": 8, "sampler": {"temp": 0.0}})
+
+    def test_max_tokens_truncation_reports_length_finish_reason(self):
+        fake_mlx = FakeMlxLm([Response("蓝", 1, finish_reason="length")])
+        loaded = worker.LoadedModel(model=object(), tokenizer=FakeTokenizer(), device="metal")
+        request = json.dumps({"id": 6, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1})
+        frames = self.run_serve([request], loaded, fake_mlx)
+
+        self.assertEqual(len(frames), 2)
+        self.assertEqual(frames[0], {"id": 6, "delta": "蓝"})
+        self.assertTrue(frames[1]["ok"])
+        self.assertEqual(frames[1]["finish_reason"], "length")
 
     def test_error_frames_use_documented_codes_and_keep_worker_alive(self):
         fake_mlx = FakeMlxLm([])

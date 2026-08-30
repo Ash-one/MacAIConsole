@@ -53,7 +53,12 @@ def delta_frame(request_id: Any, text: str) -> dict[str, Any]:
 
 
 def final_frame(
-    request_id: Any, text: str, prompt_tokens: int, tokens: int, device: str
+    request_id: Any,
+    text: str,
+    prompt_tokens: int,
+    tokens: int,
+    device: str,
+    finish_reason: str,
 ) -> dict[str, Any]:
     return {
         "id": request_id,
@@ -62,6 +67,7 @@ def final_frame(
         "prompt_tokens": prompt_tokens,
         "tokens": tokens,
         "device": device,
+        "finish_reason": finish_reason,
     }
 
 
@@ -183,6 +189,7 @@ def serve(loaded: LoadedModel) -> None:
             responses = stream_chat(loaded, prompt, max_tokens, temperature)
             emitted = ""
             generation_tokens: Optional[int] = None
+            finish_reason: Optional[str] = None
             while True:
                 response = next_response(responses)
                 if response is None:
@@ -195,13 +202,21 @@ def serve(loaded: LoadedModel) -> None:
                 count = getattr(response, "generation_tokens", None)
                 if isinstance(count, int):
                     generation_tokens = count
+                reason = getattr(response, "finish_reason", None)
+                if isinstance(reason, str):
+                    finish_reason = reason
                 print(json.dumps(delta_frame(request_id, delta), ensure_ascii=False), flush=True)
             if not emitted:
                 raise RuntimeError("model produced no output tokens")
             print(
                 json.dumps(
                     final_frame(
-                        request_id, emitted, len(prompt), generation_tokens or 0, loaded.device
+                        request_id,
+                        emitted,
+                        len(prompt),
+                        generation_tokens or 0,
+                        loaded.device,
+                        finish_reason or "stop",
                     ),
                     ensure_ascii=False,
                 ),
