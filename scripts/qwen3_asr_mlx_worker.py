@@ -69,7 +69,7 @@ def transcribe(loaded: LoadedModel, audio: str, language: Optional[str]) -> tupl
     with contextlib.redirect_stdout(sys.stderr):
         result = loaded.model.generate(
             audio,
-            max_tokens=256,
+            max_tokens=8192,
             batch_size=1,
             temperature=0.0,
             language=language,

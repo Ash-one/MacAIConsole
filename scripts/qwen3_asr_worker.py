@@ -162,7 +162,7 @@ def load_model(model_dir: str, requested_device: str) -> LoadedModel:
                     dtype=dtype,
                     device_map=device,
                     max_inference_batch_size=1,
-                    max_new_tokens=256,
+                    max_new_tokens=8192,
                 )
             return LoadedModel(model=model, device=device)
         except Exception as error:  # model/device failures are reported at readiness
