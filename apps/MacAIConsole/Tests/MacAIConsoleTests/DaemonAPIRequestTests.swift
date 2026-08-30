@@ -35,6 +35,8 @@ final class DaemonAPIRequestTests: XCTestCase {
         XCTAssertTrue(files.contains("voices/zf_001.safetensors"))
         XCTAssertTrue(files.contains("voices/zm_010.safetensors"))
         XCTAssertTrue(files.contains("voices/af_maple.safetensors"))
+        // 下载体积展示的口径也在这里固化（handoff §71：清单唯一固化点）。
+        XCTAssertEqual(kokoro.estimatedSizeBytes, 380_917_492)
     }
 
     func testPullBuildsSingleFilePayloadWithoutDirectoryFields() async throws {

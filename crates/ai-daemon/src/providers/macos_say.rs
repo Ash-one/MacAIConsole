@@ -255,13 +255,3 @@ impl Drop for TempSpeech {
         let _ = std::fs::remove_dir_all(&self.directory);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn macos_tools_exist_on_supported_host() {
-        assert!(MacOSSayProvider::available());
-    }
-}

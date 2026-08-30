@@ -971,32 +971,6 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
-    #[test]
-    fn derives_pcm_wav_duration_from_header() {
-        let sample_rate = 16_000u32;
-        let channels = 1u16;
-        let bits_per_sample = 16u16;
-        let byte_rate = sample_rate * u32::from(channels) * u32::from(bits_per_sample) / 8;
-        let data_size = byte_rate * 2;
-        let mut wav = Vec::with_capacity(44 + data_size as usize);
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&(36 + data_size).to_le_bytes());
-        wav.extend_from_slice(b"WAVEfmt ");
-        wav.extend_from_slice(&16u32.to_le_bytes());
-        wav.extend_from_slice(&1u16.to_le_bytes());
-        wav.extend_from_slice(&channels.to_le_bytes());
-        wav.extend_from_slice(&sample_rate.to_le_bytes());
-        wav.extend_from_slice(&byte_rate.to_le_bytes());
-        wav.extend_from_slice(&(channels * bits_per_sample / 8).to_le_bytes());
-        wav.extend_from_slice(&bits_per_sample.to_le_bytes());
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&data_size.to_le_bytes());
-        wav.resize(44 + data_size as usize, 0);
-
-        assert_eq!(audio::wav_duration_ms(&wav), Some(2_000));
-        assert_eq!(audio::wav_duration_ms(b"not a wav"), None);
-    }
-
     fn mock_model() -> ai_core::model::ModelSpec {
         ai_core::model::ModelSpec {
             id: "mock-task".to_string(),

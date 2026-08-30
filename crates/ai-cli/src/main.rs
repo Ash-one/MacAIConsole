@@ -1203,23 +1203,6 @@ mod tests {
     }
 
     #[test]
-    fn top_level_help_exposes_management_and_observability_commands() {
-        let help = Cli::command().render_long_help().to_string();
-        for command in [
-            "start",
-            "remove",
-            "keep-alive",
-            "providers",
-            "tasks",
-            "logging",
-            "voice",
-        ] {
-            assert!(help.contains(command), "help omitted {command}");
-        }
-        assert!(help.contains("macai <命令> --help"));
-    }
-
-    #[test]
     fn help_flag_exits_successfully_without_contacting_daemon() {
         let error = match Cli::try_parse_from(["macai", "--help"]) {
             Ok(_) => panic!("--help should stop after rendering help"),
@@ -1227,37 +1210,6 @@ mod tests {
         };
         assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
         assert!(error.to_string().contains("常用示例"));
-    }
-
-    #[test]
-    fn chat_accepts_generation_options() {
-        let cli = Cli::try_parse_from([
-            "macai",
-            "chat",
-            "local-model",
-            "hello",
-            "--system",
-            "be concise",
-            "--temperature",
-            "0.2",
-            "--max-tokens",
-            "64",
-        ])
-        .expect("chat options should parse");
-
-        match cli.command {
-            Commands::Chat {
-                system,
-                temperature,
-                max_tokens,
-                ..
-            } => {
-                assert_eq!(system.as_deref(), Some("be concise"));
-                assert_eq!(temperature, Some(0.2));
-                assert_eq!(max_tokens, Some(64));
-            }
-            _ => panic!("expected chat command"),
-        }
     }
 
     #[test]

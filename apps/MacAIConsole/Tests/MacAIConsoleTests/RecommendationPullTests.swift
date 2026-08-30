@@ -35,29 +35,8 @@ final class RecommendationPullTests: XCTestCase {
         XCTAssertEqual(json["files"] as? [String], model.files)
     }
 
-    func testKokoroRecommendationIncludesEveryPublishedVoice() throws {
-        let model = try XCTUnwrap(
-            RecommendedModel.builtIns.first { $0.provider == "kokoro-mlx" }
-        )
-        let voices = model.files.filter { $0.hasPrefix("voices/") }
-        let namedVoices = Set(voices.filter { !$0.contains("/zf_") && !$0.contains("/zm_") })
-        let numberedVoices = Set(voices.compactMap { path -> Int? in
-            let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
-            guard stem.hasPrefix("zf_") || stem.hasPrefix("zm_") else { return nil }
-            return Int(stem.dropFirst(3))
-        })
-
-        XCTAssertEqual(voices.count, 103)
-        XCTAssertEqual(Set(voices).count, 103)
-        XCTAssertEqual(namedVoices, [
-            "voices/af_maple.safetensors",
-            "voices/af_sol.safetensors",
-            "voices/bf_vale.safetensors",
-        ])
-        XCTAssertEqual(numberedVoices, Set(1...100))
-        XCTAssertEqual(model.estimatedSizeBytes, 380_917_492)
-    }
-
+    // Kokoro 音色清单完整性的唯一固化点是 DaemonAPIRequestTests 的
+    // pull payload 测试（文件数 + 抽样）；这里不再重复枚举音色集合。
     func testDirectoryRecommendationFindsCompleteModelUnderAlternateFolderName() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("macai-recommendation-\(UUID().uuidString)", isDirectory: true)
