@@ -166,11 +166,9 @@ Intel Mac 暂不进入第一阶段。
        LLM        LLM        STT        STT         TTS
 ```
 
-Realtime / extra Backend：
-
-```text
-sherpa-onnx
-```
+Realtime 是 `aiworkd` 内的协议与会话编排层，不预设为某一个额外 Backend。
+第一版复用现有 STT / LLM / TTS Provider；sherpa-onnx、Parakeet 等候选只有在
+benchmark 证明能改变延迟、准确率或功耗决策时才加入。
 
 后续：
 
@@ -1726,19 +1724,32 @@ data: [DONE]
 
 STT realtime：
 
-后续：
-
 ```text
-WebSocket
+WS input audio
+  → VAD
+  → 当前 turn 的累计音频
+  → 既有 STT Provider
+  → transcription.delta / transcription.completed
 ```
+
+第一版允许用“累计音频重新转写”生成 progressive transcript：同一 session 最多
+一个 progressive 请求在途，final 请求独立提交，迟到或旧 revision 的 partial
+必须丢弃。最终文本是 authoritative，客户端用 final 替换对应 item 的 partial。
+真正的 streaming decoder 只有在 benchmark 证明累计重传成为瓶颈后再引入。
 
 TTS realtime：
 
-后续：
-
 ```text
-WebSocket / chunked PCM
+TTS worker PCM chunk
+  → daemon bounded channel
+  → response.output_audio.delta
+  → client playback queue
 ```
+
+Realtime TTS 的流式边界必须从模型/worker 的首个可播放 PCM chunk 开始；把已经
+完整生成的 WAV 拆成 HTTP/WebSocket 小块不算 streaming。现有
+`POST /v1/audio/speech` 完整文件响应继续保留，Realtime 使用独立的 chunk path。
+详细会话、取消和兼容性决策见 §73。
 
 ---
 
@@ -2384,24 +2395,36 @@ GUI 只调用 daemon。
 
 # 56. Phase 8 — Realtime Audio
 
-加入：
+目标：在不改变 `aiworkd` Runtime Authority 的前提下，从无状态的 STT / Chat /
+TTS 请求扩展到有状态的实时语音会话。
+
+按以下顺序加入：
 
 ```text
-VAD
-
-streaming STT
-
-streaming TTS
+0. 用 Hugging Face speech-to-speech sidecar 调用现有三个 OpenAI-compatible endpoint 做 PoC
+1. WS /v1/realtime 的窄 OpenAI Realtime 事件集
+2. session state + VAD + speech_started / speech_stopped
+3. progressive STT（初期可累计音频重传）
+4. turn revision + cancellation generation + stale output suppression
+5. worker 原生 PCM chunk → streaming TTS + playback buffering
+6. 可选 Smart Turn semantic endpointing
+7. Qwen3-TTS-MLX Provider、tool calling 与 WebRTC（按需求后置）
 ```
 
-初始职责：
+第一版 Realtime 复用当前已验证的 Qwen3-ASR / whisper.cpp、MLX-LM /
+llama.cpp 与 Kokoro-MLX Provider，不预先绑定新的推理引擎。sherpa-onnx、Parakeet
+或其他 streaming backend 只在最小 benchmark 证明它能改变延迟或准确率决策时加入。
+
+内部音频基线：
 
 ```text
-streaming STT → sherpa-onnx
-streaming TTS → MLX-Audio
+mono PCM16
+pipeline sample rate 16 kHz
+512 samples per internal audio chunk
+bounded queues with explicit backpressure
 ```
 
-根据实验结果选择。
+协议、turn 状态、打断传播、sidecar 边界与后置项见 §73。
 
 ---
 
@@ -2888,7 +2911,7 @@ STT          whisper.cpp + MLX-native ASR
 
 TTS          MLX-Audio
 
-Realtime     sherpa-onnx / MLX-Audio
+Realtime     OpenAI Realtime WS + VAD + turn revision / cancellation
 
 Model Store  Hugging Face
 
@@ -3197,3 +3220,243 @@ remove/rename 的 HTTP 契约测试，以及 AppSettings 的缺省值契约测�
   `openSettings`、「打开日志文件夹」在 apps/MacAIConsole 源码零命中。
 * 运行 MacAIConsole.app：侧边栏出现「设置」页，Cmd+, 聚焦设置页，
   运行状态页内存预算「修改」跳转设置页。
+
+---
+
+# 73. Decision: Realtime Audio 参考 Hugging Face speech-to-speech 的协议与状态机
+
+参考项目：
+
+```text
+https://github.com/huggingface/speech-to-speech
+inspected commit: 3986f453012a131632eee4731995474046846794
+inspected date: 2026-08-28
+license: Apache-2.0
+```
+
+Smart Turn 参考：
+
+```text
+https://github.com/pipecat-ai/smart-turn
+inspected commit: 4786657e242dfe77dd138699ac564ee074a2a543
+inspected date: 2026-01-29
+model: pipecat-ai/smart-turn-v3 (v3.2)
+license: BSD-2-Clause
+```
+
+## 问题
+
+MacAI 当前提供 `/v1/audio/transcriptions`、`/v1/chat/completions` 与
+`/v1/audio/speech`，已经具备完整的单次 STT → LLM → TTS 推理能力；API 仍是
+无状态请求，TTS 以完整 `Vec<u8>` 返回，缺少实时语音会话所需的：
+
+* session / conversation state；
+* 连续音频输入与 VAD 事件；
+* progressive transcript 与 authoritative final transcript；
+* 用户说话打断、客户端取消和跨 STT/LLM/TTS 的取消传播；
+* turn reopen 后丢弃旧 STT、LLM、TTS 与待播放音频；
+* 从 TTS worker 首个 PCM chunk 到客户端播放的真实流式路径。
+
+原 §34、§56 只写了“WebSocket / streaming STT / streaming TTS”，没有定义协议
+事件、turn identity、取消语义和 stale output 边界。直接逐 endpoint 增加流式参数
+会形成多套不一致的会话状态。
+
+Hugging Face `speech-to-speech` 已实现并用 stock OpenAI Agents SDK 验证了一组窄
+OpenAI Realtime WebSocket/WebRTC 协议，包含 VAD、转写事件、barge-in、取消、
+tool result 和音频输出；其 Python runtime、线程模型和 Backend Registry 不适合
+成为 MacAI 的 Runtime Authority，但协议边界、turn revision 与取消状态机可作为
+Phase 8 的可运行参考实现。
+
+## 决策
+
+### 1. 先用 sidecar 验证，再把稳定语义落入 aiworkd
+
+第一步以 `speech-to-speech` 作为仅开发/实验使用的 sidecar：VAD、会话、打断和
+播放留在 sidecar，STT、LLM、TTS 分别调用 MacAI 现有的 OpenAI-compatible
+endpoint。
+
+```text
+microphone / speaker
+        ↕
+HF speech-to-speech sidecar
+        ├─ POST /v1/audio/transcriptions → aiworkd
+        ├─ POST /v1/chat/completions      → aiworkd
+        └─ POST /v1/audio/speech          → aiworkd
+```
+
+sidecar 不是产品依赖，也不拥有模型；它用于确认端到端延迟、打断体验、协议缺口
+和真实瓶颈。PoC 有价值后，`aiworkd` 用 Rust/Axum 实现稳定的协议语义，SwiftUI
+仍只调用 daemon。
+
+MacAI 的 TTS 请求类型应兼容 OpenAI 字段 `response_format`（当前内部字段是
+`format`；可用 serde alias 保持兼容）。PoC 初期使用 WAV 非流式响应；这只验证
+会话编排，不代表已经实现 streaming TTS。
+
+### 2. 第一版实现窄 OpenAI Realtime WebSocket 子集
+
+`aiworkd` 新增：
+
+```text
+WS /v1/realtime
+```
+
+第一版客户端事件：
+
+```text
+session.update
+input_audio_buffer.append
+conversation.item.create       # 先支持 input_text
+response.create
+response.cancel
+conversation.item.truncate     # 为 stock SDK 打断兼容，可先作受控 no-op
+```
+
+第一版服务端事件：
+
+```text
+session.created / session.updated
+input_audio_buffer.speech_started / speech_stopped
+conversation.item.input_audio_transcription.delta / completed
+response.created
+response.output_audio.delta / done
+response.output_audio_transcript.delta / done
+response.done
+error
+```
+
+该列表是显式兼容面；没有列出的 OpenAI Realtime 事件不承诺支持。第一阶段只做
+WebSocket，不把 WebRTC、完整 Responses API 或未来 SDK 行为隐含进兼容声明。
+
+### 3. turn identity 与取消是统一状态，不由各 Provider 自行猜测
+
+每个输入轮次携带：
+
+```text
+session_id
+turn_id
+turn_revision
+cancel_generation
+```
+
+Silero VAD 发现静音后可推测启动 STT/LLM；用户在 commit 前继续说话时，同一
+`turn_id` 增加 revision，旧 revision 的 partial transcript、LLM token、TTS chunk
+与排队音频全部失效。取消使用单调递增 generation；各阶段只发布自己启动时所持
+generation 仍有效且 revision 仍为 latest 的输出。
+
+commit 发生在第一段可播放音频准备发布时，而不是 LLM 开始生成或 TTS 请求开始
+时。客户端 `response.cancel`、server VAD barge-in、session teardown 与客户端断连
+都必须进入同一取消路径，并清空尚未播放的本地/服务端音频。
+
+该状态的 owner 是 daemon Realtime session；Provider 只接收带取消上下文的工作，
+不得各自维护平行的 turn truth。
+
+### 4. progressive STT 先复用现有 Provider
+
+第一版 progressive STT 在 VAD 停顿或节流点重新提交当前 turn 的累计音频：
+
+* 每个 session 最多一个 progressive 请求在途；新的 progressive 更新可丢弃；
+* final 请求独立提交，不等待尚未完成的 progressive 请求；
+* 迟到、旧 revision 或已取消的结果不发布；
+* wire 上的 delta 只追加稳定前缀，`completed.transcript` 是权威结果；
+* 客户端按 `item_id` 用 final 替换 partial。
+
+该方案允许先复用 Qwen3-ASR-MLX / whisper.cpp。只有在实测的 STT 首字延迟、重复
+计算或功耗成为主要瓶颈后，才引入真正的 streaming decoder Provider。
+
+### 5. streaming TTS 必须贯通 worker 到播放队列
+
+保留现有 `POST /v1/audio/speech` 完整文件 API；Realtime 新增独立的 PCM chunk
+路径：
+
+```text
+TTS worker first PCM chunk
+  → provider stream
+  → daemon bounded channel
+  → response.output_audio.delta
+  → client playback buffer
+```
+
+TTFA 定义为从 TTS 文本可提交到客户端收到第一段可播放音频的时间。完整生成 WAV
+后再切块不满足该指标。barge-in 关闭当前 TTS 工作并阻止旧 generation 的音频继续
+发布；若底层模型无法中止计算，至少必须立即停止对外发布并在 worker 协议支持后
+补齐真正的 server-side cancellation。
+
+客户端允许配置小型启动 buffer，用少量 TTFA 换取首段 chunk 不均匀时的连续播放；
+buffer 属于播放策略，不改变 TTS 请求、生成和重采样。
+
+### 6. Smart Turn 与 Qwen3-TTS 按依赖顺序后置
+
+Realtime WebSocket、VAD、turn revision 和取消路径稳定后，再把 Smart Turn v3.2
+作为可选 semantic endpointing：Silero 先检测静音，Smart Turn 对当前 turn 最近
+最多约 8 秒的 16 kHz mono PCM 判断 complete / incomplete。它是轻量 auxiliary
+ONNX 模型，不接管 STT，也不用于普通文件转写。是否纳入统一 Model Registry，等
+实现时根据内存记账、下载和启停需求决定，不提前建立新的特殊生命周期。
+
+Qwen3-TTS-MLX 作为新的常驻 Python worker Provider 接入，与 Kokoro-MLX 并存；
+GUI 不直接加载模型。是否成为默认 TTS 由 Apple Silicon 上的 TTFA、实时系数、
+中文自然度、内存占用和取消行为 benchmark 决定。
+
+### 7. 保留 MacAI 现有 Runtime 架构
+
+以下现有 owner 不改变：
+
+* `aiworkd` 是唯一 Runtime Authority；
+* SQLite registry、scheduler、lease / busy guard、keep_alive 与 LRU 继续管理模型；
+* Python/第三方模型继续运行在常驻隔离 worker；
+* GUI、CLI、Realtime 客户端不拥有模型，也不推断 Provider 可用性；
+* Provider 明确选择和 no-silent-fallback 规则继续适用。
+
+HF 的 FastAPI/uvicorn、每阶段线程 + Python Queue、Backend Registry 和本地模型生命
+周期代码不迁入 MacAI。Rust 实现使用 Tokio task、bounded channel 与统一取消状态。
+
+## 被放弃或后置的方案
+
+* 把 HF Python server 嵌入 MacAIConsole 或长期作为产品 Runtime：形成第二个
+  Runtime Authority，模型生命周期和错误状态会分裂。
+* 直接移植 HF 的线程/Queue pipeline：与 aiworkd 的 Tokio、worker 隔离、lease
+  和 scheduler 重复。
+* 第一版直接做 WebRTC：本机 `127.0.0.1` 的 Swift 客户端用 WebSocket 已足够；
+  ICE、STUN/TURN、SDP、RTP/Opus 只在浏览器或远程网络需求出现后加入。
+* 把完整 WAV 拆小块冒充 streaming TTS：不会改善模型 TTFA，也无法及时中止生成。
+* 先引入 sherpa-onnx、Parakeet 或新的大规模 Backend 矩阵：复用已有 Provider 完成
+  会话闭环，再用 benchmark 决定新增引擎。
+* 第一版实现 tool calling：当前 `ChatMessage.content` 只支持字符串，先完成纯文本
+  语音闭环；工具所需的结构化 content、tool schema、function result 和 Responses
+  API 作为后续兼容面单独设计。
+
+## 后果与已知边界
+
+* Realtime session 会同时持有 STT、LLM、TTS lease；内存预算不足时必须在 session
+  建立或模型加载阶段返回明确错误，不能会话中途静默换 Provider。
+* 累计音频 progressive STT 会重复计算，属于用已有 Provider 换取更快落地的明确
+  成本；监控请求次数、音频秒数、RTF 和功耗后再决定是否更换 decoder。
+* 标准 `/v1/audio/speech` 没有可移植的 server-side cancel；在 worker 支持取消前，
+  断开消费者只能保证停止发布，未必立刻停止模型计算。
+* 内部 pipeline 固定 16 kHz mono PCM16 / 512 samples 是第一版会话契约；WebRTC
+  或高采样率 TTS 接入时在 transport/provider 边界做有状态重采样，不让各阶段使用
+  不同的隐式采样率。
+* HF `speech-to-speech` 是 Apache-2.0。直接复制代码必须保留许可证、NOTICE 和修改
+  说明；MacAI 优先参考协议、状态机与测试行为并在 Rust 中独立实现。Smart Turn
+  BSD-2-Clause 代码/权重及 Qwen3-TTS 权重仍分别核对并保留各自许可。
+
+## 验证与阶段验收
+
+Sidecar PoC 至少记录：
+
+* VAD speech stop → final transcript；
+* final transcript → LLM first token；
+* TTS text ready → first playable audio（TTFA）；
+* 用户在 assistant 播放期间说话，旧音频停止且旧 generation 不再发布；
+* session 结束后无残留 worker 请求、running task 或播放队列音频。
+
+`aiworkd` Realtime 实现至少验证：
+
+* 协议测试覆盖上述显式 client/server 事件与错误事件；
+* 同一 turn reopen 后旧 revision 的 transcript/token/audio 全部被抑制；
+* `response.cancel`、server VAD barge-in、断连走同一取消状态机；
+* bounded channel 在慢客户端下不无限增长，session teardown 能释放全部 lease；
+* progressive final 不被迟到 partial 覆盖；
+* stock OpenAI Agents SDK 的 pinned WebSocket transport 可完成 session update、麦克风
+  输入、转写、音频输出与取消；
+* 现有 `/v1/chat/completions`、`/v1/audio/transcriptions`、
+  `/v1/audio/speech` 与管理 API 回归测试继续通过。
