@@ -24,7 +24,7 @@ use ai_core::AIError;
 
 use crate::providers::{
     KokoroMlxProvider, LlamaCppProvider, MacOSSayProvider, MlxLmProvider, MockProvider,
-    Qwen3AsrProvider, WhisperCppProvider,
+    Qwen3AsrProvider, Qwen3TtsProvider, WhisperCppProvider,
 };
 use crate::registry::RegistryStore;
 use crate::scheduler;
@@ -135,12 +135,14 @@ impl Runtime {
         let whisper = Arc::new(WhisperCppProvider::from_env());
         let kokoro = Arc::new(KokoroMlxProvider::from_env());
         let mlx_lm = Arc::new(MlxLmProvider::from_env());
+        let qwen3_tts = Arc::new(Qwen3TtsProvider::from_env());
 
         let mut providers: HashMap<String, Arc<dyn Provider>> = HashMap::new();
         providers.insert("llama.cpp".to_string(), llama.clone());
         providers.insert("whisper.cpp".to_string(), whisper.clone());
         providers.insert("kokoro-mlx".to_string(), kokoro.clone());
         providers.insert("mlx-lm".to_string(), mlx_lm.clone());
+        providers.insert("qwen3-tts".to_string(), qwen3_tts.clone());
 
         let mut chat_providers: HashMap<String, Arc<dyn ChatProvider>> = HashMap::new();
         chat_providers.insert("llama.cpp".to_string(), llama);
@@ -154,6 +156,7 @@ impl Runtime {
 
         let mut tts_providers: HashMap<String, Arc<dyn TTSProvider>> = HashMap::new();
         tts_providers.insert("kokoro-mlx".to_string(), kokoro);
+        tts_providers.insert("qwen3-tts".to_string(), qwen3_tts);
         Self {
             registry: RwLock::new(seed_entries(seed)),
             store,
@@ -1031,6 +1034,7 @@ mod tests {
                 "mlx-lm",
                 "mock",
                 "qwen3-asr-mlx",
+                "qwen3-tts",
                 "whisper.cpp"
             ]
         );

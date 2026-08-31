@@ -76,7 +76,8 @@ struct LoadModelRequest {
     name: Option<String>,
     /// llm（默认）/ stt / tts。
     model_type: Option<String>,
-    /// 显式推理后端。STT 支持 whisper.cpp（默认）与 qwen3-asr-mlx。
+    /// 显式推理后端。STT 支持 whisper.cpp（默认）与 qwen3-asr-mlx；
+    /// TTS 支持 kokoro-mlx（默认）与 qwen3-tts。
     provider: Option<String>,
     context_length: Option<u64>,
     keep_alive: Option<String>,
@@ -367,6 +368,7 @@ async fn register_and_load_model(
         ("stt", None | Some("whisper.cpp")) => "whisper.cpp",
         ("stt", Some("qwen3-asr-mlx")) => "qwen3-asr-mlx",
         ("tts", None | Some("kokoro-mlx")) => "kokoro-mlx",
+        ("tts", Some("qwen3-tts")) => "qwen3-tts",
         (other_type, None) => {
             return api_error(
                 AIError::InvalidRequest,
@@ -404,6 +406,15 @@ async fn register_and_load_model(
                 AIError::InvalidRequest,
                 format!(
                     "expected a model directory containing model.safetensors for provider 'kokoro-mlx', got '{}'",
+                    path.display()
+                ),
+            );
+        }
+        "qwen3-tts" if !path.is_dir() => {
+            return api_error(
+                AIError::InvalidRequest,
+                format!(
+                    "expected a model directory for provider 'qwen3-tts', got '{}'",
                     path.display()
                 ),
             );
@@ -448,6 +459,7 @@ async fn register_and_load_model(
             Some("always"),
             Some(2 * 1024 * 1024 * 1024),
         ),
+        "qwen3-tts" => (Some("qwen3-tts"), Some("always"), Some(size_bytes)),
         _ => (None, Some("always"), Some(size_bytes)),
     };
     let spec = ai_core::model::ModelSpec {
