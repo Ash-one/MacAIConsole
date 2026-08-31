@@ -43,7 +43,16 @@ struct PythonEnvironmentSpec: Identifiable, Equatable {
         pythonOverrideEnv: "AIWORK_KOKORO_PYTHON"
     )
 
-    static let all = [mlxLm, qwen3ASRMlx, kokoroMlx]
+    static let sherpaOnnx = PythonEnvironmentSpec(
+        id: "sherpa-onnx",
+        label: "sherpa-onnx · STT",
+        summary: "中文语音识别（Zipformer int8，CPU 或 Core ML）",
+        venvName: "sherpa-onnx-venv",
+        packages: ["sherpa-onnx==1.13.6", "numpy>=1.26,<3"],
+        pythonOverrideEnv: "AIWORK_SHERPA_ONNX_PYTHON"
+    )
+
+    static let all = [mlxLm, qwen3ASRMlx, sherpaOnnx, kokoroMlx]
 
     static func spec(forProvider providerID: String) -> PythonEnvironmentSpec? {
         all.first { $0.id == providerID }
