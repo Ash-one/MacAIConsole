@@ -392,6 +392,9 @@ private struct TaskDetailSheet: View {
                         if let total = result.totalTokens {
                             metadataLine("total tokens", value: "\(total)")
                         }
+                        if let speed = result.tokensPerSecond {
+                            metadataLine("生成速度", value: String(format: "%.1f tokens/s", speed))
+                        }
                     default:
                         if let finishReason = result.finishReason {
                             metadataLine("finish_reason", value: finishReason)
