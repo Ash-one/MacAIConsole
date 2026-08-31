@@ -7,6 +7,7 @@ pub mod macos_say;
 pub mod mlx_lm;
 pub mod mock;
 pub mod qwen3_asr;
+pub mod qwen3_tts;
 pub mod whisper_cpp;
 
 pub use kokoro_mlx::KokoroMlxProvider;
@@ -15,4 +16,5 @@ pub use macos_say::MacOSSayProvider;
 pub use mlx_lm::MlxLmProvider;
 pub use mock::MockProvider;
 pub use qwen3_asr::Qwen3AsrProvider;
+pub use qwen3_tts::Qwen3TtsProvider;
 pub use whisper_cpp::WhisperCppProvider;

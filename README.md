@@ -15,7 +15,8 @@ macai CLI ────────────┐
 MacAIConsole (SwiftUI) ├── HTTP ──> aiworkd ──┬── llama.cpp ──> GGUF / Metal
 OpenAI-compatible SDK ┘                      ├── mlx-lm ──────> MLX / Metal
                                              ├── whisper.cpp ─> Core ML / Metal
-                                             └── Kokoro MLX ──> local TTS
+                                             ├── Kokoro MLX ──> local TTS
+                                             └── Qwen3-TTS MLX ─> local TTS
 
                                              ├── SQLite model registry
                                              ├── memory budget / LRU / keep-alive
@@ -48,6 +49,7 @@ OpenAI-compatible SDK ┘                      ├── mlx-lm ─────�
 | LLM | mlx-lm | MLX 模型目录（safetensors） | MLX / Metal |
 | STT | whisper.cpp | `.bin` + PCM WAV | Core ML 优先，Metal 回退 |
 | TTS | Kokoro MLX | Kokoro 模型目录 | MLX / Metal GPU |
+| TTS | Qwen3-TTS MLX | Qwen3-TTS CustomVoice 模型目录 | MLX / Metal GPU |
 
 Provider 以独立进程承载高风险或第三方推理运行时。某个 worker 退出时，`aiworkd` 保持运行并向客户端返回结构化错误。
 
@@ -241,7 +243,39 @@ python3.12 -m venv .build/kokoro-venv
 
 也可以通过 `AIWORK_KOKORO_PYTHON` 指向其他 Python 环境。
 
-### 7. 准备 MLX-LM
+### 7. 准备 Qwen3-TTS CustomVoice
+
+Qwen3-TTS 与 Kokoro 复用同一个 `mlx-audio` Python 环境。推荐使用
+`mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit`，它通过常驻 worker
+运行在 MLX/Metal 上：
+
+```bash
+.build/kokoro-venv/bin/pip install -U mlx-audio
+hf download mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit \
+  --local-dir "$HOME/Library/Application Support/MacAIConsole/Models/tts/Qwen3-TTS-0.6B-CustomVoice-4bit"
+```
+
+注册时显式选择 `qwen3-tts`：
+
+```bash
+./target/release/macai load \
+  "$HOME/Library/Application Support/MacAIConsole/Models/tts/Qwen3-TTS-0.6B-CustomVoice-4bit" \
+  --id qwen3-tts-customvoice-4bit \
+  --type tts \
+  --provider qwen3-tts \
+  --keep-alive always
+
+./target/release/macai speak qwen3-tts-customvoice-4bit "你好，这是本地模型。"
+```
+
+可用 `AIWORK_QWEN3_TTS_PYTHON` 覆盖 Python 路径，`AIWORK_QWEN3_TTS_SCRIPT`
+覆盖 worker 脚本路径。请求只支持 WAV；`voice` 传递 Qwen3-TTS 的 speaker，
+例如 `Vivian`。首版支持用逗号携带情感指令（`Vivian, very happy`）。
+`speed` 参数仍按 `0.25..=4.0` 校验，但当前 `mlx-audio` 的
+`generate_custom_voice` 没有 speed 参数，因此通过校验后不改变合成速度；后续
+若上游提供原生支持再透传。首版不包含流式、声音克隆或 VoiceDesign。
+
+### 8. 准备 MLX-LM
 
 创建 Python 环境（也可在 MacAIConsole「设置 → Python 运行环境」中一键安装）：
 
