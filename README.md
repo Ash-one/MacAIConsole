@@ -15,6 +15,7 @@ macai CLI ────────────┐
 MacAIConsole (SwiftUI) ├── HTTP ──> aiworkd ──┬── llama.cpp ──> GGUF / Metal
 OpenAI-compatible SDK ┘                      ├── mlx-lm ──────> MLX / Metal
                                              ├── whisper.cpp ─> Core ML / Metal
+                                             ├── sherpa-onnx ─> ONNX Runtime / CPU or Core ML
                                              └── Kokoro MLX ──> local TTS
 
                                              ├── SQLite model registry
@@ -47,6 +48,7 @@ OpenAI-compatible SDK ┘                      ├── mlx-lm ─────�
 | LLM | llama.cpp | GGUF | Metal / Accelerate |
 | LLM | mlx-lm | MLX 模型目录（safetensors） | MLX / Metal |
 | STT | whisper.cpp | `.bin` + PCM WAV | Core ML 优先，Metal 回退 |
+| STT | sherpa-onnx | zh-int8-2025 model directory + PCM WAV | CPU（可选 Core ML） |
 | TTS | Kokoro MLX | Kokoro 模型目录 | MLX / Metal GPU |
 
 Provider 以独立进程承载高风险或第三方推理运行时。某个 worker 退出时，`aiworkd` 保持运行并向客户端返回结构化错误。
@@ -81,7 +83,7 @@ MacAIConsole 当前提供：
 - Rust stable toolchain
 - Xcode Command Line Tools
 - CMake
-- Python 3.12（仅 Kokoro TTS 需要）
+- Python 3.12（Kokoro TTS 与 sherpa-onnx STT 需要）
 
 仓库不包含模型权重、编译后的第三方推理引擎或 Python 虚拟环境。
 
@@ -217,9 +219,65 @@ hf download mlx-community/Qwen3-ASR-0.6B-8bit \
   --language zh
 ```
 
-MLX Provider 固定使用 Metal，并可通过 `AIWORK_QWEN3_ASR_MLX_PYTHON` 指向其他隔离环境。
+MLX Provider 固定使用 Metal。`AIWORK_QWEN3_ASR_MLX_PYTHON` 可以指向其他隔离环境。
 
-### 6. 准备 Kokoro TTS
+### 6. 准备 sherpa-onnx zh-int8-2025
+
+sherpa-onnx 使用官方 streaming Zipformer 中文 int8 模型
+`sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30`。模型目录必须保留以下
+四个文件；模型权重不提交到仓库：
+
+```text
+sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/
+├── tokens.txt
+├── encoder.int8.onnx
+├── decoder.onnx
+└── joiner.int8.onnx
+```
+
+安装与模型下载：
+
+```bash
+./scripts/setup-sherpa-onnx.sh
+curl -L -o sherpa-onnx-model.tar.bz2 \
+  https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30.tar.bz2
+tar xf sherpa-onnx-model.tar.bz2
+rm sherpa-onnx-model.tar.bz2
+```
+
+注册并运行。`aiworkd` 会校验完整目录，加载时启动一个常驻 Python worker，
+识别时复用同一个 sherpa-onnx recognizer：
+
+```bash
+./target/release/macai load \
+  ./sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30 \
+  --id sherpa-onnx-zh-int8-2025 \
+  --type stt \
+  --provider sherpa-onnx \
+  --keep-alive always
+
+./target/release/macai transcribe meeting.m4a \
+  --model sherpa-onnx-zh-int8-2025 \
+  --language zh
+```
+
+上传入口会把 wav / mp3 / flac / ogg / m4a 统一解码为 PCM WAV；worker 再将
+多声道输入下混为单声道并按 streaming chunk 解码，因此长录音不会因一次性
+把全部音频交给模型而改变内存行为。该模型只支持中文；`--language` 省略或
+使用 `zh` / `zh-CN` / `Chinese` 均可。
+
+默认使用 CPU，显式选择 Core ML 可设置：
+
+```bash
+export AIWORK_SHERPA_ONNX_DEVICE=coreml
+```
+
+也可以用 `AIWORK_SHERPA_ONNX_PYTHON` 指向已安装 `sherpa-onnx==1.13.6` 与
+`numpy>=1.26,<3` 的其他 Python 解释器。`AIWORK_SHERPA_ONNX_THREADS` 控制 ONNX Runtime 线程数；
+`AIWORK_SHERPA_ONNX_LOAD_TIMEOUT_SECS` 与
+`AIWORK_SHERPA_ONNX_INFERENCE_TIMEOUT_SECS` 分别控制加载和识别超时。
+
+### 8. 准备 Kokoro TTS
 
 创建 Python 环境（也可在 MacAIConsole「设置 → Python 运行环境」中一键安装）：
 
@@ -241,7 +299,7 @@ python3.12 -m venv .build/kokoro-venv
 
 也可以通过 `AIWORK_KOKORO_PYTHON` 指向其他 Python 环境。
 
-### 7. 准备 MLX-LM
+### 9. 准备 MLX-LM
 
 创建 Python 环境（也可在 MacAIConsole「设置 → Python 运行环境」中一键安装）：
 

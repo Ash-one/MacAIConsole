@@ -191,7 +191,7 @@ struct ModelRow: View {
     private var modelType: String {
         if let type = model.modelType, !type.isEmpty { return type }
         if model.provider == "kokoro-mlx" { return "tts" }
-        if model.provider == "whisper.cpp" { return "stt" }
+        if model.provider == "whisper.cpp" || model.provider == "qwen3-asr-mlx" || model.provider == "sherpa-onnx" { return "stt" }
         return "llm"
     }
 
@@ -337,7 +337,7 @@ struct RunningModelSettingsView: View {
     private var modelType: String {
         if let type = model.modelType, !type.isEmpty { return type }
         if model.provider == "kokoro-mlx" { return "tts" }
-        if model.provider == "whisper.cpp" { return "stt" }
+        if model.provider == "whisper.cpp" || model.provider == "qwen3-asr-mlx" || model.provider == "sherpa-onnx" { return "stt" }
         return "llm"
     }
 

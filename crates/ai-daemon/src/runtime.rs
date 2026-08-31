@@ -24,7 +24,7 @@ use ai_core::AIError;
 
 use crate::providers::{
     KokoroMlxProvider, LlamaCppProvider, MacOSSayProvider, MlxLmProvider, MockProvider,
-    Qwen3AsrProvider, WhisperCppProvider,
+    Qwen3AsrProvider, SherpaOnnxProvider, WhisperCppProvider,
 };
 use crate::registry::RegistryStore;
 use crate::scheduler;
@@ -151,6 +151,9 @@ impl Runtime {
         let qwen3_asr_mlx = Arc::new(Qwen3AsrProvider::mlx_from_env());
         providers.insert("qwen3-asr-mlx".to_string(), qwen3_asr_mlx.clone());
         stt_providers.insert("qwen3-asr-mlx".to_string(), qwen3_asr_mlx);
+        let sherpa_onnx = Arc::new(SherpaOnnxProvider::from_env());
+        providers.insert("sherpa-onnx".to_string(), sherpa_onnx.clone());
+        stt_providers.insert("sherpa-onnx".to_string(), sherpa_onnx);
 
         let mut tts_providers: HashMap<String, Arc<dyn TTSProvider>> = HashMap::new();
         tts_providers.insert("kokoro-mlx".to_string(), kokoro);
@@ -1031,6 +1034,7 @@ mod tests {
                 "mlx-lm",
                 "mock",
                 "qwen3-asr-mlx",
+                "sherpa-onnx",
                 "whisper.cpp"
             ]
         );
