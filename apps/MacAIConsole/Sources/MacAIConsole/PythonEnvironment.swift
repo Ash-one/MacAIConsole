@@ -52,7 +52,18 @@ struct PythonEnvironmentSpec: Identifiable, Equatable {
         pythonOverrideEnv: "AIWORK_SHERPA_ONNX_PYTHON"
     )
 
-    static let all = [mlxLm, qwen3ASRMlx, sherpaOnnx, kokoroMlx]
+    /// Qwen3-TTS 与 Kokoro 复用同一个 mlx-audio 环境（kokoro-venv），
+    /// 仅在 daemon 侧用独立的解释器覆盖变量寻址。
+    static let qwen3Tts = PythonEnvironmentSpec(
+        id: "qwen3-tts",
+        label: "Qwen3-TTS · MLX",
+        summary: "自定义音色中文语音合成（Apple Silicon Metal 加速）",
+        venvName: "kokoro-venv",
+        packages: ["mlx-audio"],
+        pythonOverrideEnv: "AIWORK_QWEN3_TTS_PYTHON"
+    )
+
+    static let all = [mlxLm, qwen3ASRMlx, sherpaOnnx, kokoroMlx, qwen3Tts]
 
     static func spec(forProvider providerID: String) -> PythonEnvironmentSpec? {
         all.first { $0.id == providerID }
