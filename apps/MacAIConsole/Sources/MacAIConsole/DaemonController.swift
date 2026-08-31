@@ -142,11 +142,22 @@ final class DaemonController {
 
     // MARK: - 数据操作
 
-    func refresh() async throws {
+    /// 任务列表上一次成功刷新的时刻；在线轮询用它把任务接口降到低频。
+    @ObservationIgnored private var lastTasksRefresh: Date?
+
+    /// 任务明细（含 100 条历史 + input_preview）体积远大于其余三个接口，
+    /// 且任务页数据本身变化缓慢；常驻 2s 拉取是 GUI 空闲 CPU 的主要来源之一。
+    /// 状态轮询保持 2s，任务数据降为 10s；无任务运行时不再有更细的实时性诉求。
+    private static let tasksRefreshInterval: TimeInterval = 10
+
+    func refresh(forceTasks: Bool = false) async throws {
         async let infoRequest = api.runtimeInfo()
         async let modelsRequest = api.models()
         async let providersRequest = api.providers()
-        async let tasksRequest = api.tasks(completedLimit: Self.completedHistoryLimit)
+        let tasksDue = forceTasks
+            || lastTasksRefresh.map { Date.now.timeIntervalSince($0) >= Self.tasksRefreshInterval }
+            ?? true
+        async let tasksRequest = tasksDue ? api.tasks(completedLimit: Self.completedHistoryLimit) : nil
 
         let info = try await infoRequest
         let models = try? await modelsRequest
@@ -158,8 +169,9 @@ final class DaemonController {
         if let tasks {
             runningTasks = tasks.running
             completedTasks = tasks.completed
+            lastTasksRefresh = Date.now
             tasksError = nil
-        } else {
+        } else if tasksDue {
             let message = "任务记录暂时无法读取：守护进程未返回有效数据"
             if tasksError != message { logWarning(message) }
             tasksError = message
@@ -353,7 +365,7 @@ final class DaemonController {
 
         case .online:
             do {
-                try await refresh()
+                try await refresh(forceTasks: TasksViewVisits.isVisible)
                 recordRefreshSuccess()
             } catch {
                 if await daemonIsConfirmedOffline() {
@@ -405,7 +417,7 @@ final class DaemonController {
 
     private func refreshAfterSuccessfulMutation() async {
         do {
-            try await refresh()
+            try await refresh(forceTasks: true)
             recordRefreshSuccess()
         } catch {
             recordRefreshFailure(error)

@@ -1,6 +1,13 @@
 import AppKit
 import SwiftUI
 
+/// 任务页是否正被用户查看；在线轮询据此决定是否每次 tick 都拉取任务明细。
+/// 运行中的任务行有脉冲与时长文本需要实时刷新，查看时必须每 tick 拉取。
+@MainActor
+enum TasksViewVisits {
+    static var isVisible = false
+}
+
 struct TasksView: View {
     @Environment(DaemonController.self) private var controller
     @State private var selectedTask: InferenceTaskSummary?
@@ -25,7 +32,11 @@ struct TasksView: View {
                 .environment(controller)
         }
         .task {
+            TasksViewVisits.isVisible = true
             controller.bootstrapIfNeeded()
+        }
+        .onDisappear {
+            TasksViewVisits.isVisible = false
         }
     }
 
