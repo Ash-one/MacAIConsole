@@ -121,6 +121,7 @@ final class TaskDecodingTests: XCTestCase {
                 "prompt_tokens": 12,
                 "completion_tokens": 8,
                 "total_tokens": 20,
+                "tokens_per_second": 3.305,
                 "content_type": null,
                 "byte_count": null
               },
@@ -139,6 +140,7 @@ final class TaskDecodingTests: XCTestCase {
         XCTAssertEqual(detail.request?.maxTokens, 512)
         XCTAssertEqual(detail.result?.outputText, "总结结果")
         XCTAssertEqual(detail.result?.totalTokens, 20)
+        XCTAssertEqual(detail.result?.tokensPerSecond ?? 0, 3.305, accuracy: 0.0001)
         XCTAssertEqual(detail.summary.inputPreview, "请总结这段内容")
         XCTAssertEqual(detail.durationMs, 2418)
         XCTAssertFalse(detail.requestTruncated)

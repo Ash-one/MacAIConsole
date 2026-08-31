@@ -225,6 +225,7 @@ struct InferenceTaskResult: Decodable {
     var promptTokens: UInt64?
     var completionTokens: UInt64?
     var totalTokens: UInt64?
+    var tokensPerSecond: Double?
     var contentType: String?
     var byteCount: UInt64?
 
@@ -235,6 +236,7 @@ struct InferenceTaskResult: Decodable {
         case promptTokens = "prompt_tokens"
         case completionTokens = "completion_tokens"
         case totalTokens = "total_tokens"
+        case tokensPerSecond = "tokens_per_second"
         case contentType = "content_type"
         case byteCount = "byte_count"
     }

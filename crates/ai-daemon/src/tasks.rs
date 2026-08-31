@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ai_core::request::{ChatRequest, SpeechRequest, TranscriptionRequest};
 use ai_core::response::{
-    TaskDetail, TaskListResponse, TaskRequestDetail, TaskResultDetail, TaskSummary,
+    ChatUsage, TaskDetail, TaskListResponse, TaskRequestDetail, TaskResultDetail, TaskSummary,
 };
 
 pub const MAX_COMPLETED_TASKS: usize = 100;
@@ -220,6 +220,16 @@ impl TaskRegistry {
         detail.duration_ms = detail
             .completed_at_ms
             .map(|completed| completed.saturating_sub(detail.started_at_ms));
+        // 生成吞吐统一在这里计算：completion_tokens / 任务总时长（秒）。
+        // 时长含排队与 prompt 处理，对常驻模型即近似生成速度。
+        if let (Some(tokens), Some(duration_ms)) =
+            (detail.result.completion_tokens, detail.duration_ms)
+        {
+            if tokens > 0 && duration_ms > 0 {
+                detail.result.tokens_per_second =
+                    Some(tokens as f64 / (duration_ms as f64 / 1000.0));
+            }
+        }
         detail.error = error.map(|error| {
             let (error, truncated) = take_prefix(&error, ERROR_TEXT_LIMIT);
             if truncated {
@@ -264,6 +274,15 @@ impl TaskHandle {
     pub fn set_finish_reason(&self, finish_reason: Option<String>) {
         self.registry.update_result(&self.id, |result| {
             result.finish_reason = finish_reason;
+        });
+    }
+
+    /// 流式路径在终帧携带 usage 时记录 token 统计（与非流式 succeed 同一口径）。
+    pub fn set_usage(&self, usage: ChatUsage) {
+        self.registry.update_result(&self.id, |result| {
+            result.prompt_tokens = Some(usage.prompt_tokens);
+            result.completion_tokens = Some(usage.completion_tokens);
+            result.total_tokens = Some(usage.total_tokens);
         });
     }
 

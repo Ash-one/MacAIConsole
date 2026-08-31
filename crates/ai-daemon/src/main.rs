@@ -657,6 +657,9 @@ async fn chat_completions(State(state): State<AppState>, Json(req): Json<ChatReq
                                         task.set_finish_reason(choice.finish_reason.clone());
                                     }
                                 }
+                                if let Some(usage) = &chunk.usage {
+                                    task.set_usage(usage.clone());
+                                }
                                 let event = Event::default().json_data(&chunk).unwrap();
                                 yield Ok::<_, std::convert::Infallible>(event);
                             }
@@ -1065,6 +1068,12 @@ mod tests {
         assert_eq!(list.completed[0].status, "succeeded");
         let detail = runtime.tasks().get(&list.completed[0].id).unwrap();
         assert_eq!(detail.result.output_text.as_deref(), Some("stream me"));
+        // 流式终帧的 usage 必须落进任务统计，并派生生成吞吐。
+        assert_eq!(detail.result.prompt_tokens, Some(9));
+        assert_eq!(detail.result.completion_tokens, Some(9));
+        assert_eq!(detail.result.total_tokens, Some(18));
+        let speed = detail.result.tokens_per_second.expect("tokens/s recorded");
+        assert!(speed > 0.0);
     }
 
     #[tokio::test]

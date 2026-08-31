@@ -117,6 +117,17 @@ impl ChatProvider for MockProvider {
         let model = request.model.clone();
         let id = format!("chatcmpl-mock-{}", now_id());
         let created = now_unix();
+        // 与非流式路径同一口径，流式终帧携带 usage 供任务统计消费。
+        let prompt_tokens: u64 = request
+            .messages
+            .iter()
+            .map(|m| m.content.len() as u64)
+            .sum();
+        let usage = ChatUsage {
+            prompt_tokens,
+            completion_tokens: reply.len() as u64,
+            total_tokens: prompt_tokens + reply.len() as u64,
+        };
 
         // 分块：2 字符一块。
         let chars: Vec<String> = reply
@@ -130,8 +141,8 @@ impl ChatProvider for MockProvider {
         // 状态机：i < len → content chunk；i == len 且 !finished → finish chunk；
         // finished → None 终止流。
         let stream = futures::stream::unfold(
-            (chars, 0usize, false, id, created, model),
-            |(chars, i, finished, id, created, model)| async move {
+            (chars, 0usize, false, id, created, model, usage),
+            |(chars, i, finished, id, created, model, usage)| async move {
                 if finished {
                     return None;
                 }
@@ -156,7 +167,7 @@ impl ChatProvider for MockProvider {
                         }],
                         usage: None,
                     };
-                    Some((Ok(chunk), (chars, i + 1, false, id, created, model)))
+                    Some((Ok(chunk), (chars, i + 1, false, id, created, model, usage)))
                 } else {
                     let chunk = ChatChunk {
                         id,
@@ -168,12 +179,12 @@ impl ChatProvider for MockProvider {
                             delta: ChatChunkDelta::default(),
                             finish_reason: Some("stop".to_string()),
                         }],
-                        usage: None,
+                        usage: Some(usage.clone()),
                     };
                     // 下一轮进入 finished=true → 终止。
                     Some((
                         Ok(chunk),
-                        (chars, i, true, String::new(), created, String::new()),
+                        (chars, i, true, String::new(), created, String::new(), usage),
                     ))
                 }
             },

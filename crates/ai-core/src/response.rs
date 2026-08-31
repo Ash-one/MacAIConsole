@@ -141,6 +141,8 @@ pub struct TaskResultDetail {
     pub prompt_tokens: Option<u64>,
     pub completion_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
+    /// 生成吞吐（completion_tokens / 任务总时长秒），由 daemon 在任务完成时统一计算。
+    pub tokens_per_second: Option<f64>,
     pub content_type: Option<String>,
     pub byte_count: Option<u64>,
 }
