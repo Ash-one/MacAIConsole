@@ -5,7 +5,7 @@ Each fixture is a 500 ms 440 Hz sine tone at 16 kHz mono, encoded with a real
 encoder (PyAV's bundled FFmpeg for lossy formats, libsndfile for FLAC) so the
 Rust tests exercise the full container-probe + codec-decode path.
 
-Run with a Python that has av + numpy (e.g. .build/qwen3-asr-venv/bin/python):
+Run with a Python that has av + numpy (e.g. .build/kokoro-venv/bin/python):
 
     python3 scripts/tests/generate_audio_fixtures.py
 

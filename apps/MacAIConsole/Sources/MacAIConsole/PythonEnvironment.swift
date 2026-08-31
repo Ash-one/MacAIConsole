@@ -26,14 +26,6 @@ struct PythonEnvironmentSpec: Identifiable, Equatable {
         packages: ["mlx-audio==0.5.0"],
         pythonOverrideEnv: "AIWORK_QWEN3_ASR_MLX_PYTHON"
     )
-    static let qwen3ASRPyTorch = PythonEnvironmentSpec(
-        id: "qwen3-asr",
-        label: "Qwen3-ASR · PyTorch",
-        summary: "语音识别（MPS/CPU 兼容回退，依赖体积最大）",
-        venvName: "qwen3-asr-venv",
-        packages: ["qwen-asr==0.0.6"],
-        pythonOverrideEnv: "AIWORK_QWEN3_ASR_PYTHON"
-    )
     static let mlxLm = PythonEnvironmentSpec(
         id: "mlx-lm",
         label: "MLX-LM · LLM",
@@ -51,7 +43,7 @@ struct PythonEnvironmentSpec: Identifiable, Equatable {
         pythonOverrideEnv: "AIWORK_KOKORO_PYTHON"
     )
 
-    static let all = [mlxLm, qwen3ASRMlx, qwen3ASRPyTorch, kokoroMlx]
+    static let all = [mlxLm, qwen3ASRMlx, kokoroMlx]
 
     static func spec(forProvider providerID: String) -> PythonEnvironmentSpec? {
         all.first { $0.id == providerID }

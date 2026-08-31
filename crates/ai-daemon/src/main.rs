@@ -76,7 +76,7 @@ struct LoadModelRequest {
     name: Option<String>,
     /// llm（默认）/ stt / tts。
     model_type: Option<String>,
-    /// 显式推理后端。STT 支持 whisper.cpp（默认）、qwen3-asr 与 qwen3-asr-mlx。
+    /// 显式推理后端。STT 支持 whisper.cpp（默认）与 qwen3-asr-mlx。
     provider: Option<String>,
     context_length: Option<u64>,
     keep_alive: Option<String>,
@@ -365,7 +365,6 @@ async fn register_and_load_model(
         ("llm", None | Some("llama.cpp")) => "llama.cpp",
         ("llm", Some("mlx-lm")) => "mlx-lm",
         ("stt", None | Some("whisper.cpp")) => "whisper.cpp",
-        ("stt", Some("qwen3-asr")) => "qwen3-asr",
         ("stt", Some("qwen3-asr-mlx")) => "qwen3-asr-mlx",
         ("tts", None | Some("kokoro-mlx")) => "kokoro-mlx",
         (other_type, None) => {
@@ -414,11 +413,6 @@ async fn register_and_load_model(
                 return provider_error(error);
             }
         }
-        "qwen3-asr" => {
-            if let Err(error) = providers::qwen3_asr::validate_model_dir(&path) {
-                return provider_error(error);
-            }
-        }
         "qwen3-asr-mlx" => {
             if let Err(error) = providers::qwen3_asr::validate_mlx_8bit_model_dir(&path) {
                 return provider_error(error);
@@ -449,12 +443,6 @@ async fn register_and_load_model(
         "mlx-lm" => (Some("mlx"), Some("5m"), Some(size_bytes)),
         "whisper.cpp" => (Some("bin"), Some("always"), Some(size_bytes)),
         // 6 GiB is MacAI's initial scheduling estimate; real RSS is reported from the worker.
-        "qwen3-asr" => (
-            Some("qwen3-asr"),
-            Some("always"),
-            Some(6 * 1024 * 1024 * 1024),
-        ),
-        // 8-bit weights are ~1 GiB; reserve 2 GiB for MLX activations and caches.
         "qwen3-asr-mlx" => (
             Some("qwen3-asr-mlx-8bit"),
             Some("always"),

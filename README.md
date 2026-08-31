@@ -188,7 +188,7 @@ ggml-large-v3-turbo-encoder.mlmodelc/
 
 ### 5. 准备 Qwen3-ASR 0.6B
 
-Qwen3-ASR 提供两个独立 Provider：Apple Silicon 优先使用 MLX 8-bit，PyTorch MPS FP16 保留为兼容回退。
+Qwen3-ASR 通过 MLX 8-bit Provider 提供服务（Apple Silicon Metal 加速）。
 
 Python 环境也可以在 MacAIConsole「设置 → Python 运行环境」中一键安装（需本机有 Python 3.12，依赖版本与本节一致）；以下为手动步骤。
 
@@ -217,18 +217,7 @@ hf download mlx-community/Qwen3-ASR-0.6B-8bit \
   --language zh
 ```
 
-PyTorch 回退环境与模型：
-
-```bash
-python3.12 -m venv .build/qwen3-asr-venv
-.build/qwen3-asr-venv/bin/pip install -U pip
-.build/qwen3-asr-venv/bin/pip install 'qwen-asr==0.0.6'
-
-hf download Qwen/Qwen3-ASR-0.6B \
-  --local-dir "$HOME/Library/Application Support/MacAIConsole/Models/stt/Qwen3-ASR-0.6B"
-```
-
-PyTorch Provider 使用 `qwen3-asr`，Apple Silicon 默认优先 MPS，加载失败回退 CPU。可用 `AIWORK_QWEN3_ASR_DEVICE=mps|cpu|auto` 固定设备；MLX Provider 固定使用 Metal，并可通过 `AIWORK_QWEN3_ASR_MLX_PYTHON` 指向其他隔离环境。
+MLX Provider 固定使用 Metal，并可通过 `AIWORK_QWEN3_ASR_MLX_PYTHON` 指向其他隔离环境。
 
 ### 6. 准备 Kokoro TTS
 

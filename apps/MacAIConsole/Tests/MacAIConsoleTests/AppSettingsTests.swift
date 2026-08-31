@@ -19,10 +19,6 @@ final class AppSettingsTests: XCTestCase {
         super.tearDown()
     }
 
-    func testQwen3ASR06BIsDisabledByDefault() {
-        XCTAssertFalse(AppSettings.qwen3ASR06BEnabled(in: defaults))
-    }
-
     func testProxyDefaultsToSystemAndLoadsSavedMode() {
         XCTAssertEqual(AppSettings.proxyMode(in: defaults), .system)
         defaults.set(ProxyMode.manual.rawValue, forKey: AppSettings.proxyModeKey)

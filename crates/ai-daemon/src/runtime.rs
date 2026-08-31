@@ -148,14 +148,9 @@ impl Runtime {
 
         let mut stt_providers: HashMap<String, Arc<dyn STTProvider>> = HashMap::new();
         stt_providers.insert("whisper.cpp".to_string(), whisper);
-        if qwen3_asr_enabled() {
-            let qwen3_asr = Arc::new(Qwen3AsrProvider::from_env());
-            let qwen3_asr_mlx = Arc::new(Qwen3AsrProvider::mlx_from_env());
-            providers.insert("qwen3-asr".to_string(), qwen3_asr.clone());
-            providers.insert("qwen3-asr-mlx".to_string(), qwen3_asr_mlx.clone());
-            stt_providers.insert("qwen3-asr".to_string(), qwen3_asr);
-            stt_providers.insert("qwen3-asr-mlx".to_string(), qwen3_asr_mlx);
-        }
+        let qwen3_asr_mlx = Arc::new(Qwen3AsrProvider::mlx_from_env());
+        providers.insert("qwen3-asr-mlx".to_string(), qwen3_asr_mlx.clone());
+        stt_providers.insert("qwen3-asr-mlx".to_string(), qwen3_asr_mlx);
 
         let mut tts_providers: HashMap<String, Arc<dyn TTSProvider>> = HashMap::new();
         tts_providers.insert("kokoro-mlx".to_string(), kokoro);
@@ -871,22 +866,6 @@ impl Runtime {
     }
 }
 
-fn qwen3_asr_enabled() -> bool {
-    let value = std::env::var("AIWORK_QWEN3_ASR_ENABLED").ok();
-    qwen3_asr_enabled_value(value.as_deref())
-}
-
-fn qwen3_asr_enabled_value(value: Option<&str>) -> bool {
-    value
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(true)
-}
-
 fn status_confirms_resident(status: &ProviderStatus, model_id: &str) -> bool {
     status.ready
         && (status.resident_models.is_empty()
@@ -1051,7 +1030,6 @@ mod tests {
                 "macos-say",
                 "mlx-lm",
                 "mock",
-                "qwen3-asr",
                 "qwen3-asr-mlx",
                 "whisper.cpp"
             ]

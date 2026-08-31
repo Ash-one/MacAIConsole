@@ -102,20 +102,6 @@ struct QwenBackendConfig {
     install_hint: &'static str,
 }
 
-const PYTORCH_BACKEND: QwenBackendConfig = QwenBackendConfig {
-    id: "qwen3-asr",
-    label: "Qwen3-ASR",
-    python_env: "AIWORK_QWEN3_ASR_PYTHON",
-    script_env: "AIWORK_QWEN3_ASR_SCRIPT",
-    device_env: "AIWORK_QWEN3_ASR_DEVICE",
-    python: ".build/qwen3-asr-venv/bin/python",
-    script: "scripts/qwen3_asr_worker.py",
-    default_device: "auto",
-    allowed_devices: &["auto", "mps", "cpu"],
-    supported_devices: &["mps", "cpu"],
-    install_hint: "create .build/qwen3-asr-venv and install qwen-asr==0.0.6",
-};
-
 const MLX_BACKEND: QwenBackendConfig = QwenBackendConfig {
     id: "qwen3-asr-mlx",
     label: "Qwen3-ASR MLX",
@@ -139,10 +125,6 @@ pub struct Qwen3AsrProvider {
 }
 
 impl Qwen3AsrProvider {
-    pub fn from_env() -> Self {
-        Self::with_config(&PYTORCH_BACKEND)
-    }
-
     pub fn mlx_from_env() -> Self {
         Self::with_config(&MLX_BACKEND)
     }
@@ -326,11 +308,7 @@ impl Provider for Qwen3AsrProvider {
                 format!("Qwen3-ASR model directory for '{}' was not found", model.id),
             )
         })?;
-        if self.config.id == MLX_BACKEND.id {
-            validate_mlx_8bit_model_dir(&model_dir)?;
-        } else {
-            validate_model_dir(&model_dir)?;
-        }
+        validate_mlx_8bit_model_dir(&model_dir)?;
 
         let device = env::var(self.config.device_env)
             .unwrap_or_else(|_| self.config.default_device.to_string());
@@ -905,13 +883,17 @@ mod tests {
         };
         let dir = TempModelDir::new();
         for name in [
-            "config.json",
             "model.safetensors",
             "preprocessor_config.json",
             "tokenizer_config.json",
         ] {
             dir.touch(name);
         }
+        fs::write(
+            dir.0.join("config.json"),
+            r#"{"quantization": {"bits": 8}}"#,
+        )
+        .unwrap();
         let script = dir.0.join("fake_worker.py");
         fs::write(
             &script,
@@ -928,7 +910,7 @@ for line in sys.stdin:
         let provider = Qwen3AsrProvider {
             state: Mutex::new(None),
             resident: StdRwLock::new(None),
-            config: &PYTORCH_BACKEND,
+            config: &MLX_BACKEND,
             python_override: Some(python),
             script_override: Some(script),
         };
@@ -936,10 +918,10 @@ for line in sys.stdin:
             id: "qwen-test".to_string(),
             name: "Qwen test".to_string(),
             model_type: "stt".to_string(),
-            provider: "qwen3-asr".to_string(),
+            provider: "qwen3-asr-mlx".to_string(),
             source: None,
             path: Some(dir.0.to_string_lossy().into_owned()),
-            format: Some("qwen3-asr".to_string()),
+            format: Some("qwen3-asr-mlx".to_string()),
             size_bytes: None,
             memory_estimate: None,
             keep_alive: Some("always".to_string()),
@@ -966,7 +948,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn observability_does_not_wait_for_active_transcription_lock() {
-        let provider = Qwen3AsrProvider::from_env();
+        let provider = Qwen3AsrProvider::mlx_from_env();
         provider.set_resident(Some(QwenResident {
             model_id: "qwen-test".to_string(),
             pid: Some(std::process::id()),
