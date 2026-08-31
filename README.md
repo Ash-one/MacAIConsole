@@ -76,6 +76,7 @@ MacAIConsole 当前提供：
 - Chat / STT / TTS 任务记录与详情
 - GUI / daemon 最近日志，支持 Info / Debug 过滤和级别着色
 - 菜单栏状态与 daemon 启停
+- 设置页支持切换 Hugging Face 官方源、`hf-mirror.com` 或自定义 Hugging Face 兼容源
 
 ## 系统要求
 
@@ -342,6 +343,17 @@ open build/MacAIConsole.app
 产物在 `apps/MacAIConsole/build/MacAIConsole.app`。
 
 GUI 可以连接已经在跑的 `aiworkd`。GUI 自动启动 daemon 时按顺序探测：`AIWORKD_PATH` 环境变量 → 仓库 `target/release/aiworkd` → `target/debug/aiworkd`。
+
+模型下载默认使用 `https://huggingface.co`。MacAIConsole 的「设置 → 模型下载源」可切换
+到 `https://hf-mirror.com` 或填写自定义 HTTP(S) 地址；修改后点击「应用设置并重启
+aiworkd」。下载由 daemon 统一执行，使用 HTTP/1.1、`.part` 断点续传，并在响应体中断
+时自动重试。手动启动 daemon 时可设置：
+
+```bash
+AIWORKD_HF_ENDPOINT=https://hf-mirror.com ./target/release/aiworkd
+```
+
+自定义源只支持 HTTP(S) 主机和可选路径，不支持凭据、查询参数或片段。
 
 ## HTTP API
 

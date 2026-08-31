@@ -37,4 +37,27 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertNil(AppSettings.normalizedProxyURL("socks5://127.0.0.1:6153"))
         XCTAssertNil(AppSettings.normalizedProxyURL("   "))
     }
+
+    func testDownloadSourceDefaultsToOfficialAndLoadsSavedMode() {
+        XCTAssertEqual(AppSettings.downloadSource(in: defaults), .official)
+        defaults.set(ModelDownloadSource.hfMirror.rawValue, forKey: AppSettings.downloadSourceKey)
+        XCTAssertEqual(AppSettings.downloadSource(in: defaults), .hfMirror)
+    }
+
+    func testDownloadEndpointNormalizationAndSelection() {
+        XCTAssertEqual(
+            AppSettings.normalizedDownloadEndpoint(" hf-mirror.com/ "),
+            "https://hf-mirror.com"
+        )
+        XCTAssertEqual(
+            AppSettings.downloadEndpoint(for: .official, customEndpoint: "ignored"),
+            "https://huggingface.co"
+        )
+        XCTAssertEqual(
+            AppSettings.downloadEndpoint(for: .custom, customEndpoint: "https://mirror.example/hf/"),
+            "https://mirror.example/hf"
+        )
+        XCTAssertNil(AppSettings.normalizedDownloadEndpoint("https://user:pass@mirror.example"))
+        XCTAssertNil(AppSettings.normalizedDownloadEndpoint("https://mirror.example?token=secret"))
+    }
 }

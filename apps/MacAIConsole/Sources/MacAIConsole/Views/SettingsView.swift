@@ -6,6 +6,8 @@ struct SettingsView: View {
     @AppStorage(AppSettings.proxyModeKey) private var proxyMode = ProxyMode.system.rawValue
     @AppStorage(AppSettings.httpProxyKey) private var httpProxy = ""
     @AppStorage(AppSettings.httpsProxyKey) private var httpsProxy = ""
+    @AppStorage(AppSettings.downloadSourceKey) private var downloadSource = ModelDownloadSource.official.rawValue
+    @AppStorage(AppSettings.customDownloadEndpointKey) private var customDownloadEndpoint = ""
     @Environment(DaemonController.self) private var controller
     @Environment(PythonEnvironmentManager.self) private var pythonEnvironments
 
@@ -59,6 +61,31 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("模型下载源") {
+                Picker("下载源", selection: $downloadSource) {
+                    ForEach(ModelDownloadSource.allCases) { source in
+                        Text(source.title).tag(source.rawValue)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                if selectedDownloadSource == .custom {
+                    TextField("例如 https://hf.example.com", text: $customDownloadEndpoint)
+                        .textFieldStyle(.roundedBorder)
+                    if !customDownloadEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       AppSettings.normalizedDownloadEndpoint(customDownloadEndpoint) == nil {
+                        Text("请输入有效的 http/https 地址，不要包含账号、密码、查询参数或片段。")
+                            .font(.caption)
+                            .foregroundStyle(Theme.danger)
+                    }
+                }
+
+                LabeledContent("重启后使用", value: downloadEndpointText)
+                Text(downloadSourceDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section {
                 Button {
                     controller.restartDaemon()
@@ -74,6 +101,8 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .contentMargins(.top, 8, for: .scrollContent)
         .frame(maxWidth: 680, maxHeight: .infinity, alignment: .top)
         .frame(maxWidth: .infinity)
         .navigationTitle("设置")
@@ -89,13 +118,40 @@ struct SettingsView: View {
     private var settingsAreValid: Bool {
         let memoryIsValid = memoryBudget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || AppSettings.parseMemoryBudget(memoryBudget) != nil
-        guard proxyMode == ProxyMode.manual.rawValue else { return memoryIsValid }
+        let downloadSourceIsValid = selectedDownloadSource != .custom
+            || AppSettings.normalizedDownloadEndpoint(customDownloadEndpoint) != nil
+        guard proxyMode == ProxyMode.manual.rawValue else {
+            return memoryIsValid && downloadSourceIsValid
+        }
         let values = [httpProxy, httpsProxy].filter {
             !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         return memoryIsValid
+            && downloadSourceIsValid
             && !values.isEmpty
             && values.allSatisfy { AppSettings.normalizedProxyURL($0) != nil }
+    }
+
+    private var selectedDownloadSource: ModelDownloadSource {
+        ModelDownloadSource(rawValue: downloadSource) ?? .official
+    }
+
+    private var downloadEndpointText: String {
+        AppSettings.downloadEndpoint(
+            for: selectedDownloadSource,
+            customEndpoint: customDownloadEndpoint
+        ) ?? "地址无效"
+    }
+
+    private var downloadSourceDescription: String {
+        switch selectedDownloadSource {
+        case .official:
+            "适合网络可以稳定访问 Hugging Face 的情况。"
+        case .hfMirror:
+            "使用 hf-mirror.com；下载中断时会保留 .part 文件并自动续传。"
+        case .custom:
+            "适合公司内网或自建 Hugging Face 兼容源。切换后点击下方按钮重启 aiworkd 生效。"
+        }
     }
 
     private var proxyDescription: String {

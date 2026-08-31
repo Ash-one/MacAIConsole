@@ -16,6 +16,22 @@ enum ProxyMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum ModelDownloadSource: String, CaseIterable, Identifiable {
+    case official
+    case hfMirror = "hf-mirror"
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .official: "Hugging Face 官方"
+        case .hfMirror: "hf-mirror.com 镜像"
+        case .custom: "自定义地址"
+        }
+    }
+}
+
 enum AppSettings {
     static let autoStartKey = "autoStartDaemon"
     static let memoryBudgetKey = "memoryBudget"
@@ -23,6 +39,11 @@ enum AppSettings {
     static let proxyModeKey = "proxyMode"
     static let httpProxyKey = "httpProxy"
     static let httpsProxyKey = "httpsProxy"
+    static let downloadSourceKey = "downloadSource"
+    static let customDownloadEndpointKey = "customDownloadEndpoint"
+    static let downloadEndpointEnvironmentKey = "AIWORKD_HF_ENDPOINT"
+    static let officialDownloadEndpoint = "https://huggingface.co"
+    static let hfMirrorDownloadEndpoint = "https://hf-mirror.com"
 
     static var autoStartDaemon: Bool {
         UserDefaults.standard.object(forKey: autoStartKey) as? Bool ?? true
@@ -50,9 +71,24 @@ enum AppSettings {
         normalizedProxyURL(UserDefaults.standard.string(forKey: httpsProxyKey) ?? "")
     }
 
+    static var downloadSource: ModelDownloadSource {
+        downloadSource(in: .standard)
+    }
+
+    static var customDownloadEndpoint: String? {
+        normalizedDownloadEndpoint(
+            UserDefaults.standard.string(forKey: customDownloadEndpointKey) ?? ""
+        )
+    }
+
     static func proxyMode(in defaults: UserDefaults) -> ProxyMode {
         let rawValue = defaults.string(forKey: proxyModeKey) ?? ProxyMode.system.rawValue
         return ProxyMode(rawValue: rawValue) ?? .system
+    }
+
+    static func downloadSource(in defaults: UserDefaults) -> ModelDownloadSource {
+        let rawValue = defaults.string(forKey: downloadSourceKey) ?? ModelDownloadSource.official.rawValue
+        return ModelDownloadSource(rawValue: rawValue) ?? .official
     }
 
     static func normalizedProxyURL(_ text: String) -> String? {
@@ -65,6 +101,41 @@ enum AppSettings {
               ["http", "https"].contains(components.scheme?.lowercased()),
               components.host?.isEmpty == false else { return nil }
         return components.string
+    }
+
+    /// 规范化 Hugging Face 兼容源。允许省略 https://，但不接受凭据、查询参数或片段。
+    static func normalizedDownloadEndpoint(_ text: String) -> String? {
+        var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        if !value.contains("://") {
+            value = "https://\(value)"
+        }
+        guard let components = URLComponents(string: value),
+              ["http", "https"].contains(components.scheme?.lowercased()),
+              components.host?.isEmpty == false,
+              components.user == nil,
+              components.password == nil,
+              components.query == nil,
+              components.fragment == nil else { return nil }
+        var normalized = components.string ?? value
+        while normalized.hasSuffix("/") {
+            normalized.removeLast()
+        }
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    static func downloadEndpoint(
+        for source: ModelDownloadSource,
+        customEndpoint: String
+    ) -> String? {
+        switch source {
+        case .official:
+            officialDownloadEndpoint
+        case .hfMirror:
+            hfMirrorDownloadEndpoint
+        case .custom:
+            normalizedDownloadEndpoint(customEndpoint)
+        }
     }
 
     /// 支持 B / K / M / G / T 后缀；无后缀按字节解析。
