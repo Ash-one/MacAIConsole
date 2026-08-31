@@ -151,6 +151,30 @@ struct RecommendedModel: Identifiable, Hashable {
             estimatedSizeBytes: 380_917_492
         ),
         RecommendedModel(
+            id: "qwen3-tts-0.6b-customvoice-4bit",
+            title: "Qwen3-TTS 0.6B · CustomVoice 4-bit",
+            summary: "自定义音色中文语音合成，4-bit 量化；qwen3-tts Provider 接入后可用",
+            modelType: "tts",
+            provider: "qwen3-tts",
+            repository: "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit",
+            files: [
+                "config.json",
+                "generation_config.json",
+                "merges.txt",
+                "model.safetensors",
+                "model.safetensors.index.json",
+                "preprocessor_config.json",
+                "speech_tokenizer/config.json",
+                "speech_tokenizer/configuration.json",
+                "speech_tokenizer/model.safetensors",
+                "speech_tokenizer/preprocessor_config.json",
+                "tokenizer_config.json",
+                "vocab.json",
+            ],
+            directoryName: "qwen3-tts-0.6b-customvoice-4bit",
+            estimatedSizeBytes: 1_693_602_151
+        ),
+        RecommendedModel(
             id: "whisper-large-v3-turbo-q5",
             title: "Whisper Large v3 Turbo · Q5",
             summary: "多语言语音识别，质量与体积均衡，使用 whisper.cpp",
