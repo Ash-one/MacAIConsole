@@ -3,6 +3,8 @@ import SwiftUI
 // MARK: - 基础元件
 
 /// 状态圆点：可选辉光与呼吸动画（尊重「减弱动态效果」）。
+/// opacity 动画必须作用在 compositingGroup 合成后的图层上，
+/// 否则带 shadow 的圆点每帧都会触发阴影重渲染（持续 CPU 占用）。
 struct StatusDot: View {
     let color: Color
     var size: CGFloat = 8
@@ -17,10 +19,11 @@ struct StatusDot: View {
             .fill(color)
             .frame(width: size, height: size)
             .shadow(color: glow ? color.opacity(0.55) : .clear, radius: size * 0.5)
+            .compositingGroup()
             .opacity(isPulsing ? 0.4 : 1)
             .onAppear {
                 guard pulse, !reduceMotion else { return }
-                withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
+                withAnimation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true)) {
                     isPulsing = true
                 }
             }
