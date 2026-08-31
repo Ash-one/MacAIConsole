@@ -54,8 +54,9 @@ enum ModelRepository {
                 var isDir: ObjCBool = false
                 guard fm.fileExists(atPath: item.path, isDirectory: &isDir) else { continue }
                 if isDir.boolValue {
-                    // 文件夹形态模型：Kokoro TTS 或 Qwen3-ASR。Provider 由目录结构与
-                    // Qwen 量化配置推导，保证从仓库手动注册时仍能选择正确后端。
+                    // 文件夹形态模型：Kokoro TTS、Qwen3-ASR 或 sherpa-onnx。
+                    // Provider 由目录结构与配置文件推导，保证从仓库手动注册时
+                    // 仍能选择正确后端。
                     guard let provider = directoryProvider(at: item, type: type) else { continue }
                     models.append(RepoModel(
                         fileName: item.lastPathComponent,
@@ -91,6 +92,17 @@ enum ModelRepository {
 
     private static func directoryProvider(at url: URL, type: String) -> String? {
         let fm = FileManager.default
+        if type == "stt" {
+            let sherpaFiles = [
+                "tokens.txt",
+                "encoder.int8.onnx",
+                "decoder.onnx",
+                "joiner.int8.onnx"
+            ]
+            if sherpaFiles.allSatisfy({ fm.fileExists(atPath: url.appendingPathComponent($0).path) }) {
+                return "sherpa-onnx"
+            }
+        }
         guard fm.fileExists(atPath: url.appendingPathComponent("model.safetensors").path) else {
             return nil
         }
