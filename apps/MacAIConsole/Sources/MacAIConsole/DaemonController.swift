@@ -518,6 +518,30 @@ final class DaemonController {
         return environment
     }
 
+    static func environmentByApplyingDownloadSource(
+        _ source: ModelDownloadSource,
+        customEndpoint: String?,
+        to base: [String: String]
+    ) -> [String: String] {
+        var environment = base
+        environment.removeValue(forKey: AppSettings.downloadEndpointEnvironmentKey)
+        let endpoint: String?
+        switch source {
+        case .official:
+            endpoint = nil
+        case .hfMirror, .custom:
+            endpoint = AppSettings.downloadEndpoint(
+                for: source,
+                customEndpoint: customEndpoint ?? ""
+            )
+        }
+        if let endpoint {
+            // The selected source is passed to aiworkd, which owns all model downloads.
+            environment[AppSettings.downloadEndpointEnvironmentKey] = endpoint
+        }
+        return environment
+    }
+
     private static func spawn(binary: URL) throws -> (Process, FileHandle) {
         let process = Process()
         process.executableURL = binary
@@ -529,6 +553,11 @@ final class DaemonController {
             httpsProxy: AppSettings.httpsProxy,
             systemSettings: systemSettings,
             to: ProcessInfo.processInfo.environment
+        )
+        environment = environmentByApplyingDownloadSource(
+            AppSettings.downloadSource,
+            customEndpoint: AppSettings.customDownloadEndpoint,
+            to: environment
         )
         environment["RUST_LOG"] = AppSettings.logLevel.rawValue
         if let budget = AppSettings.parseMemoryBudget(AppSettings.memoryBudgetText) {

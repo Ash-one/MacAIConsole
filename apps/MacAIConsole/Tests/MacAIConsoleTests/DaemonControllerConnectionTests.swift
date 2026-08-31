@@ -63,6 +63,39 @@ final class DaemonControllerConnectionTests: XCTestCase {
         XCTAssertNil(disabled["ALL_PROXY"])
     }
 
+    func testSelectedDownloadSourceIsPassedToDaemonEnvironment() {
+        let inherited = [
+            AppSettings.downloadEndpointEnvironmentKey: "https://old.example"
+        ]
+
+        let mirror = DaemonController.environmentByApplyingDownloadSource(
+            .hfMirror,
+            customEndpoint: nil,
+            to: inherited
+        )
+        XCTAssertEqual(
+            mirror[AppSettings.downloadEndpointEnvironmentKey],
+            "https://hf-mirror.com"
+        )
+
+        let custom = DaemonController.environmentByApplyingDownloadSource(
+            .custom,
+            customEndpoint: "mirror.example/hf/",
+            to: inherited
+        )
+        XCTAssertEqual(
+            custom[AppSettings.downloadEndpointEnvironmentKey],
+            "https://mirror.example/hf"
+        )
+
+        let official = DaemonController.environmentByApplyingDownloadSource(
+            .official,
+            customEndpoint: nil,
+            to: inherited
+        )
+        XCTAssertNil(official[AppSettings.downloadEndpointEnvironmentKey])
+    }
+
     func testRuntimeTimeoutKeepsHealthyDaemonOnline() async throws {
         let controller = try makeController()
 

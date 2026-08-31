@@ -303,8 +303,15 @@ async fn pull_model(
         Ok(value) => value,
         Err(error) => return api_error(AIError::InvalidRequest, error),
     };
+    let endpoint = match pull::configured_endpoint() {
+        Ok(endpoint) => endpoint,
+        Err(error) => return api_error(AIError::InvalidRequest, error),
+    };
+    tracing::info!(endpoint = %endpoint, repo = %request.repo, "starting model pull");
     for (filename, destination) in targets {
-        if let Err(error) = pull::download_file(&request.repo, &filename, &destination).await {
+        if let Err(error) =
+            pull::download_file(&endpoint, &request.repo, &filename, &destination).await
+        {
             return api_error(AIError::Internal, error);
         }
     }

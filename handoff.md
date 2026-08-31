@@ -3460,3 +3460,50 @@ Sidecar PoC 至少记录：
   输入、转写、音频输出与取消；
 * 现有 `/v1/chat/completions`、`/v1/audio/transcriptions`、
   `/v1/audio/speech` 与管理 API 回归测试继续通过。
+
+---
+
+# 74. Decision: 模型下载源由 daemon 统一执行并支持可恢复切换
+
+## 问题
+
+大文件模型从 Hugging Face 官方 resolve 地址下载时，响应体可能在传输中途发生
+解码错误。旧实现把该错误直接返回为 HTTP 500；已有 `.part` 文件虽会保留，但
+当 HEAD 没有返回 Content-Length 时会放弃断点并从头请求。GUI 也没有下载源选择，
+用户无法在官方链路不稳定时切换到 Hugging Face 兼容镜像。
+
+## 决策
+
+模型下载继续由 `aiworkd` 作为唯一 owner 执行。MacAIConsole 设置页新增模型下载源
+选择：Hugging Face 官方、`hf-mirror.com` 与自定义 HTTP(S) 地址；GUI 在拉起 daemon
+时通过 `AIWORKD_HF_ENDPOINT` 传递选择，切换后由「应用设置并重启 aiworkd」生效。
+手动启动 daemon 也可以直接设置同名环境变量。
+
+下载客户端固定使用 HTTP/1.1。响应体中断、短包和 408/429/5xx 会最多重试三次，
+每次根据 `.part` 的实际大小发送 Range；服务器忽略 Range 时安全地从头覆盖临时
+文件。源地址只允许 HTTP(S) 主机和可选路径，不接受凭据、查询参数或片段。
+
+## 被放弃的方案
+
+* 在 GUI 中直接下载模型：会让客户端拥有下载状态，破坏 daemon 的 Runtime Authority
+  和统一错误语义。
+* 只增加镜像下拉框而保留原有单次请求：网络中断仍会反复失败，不能利用已下载的
+  大量权重。
+* 依赖外部 `aria2` 或 `huggingface_hub`：增加本机依赖与版本漂移，现有 Rust 流式
+  下载已足够实现 HTTP/1.1、Range 和有限重试。
+
+## 后果与已知边界
+
+* `hf-mirror.com` 是第三方公益镜像；需要登录或 gated 权限的仓库仍需先在官方
+  Hugging Face 侧完成授权，镜像不替代访问权限。
+* 自定义源必须提供与 `/{repo}/resolve/main/{filename}` 兼容的路径语义。
+* 设置变更需重启 aiworkd；已存在的 `.part` 文件会在重启后按新源继续尝试。
+
+## 验证
+
+* `pull::tests::download_file_resumes_after_interrupted_response_body` 使用本地 HTTP
+  服务截断第一次响应，验证第二次 Range 请求与最终文件拼接。
+* `cargo fmt --all -- --check` 通过。
+* `cargo test --workspace` 通过（85 个 Rust 测试）。
+* `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --enable-xctest`
+  通过（31 个 Swift 测试）。

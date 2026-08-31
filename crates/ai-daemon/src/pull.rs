@@ -10,6 +10,10 @@ use reqwest::{header, StatusCode};
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 
+pub const DEFAULT_ENDPOINT: &str = "https://huggingface.co";
+const ENDPOINT_ENV: &str = "AIWORKD_HF_ENDPOINT";
+const MAX_DOWNLOAD_ATTEMPTS: usize = 3;
+
 #[derive(Debug, Deserialize)]
 pub struct PullRequest {
     /// HF 仓库，如 "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
@@ -131,9 +135,56 @@ fn part_path(dest: &Path) -> PathBuf {
     }
 }
 
-/// HF resolve URL（跟随 redirect 到 CDN）。
-pub fn resolve_url(repo: &str, filename: &str) -> String {
-    format!("https://huggingface.co/{repo}/resolve/main/{filename}")
+/// 校验并规范化 Hugging Face 兼容源地址。
+///
+/// 源地址只允许 HTTP(S) 的主机和可选路径，避免把查询参数或用户凭据
+/// 带入每一个下载请求与日志。
+pub fn normalize_endpoint(endpoint: &str) -> Result<String, String> {
+    let mut value = endpoint.trim().to_string();
+    if value.is_empty() {
+        return Err("download endpoint must not be empty".to_string());
+    }
+    if !value.contains("://") {
+        value = format!("https://{value}");
+    }
+    let parsed = reqwest::Url::parse(&value)
+        .map_err(|error| format!("invalid download endpoint '{endpoint}': {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(format!(
+            "download endpoint must use http or https and include a host: '{endpoint}'"
+        ));
+    }
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(
+            "download endpoint must not contain credentials, query parameters or fragments"
+                .to_string(),
+        );
+    }
+    let mut normalized = parsed.to_string();
+    while normalized.ends_with('/') {
+        normalized.pop();
+    }
+    Ok(normalized)
+}
+
+/// 返回 daemon 当前配置的下载源。未设置环境变量时使用官方源。
+pub fn configured_endpoint() -> Result<String, String> {
+    match std::env::var(ENDPOINT_ENV) {
+        Ok(value) if !value.trim().is_empty() => normalize_endpoint(&value),
+        _ => Ok(DEFAULT_ENDPOINT.to_string()),
+    }
+}
+
+/// 使用指定 Hugging Face 兼容源构造 resolve URL。
+pub fn resolve_url_with_endpoint(endpoint: &str, repo: &str, filename: &str) -> String {
+    format!(
+        "{}/{repo}/resolve/main/{filename}",
+        endpoint.trim_end_matches('/')
+    )
 }
 
 /// 已存在的字节数（用于断点续传）。目标文件已完整存在时返回 None。
@@ -154,19 +205,99 @@ pub fn resume_offset(part: &Path, dest: &Path, expected: Option<u64>) -> u64 {
     std::fs::metadata(part).map(|m| m.len()).unwrap_or(0)
 }
 
-/// 流式下载一个 HF 文件。目标旁保留 `.part`，网络中断后可续传。
-pub async fn download_file(repo: &str, filename: &str, dest: &Path) -> Result<(), String> {
+#[derive(Debug)]
+struct DownloadError {
+    message: String,
+    retryable: bool,
+}
+
+impl DownloadError {
+    fn permanent(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retryable: false,
+        }
+    }
+
+    fn retryable(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retryable: true,
+        }
+    }
+}
+
+fn content_range_total(value: &header::HeaderValue) -> Option<u64> {
+    let value = value.to_str().ok()?;
+    let total = value.rsplit_once('/')?.1;
+    (total != "*").then(|| total.parse().ok()).flatten()
+}
+
+fn build_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        // Large HF files have previously failed with an HTTP/2 response-body
+        // decoding error. Keep this transfer path on HTTP/1.1, then retry from
+        // the durable .part offset if the body still ends unexpectedly.
+        .http1_only()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .tcp_keepalive(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|error| format!("http client: {error}"))
+}
+
+/// 流式下载一个 HF 文件。目标旁保留 `.part`，网络中断后可续传；响应体
+/// 出错时自动重试，并从最新的 `.part` 大小继续。
+pub async fn download_file(
+    endpoint: &str,
+    repo: &str,
+    filename: &str,
+    dest: &Path,
+) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(|error| format!("cannot create model dir {}: {error}", parent.display()))?;
     }
+    let endpoint = normalize_endpoint(endpoint)?;
+    let client = build_client()?;
+    let mut last_error = None;
+    for attempt in 1..=MAX_DOWNLOAD_ATTEMPTS {
+        match download_file_once(&client, &endpoint, repo, filename, dest).await {
+            Ok(()) => return Ok(()),
+            Err(error) if error.retryable && attempt < MAX_DOWNLOAD_ATTEMPTS => {
+                tracing::warn!(
+                    filename,
+                    attempt,
+                    max_attempts = MAX_DOWNLOAD_ATTEMPTS,
+                    error = %error.message,
+                    "download interrupted; retrying from .part"
+                );
+                last_error = Some(error.message);
+                tokio::time::sleep(std::time::Duration::from_secs(attempt as u64 * 2)).await;
+            }
+            Err(error) => {
+                let suffix = if error.retryable {
+                    format!(" after {MAX_DOWNLOAD_ATTEMPTS} attempts")
+                } else {
+                    String::new()
+                };
+                return Err(format!("{}{suffix}", error.message));
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "download failed".to_string()))
+}
+
+async fn download_file_once(
+    client: &reqwest::Client,
+    endpoint: &str,
+    repo: &str,
+    filename: &str,
+    dest: &Path,
+) -> Result<(), DownloadError> {
     let part = part_path(dest);
-    let url = resolve_url(repo, filename);
-    let client = reqwest::Client::builder()
-        .pool_idle_timeout(std::time::Duration::from_secs(90))
-        .build()
-        .map_err(|error| format!("http client: {error}"))?;
+    let url = resolve_url_with_endpoint(endpoint, repo, filename);
     let expected_len =
         match tokio::time::timeout(std::time::Duration::from_secs(30), client.head(&url).send())
             .await
@@ -190,31 +321,42 @@ pub async fn download_file(repo: &str, filename: &str, dest: &Path) -> Result<()
 
     let mut offset = resume_offset(&part, dest, expected_len);
     if expected_len.is_some_and(|expected| offset > expected) {
-        let _ = tokio::fs::remove_file(&part).await;
+        tokio::fs::remove_file(&part).await.map_err(|error| {
+            DownloadError::permanent(format!("cannot reset '{}': {error}", part.display()))
+        })?;
         offset = 0;
     }
     if offset > 0 && expected_len == Some(offset) {
-        tokio::fs::rename(&part, dest)
-            .await
-            .map_err(|error| format!("rename failed for '{}': {error}", dest.display()))?;
+        tokio::fs::rename(&part, dest).await.map_err(|error| {
+            DownloadError::permanent(format!("rename failed for '{}': {error}", dest.display()))
+        })?;
         tracing::info!(filename, dest = %dest.display(), bytes = offset, "pull complete");
         return Ok(());
     }
     let mut get = client.get(&url);
-    if offset > 0 && expected_len.is_some() {
+    if offset > 0 {
         get = get.header(header::RANGE, format!("bytes={offset}-"));
         tracing::info!(filename, offset, "resuming pull");
-    } else if offset > 0 {
-        let _ = tokio::fs::remove_file(&part).await;
-        offset = 0;
     }
 
-    let response = get
-        .send()
-        .await
-        .map_err(|error| format!("download failed for '{filename}': {error}"))?;
+    let response = get.send().await.map_err(|error| {
+        DownloadError::retryable(format!("download failed for '{filename}': {error}"))
+    })?;
     if !response.status().is_success() {
-        return Err(format!("HF returned {} for {url}", response.status()));
+        let retryable = matches!(
+            response.status(),
+            StatusCode::REQUEST_TIMEOUT
+                | StatusCode::TOO_MANY_REQUESTS
+                | StatusCode::INTERNAL_SERVER_ERROR
+                | StatusCode::BAD_GATEWAY
+                | StatusCode::SERVICE_UNAVAILABLE
+                | StatusCode::GATEWAY_TIMEOUT
+        );
+        return Err(if retryable {
+            DownloadError::retryable(format!("HF returned {} for {url}", response.status()))
+        } else {
+            DownloadError::permanent(format!("HF returned {} for {url}", response.status()))
+        });
     }
     let append = offset > 0 && response.status() == StatusCode::PARTIAL_CONTENT;
     if !append {
@@ -222,10 +364,16 @@ pub async fn download_file(repo: &str, filename: &str, dest: &Path) -> Result<()
     }
     let total = response
         .headers()
-        .get(header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(|length| length + offset)
+        .get(header::CONTENT_RANGE)
+        .and_then(content_range_total)
+        .or_else(|| {
+            response
+                .headers()
+                .get(header::CONTENT_LENGTH)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|length| length + if append { offset } else { 0 })
+        })
         .or(expected_len);
     let mut file = if append {
         tokio::fs::OpenOptions::new().append(true).open(&part).await
@@ -233,18 +381,26 @@ pub async fn download_file(repo: &str, filename: &str, dest: &Path) -> Result<()
         let _ = tokio::fs::remove_file(&part).await;
         tokio::fs::File::create(&part).await
     }
-    .map_err(|error| format!("cannot open '{}': {error}", part.display()))?;
+    .map_err(|error| {
+        DownloadError::permanent(format!("cannot open '{}': {error}", part.display()))
+    })?;
 
     let mut stream = response.bytes_stream();
     let mut downloaded = offset;
     let mut last_report = downloaded;
     while let Some(chunk) = stream.next().await {
-        let bytes = chunk.map_err(|error| {
-            format!("download interrupted for '{filename}' at {downloaded} bytes: {error}")
+        let bytes = match chunk {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let _ = file.flush().await;
+                return Err(DownloadError::retryable(format!(
+                    "download interrupted for '{filename}' at {downloaded} bytes: {error}"
+                )));
+            }
+        };
+        file.write_all(&bytes).await.map_err(|error| {
+            DownloadError::permanent(format!("write failed for '{}': {error}", part.display()))
         })?;
-        file.write_all(&bytes)
-            .await
-            .map_err(|error| format!("write failed for '{}': {error}", part.display()))?;
         downloaded += bytes.len() as u64;
         if downloaded - last_report >= 16 * 1024 * 1024 {
             tracing::info!(
@@ -256,19 +412,19 @@ pub async fn download_file(repo: &str, filename: &str, dest: &Path) -> Result<()
             last_report = downloaded;
         }
     }
-    file.flush()
-        .await
-        .map_err(|error| format!("flush failed for '{}': {error}", part.display()))?;
+    file.flush().await.map_err(|error| {
+        DownloadError::permanent(format!("flush failed for '{}': {error}", part.display()))
+    })?;
     if let Some(total) = total {
         if downloaded != total {
-            return Err(format!(
+            return Err(DownloadError::retryable(format!(
                 "size mismatch for '{filename}': got {downloaded}, expected {total}"
-            ));
+            )));
         }
     }
-    tokio::fs::rename(&part, dest)
-        .await
-        .map_err(|error| format!("rename failed for '{}': {error}", dest.display()))?;
+    tokio::fs::rename(&part, dest).await.map_err(|error| {
+        DownloadError::permanent(format!("rename failed for '{}': {error}", dest.display()))
+    })?;
     tracing::info!(filename, dest = %dest.display(), bytes = downloaded, "pull complete");
     Ok(())
 }
@@ -276,6 +432,7 @@ pub async fn download_file(repo: &str, filename: &str, dest: &Path) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn validates_paths() {
@@ -289,12 +446,31 @@ mod tests {
     #[test]
     fn builds_urls_and_targets() {
         assert_eq!(
-            resolve_url("a/b", "c.gguf"),
+            resolve_url_with_endpoint(DEFAULT_ENDPOINT, "a/b", "c.gguf"),
             "https://huggingface.co/a/b/resolve/main/c.gguf"
+        );
+        assert_eq!(
+            resolve_url_with_endpoint("https://hf-mirror.com/", "a/b", "c.gguf"),
+            "https://hf-mirror.com/a/b/resolve/main/c.gguf"
         );
         let (dest, part) = pull_target("llm", "m.gguf");
         assert!(dest.ends_with("Models/llm/m.gguf"));
         assert!(part.to_string_lossy().ends_with("m.gguf.part"));
+    }
+
+    #[test]
+    fn validates_and_normalizes_download_endpoints() {
+        assert_eq!(
+            normalize_endpoint(" hf-mirror.com/ ").unwrap(),
+            "https://hf-mirror.com"
+        );
+        assert_eq!(
+            normalize_endpoint("https://mirror.example/hf/").unwrap(),
+            "https://mirror.example/hf"
+        );
+        assert!(normalize_endpoint("ftp://mirror.example").is_err());
+        assert!(normalize_endpoint("https://user:pass@mirror.example").is_err());
+        assert!(normalize_endpoint("https://mirror.example?token=secret").is_err());
     }
 
     #[test]
@@ -367,6 +543,72 @@ mod tests {
         let (dest, part) = pull_target("llm", "nested/model.tar.gz");
         assert!(dest.ends_with("Models/llm/model.tar.gz"));
         assert!(part.to_string_lossy().ends_with("model.tar.gz.part"));
+    }
+
+    #[tokio::test]
+    async fn download_file_resumes_after_interrupted_response_body() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut interrupted = false;
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 1024];
+                loop {
+                    let read = socket.read(&mut buffer).await.unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8_lossy(&request);
+                if request.starts_with("HEAD ") {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n",
+                        )
+                        .await
+                        .unwrap();
+                    continue;
+                }
+                assert!(request.starts_with("GET "));
+                if !interrupted {
+                    interrupted = true;
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n12345",
+                        )
+                        .await
+                        .unwrap();
+                    continue;
+                }
+                assert!(request.to_ascii_lowercase().contains("range: bytes=5-"));
+                socket
+                    .write_all(
+                        b"HTTP/1.1 206 Partial Content\r\nContent-Length: 5\r\nContent-Range: bytes 5-9/10\r\nConnection: close\r\n\r\n67890",
+                    )
+                    .await
+                    .unwrap();
+                return;
+            }
+        });
+
+        let root = std::env::temp_dir().join(format!(
+            "macai-pull-resume-test-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let dest = root.join("model.bin");
+        let result = download_file(&endpoint, "repo", "model.bin", &dest).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"1234567890");
+        server.await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
