@@ -76,7 +76,8 @@ struct LoadModelRequest {
     name: Option<String>,
     /// llm（默认）/ stt / tts。
     model_type: Option<String>,
-    /// 显式推理后端。STT 支持 whisper.cpp（默认）、qwen3-asr-mlx 与 sherpa-onnx。
+    /// 显式推理后端。STT 支持 whisper.cpp（默认）、qwen3-asr-mlx 与 sherpa-onnx；
+    /// TTS 支持 kokoro-mlx（默认）与 qwen3-tts。
     provider: Option<String>,
     context_length: Option<u64>,
     keep_alive: Option<String>,
@@ -368,6 +369,7 @@ async fn register_and_load_model(
         ("stt", Some("qwen3-asr-mlx")) => "qwen3-asr-mlx",
         ("stt", Some("sherpa-onnx")) => "sherpa-onnx",
         ("tts", None | Some("kokoro-mlx")) => "kokoro-mlx",
+        ("tts", Some("qwen3-tts")) => "qwen3-tts",
         (other_type, None) => {
             return api_error(
                 AIError::InvalidRequest,
@@ -405,6 +407,15 @@ async fn register_and_load_model(
                 AIError::InvalidRequest,
                 format!(
                     "expected a model directory containing model.safetensors for provider 'kokoro-mlx', got '{}'",
+                    path.display()
+                ),
+            );
+        }
+        "qwen3-tts" if !path.is_dir() => {
+            return api_error(
+                AIError::InvalidRequest,
+                format!(
+                    "expected a model directory for provider 'qwen3-tts', got '{}'",
                     path.display()
                 ),
             );
@@ -454,6 +465,7 @@ async fn register_and_load_model(
             Some("always"),
             Some(2 * 1024 * 1024 * 1024),
         ),
+        "qwen3-tts" => (Some("qwen3-tts"), Some("always"), Some(size_bytes)),
         "sherpa-onnx" => (
             Some("sherpa-onnx-zh-int8-2025"),
             Some("always"),
