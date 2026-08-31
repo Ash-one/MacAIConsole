@@ -34,7 +34,7 @@ struct SettingsView: View {
                 ForEach(PythonEnvironmentSpec.all) { spec in
                     PythonEnvironmentRow(spec: spec)
                 }
-                Text("Qwen3-ASR 与 Kokoro 的 worker 依赖仓库 .build/ 下的 Python 3.12 环境，安装需联网下载数百 MB 至数 GB 依赖。已用 AIWORK_*_PYTHON 指向自定义环境的无需安装。安装完成后重启 aiworkd 生效。")
+                Text("Qwen3-ASR、sherpa-onnx 与 Kokoro 的 worker 依赖仓库 .build/ 下的 Python 3.12 环境，安装需联网下载数百 MB 至数 GB 依赖。已用 AIWORK_*_PYTHON 指向自定义环境的无需安装。安装完成后重启 aiworkd 生效。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

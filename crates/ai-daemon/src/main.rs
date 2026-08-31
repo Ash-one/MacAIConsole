@@ -76,7 +76,7 @@ struct LoadModelRequest {
     name: Option<String>,
     /// llm（默认）/ stt / tts。
     model_type: Option<String>,
-    /// 显式推理后端。STT 支持 whisper.cpp（默认）与 qwen3-asr-mlx。
+    /// 显式推理后端。STT 支持 whisper.cpp（默认）、qwen3-asr-mlx 与 sherpa-onnx。
     provider: Option<String>,
     context_length: Option<u64>,
     keep_alive: Option<String>,
@@ -366,6 +366,7 @@ async fn register_and_load_model(
         ("llm", Some("mlx-lm")) => "mlx-lm",
         ("stt", None | Some("whisper.cpp")) => "whisper.cpp",
         ("stt", Some("qwen3-asr-mlx")) => "qwen3-asr-mlx",
+        ("stt", Some("sherpa-onnx")) => "sherpa-onnx",
         ("tts", None | Some("kokoro-mlx")) => "kokoro-mlx",
         (other_type, None) => {
             return api_error(
@@ -418,6 +419,11 @@ async fn register_and_load_model(
                 return provider_error(error);
             }
         }
+        "sherpa-onnx" => {
+            if let Err(error) = providers::sherpa_onnx::validate_model_dir(&path) {
+                return provider_error(error);
+            }
+        }
         _ => {}
     }
 
@@ -447,6 +453,11 @@ async fn register_and_load_model(
             Some("qwen3-asr-mlx-8bit"),
             Some("always"),
             Some(2 * 1024 * 1024 * 1024),
+        ),
+        "sherpa-onnx" => (
+            Some("sherpa-onnx-zh-int8-2025"),
+            Some("always"),
+            Some(size_bytes),
         ),
         _ => (None, Some("always"), Some(size_bytes)),
     };

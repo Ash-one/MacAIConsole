@@ -4,7 +4,7 @@
 //! WAV 再交给 STT provider。格式裁决只有一个 owner：daemon 入口；provider
 //! 契约始终保持"只接收 PCM WAV"。symphonia 为纯 Rust 解码，不引入外部
 //! 二进制依赖。转码不重采样、不下混（保原始采样率与声道数）——下游
-//! whisper.cpp 与 Qwen3-ASR worker 都自带 16k 单声道重采样，此处无需重复。
+//! whisper.cpp、Qwen3-ASR 与 sherpa-onnx worker 都自带 16k 单声道重采样，此处无需重复。
 
 use std::io::Cursor;
 
