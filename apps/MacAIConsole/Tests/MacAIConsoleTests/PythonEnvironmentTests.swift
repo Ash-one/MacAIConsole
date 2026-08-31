@@ -5,18 +5,12 @@ import XCTest
 final class PythonEnvironmentTests: XCTestCase {
     /// 每个依赖 Python 的推荐模型都必须有对应环境规格，否则模型页的
     /// 「安装运行环境」按钮会无声消失；whisper.cpp 这类非 Python Provider 则不应有。
-    /// 尚未落地的 Provider 例外：qwen3-tts worker 按 handoff 依赖顺序后置，
-    /// 现阶段模型页显示「Provider 未装配」诊断；worker 接入时把它移出该集合并补上环境规格。
-    static let pendingPythonProviders: Set<String> = ["qwen3-tts"]
-
     @MainActor
     func testEveryPythonBackedRecommendedModelHasEnvironmentSpec() {
         for model in RecommendedModel.builtIns {
             let spec = PythonEnvironmentSpec.spec(forProvider: model.provider)
             if model.provider == "whisper.cpp" {
                 XCTAssertNil(spec, "\(model.provider) 不需要 Python 环境")
-            } else if Self.pendingPythonProviders.contains(model.provider) {
-                XCTAssertNil(spec, "\(model.provider) worker 未落地前不得伪造环境规格")
             } else {
                 XCTAssertNotNil(spec, "\(model.provider) 缺少 Python 环境规格")
                 XCTAssertEqual(spec?.id, model.provider)

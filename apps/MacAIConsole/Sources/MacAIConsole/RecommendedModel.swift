@@ -153,7 +153,7 @@ struct RecommendedModel: Identifiable, Hashable {
         RecommendedModel(
             id: "qwen3-tts-0.6b-customvoice-4bit",
             title: "Qwen3-TTS 0.6B · CustomVoice 4-bit",
-            summary: "自定义音色中文语音合成，4-bit 量化；qwen3-tts Provider 接入后可用",
+            summary: "自定义音色中文语音合成，4-bit 量化（MLX/Metal 加速）",
             modelType: "tts",
             provider: "qwen3-tts",
             repository: "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit",
