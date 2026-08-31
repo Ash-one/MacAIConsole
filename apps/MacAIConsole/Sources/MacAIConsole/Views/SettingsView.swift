@@ -3,7 +3,6 @@ import SwiftUI
 struct SettingsView: View {
     @AppStorage(AppSettings.autoStartKey) private var autoStart = true
     @AppStorage(AppSettings.memoryBudgetKey) private var memoryBudget = ""
-    @AppStorage(AppSettings.qwen3ASR06BEnabledKey) private var qwen3ASR06BEnabled = false
     @AppStorage(AppSettings.proxyModeKey) private var proxyMode = ProxyMode.system.rawValue
     @AppStorage(AppSettings.httpProxyKey) private var httpProxy = ""
     @AppStorage(AppSettings.httpsProxyKey) private var httpsProxy = ""
@@ -31,21 +30,9 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("语音转文字 · STT") {
-                Toggle("启用 Qwen3-ASR 0.6B", isOn: $qwen3ASR06BEnabled)
-                    .accessibilityLabel("启用 Qwen3-ASR 0.6B 语音转文字")
-                    .accessibilityHint("控制 Qwen3-ASR 是否作为可用的语音转文字选项")
-                Text("同时装配 MLX 8-bit 与 PyTorch Provider；本机优先使用 MLX 8-bit，PyTorch 保留为兼容回退。首次使用需在下方「Python 运行环境」安装对应环境，并下载模型。修改后需要重启 aiworkd。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
             Section("Python 运行环境") {
                 ForEach(PythonEnvironmentSpec.all) { spec in
                     PythonEnvironmentRow(spec: spec)
-                    if spec.id != PythonEnvironmentSpec.all.last?.id {
-                        Divider()
-                    }
                 }
                 Text("Qwen3-ASR 与 Kokoro 的 worker 依赖仓库 .build/ 下的 Python 3.12 环境，安装需联网下载数百 MB 至数 GB 依赖。已用 AIWORK_*_PYTHON 指向自定义环境的无需安装。安装完成后重启 aiworkd 生效。")
                     .font(.caption)

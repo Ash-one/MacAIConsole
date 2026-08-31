@@ -524,7 +524,7 @@ final class DaemonController {
         } else {
             environment.removeValue(forKey: "AIWORKD_MEMORY_BUDGET")
         }
-        environment["AIWORK_QWEN3_ASR_ENABLED"] = AppSettings.qwen3ASR06BEnabled ? "1" : "0"
+        environment.removeValue(forKey: "AIWORK_QWEN3_ASR_ENABLED")
         process.environment = environment
 
         // binary 位于 <仓库>/target/<配置>/aiworkd，工作目录定为仓库根

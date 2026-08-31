@@ -137,14 +137,14 @@ struct ModelsView: View {
         }
     }
 
-    /// 推荐模型行的 Provider 诊断：区分「未装配」（如 Qwen3-ASR 开关未开）与
+    /// 推荐模型行的 Provider 诊断：区分「未装配」（如 Provider 未注册）与
     /// 「环境未就绪」（缺 Python venv），并给出对应的 Python 环境规格。
     private func providerDiagnostics(for model: RecommendedModel)
         -> (missing: Bool, reason: String?, spec: PythonEnvironmentSpec?)
     {
         let spec = PythonEnvironmentSpec.spec(forProvider: model.provider)
         guard let entry = controller.providers.first(where: { $0.descriptor.id == model.provider }) else {
-            return (true, "Provider 未装配：在「设置」中开启对应开关并重启 aiworkd", spec)
+            return (true, "Provider 未装配：重启 aiworkd 后重试", spec)
         }
         if !entry.status.available {
             return (false, entry.status.reason ?? entry.status.installHint, spec)

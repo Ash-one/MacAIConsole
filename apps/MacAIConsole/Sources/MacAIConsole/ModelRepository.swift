@@ -111,7 +111,7 @@ enum ModelRepository {
             ?? (json["quantization_config"] as? [String: Any])
         return (quantization?["bits"] as? NSNumber)?.intValue == 8
             ? "qwen3-asr-mlx"
-            : "qwen3-asr"
+            : nil
     }
 
     private static func directorySize(at url: URL) -> UInt64 {
