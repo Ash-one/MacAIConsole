@@ -29,7 +29,11 @@ use ai_core::AIError;
 use crate::process_memory::resident_memory_bytes;
 
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
-const DEFAULT_VOICE: &str = "Vivian";
+pub const DEFAULT_VOICE: &str = "Vivian";
+/// Qwen3-TTS CustomVoice 模型内置的官方 speaker 清单。
+pub const BUILTIN_VOICES: &[&str] = &[
+    "Vivian", "Serena", "Uncle_Fu", "Dylan", "Eric", "Ryan", "Aiden", "Ono_Anna", "Sohee",
+];
 const LOAD_TIMEOUT: Duration = Duration::from_secs(600);
 const INFERENCE_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -622,6 +626,14 @@ mod tests {
         );
         assert_eq!(resolve_voice(Some("   "), Some(" Ryan ")), "Ryan");
         assert_eq!(resolve_voice(None, None), DEFAULT_VOICE);
+    }
+
+    #[test]
+    fn exposes_qwen_builtin_voice_catalog() {
+        assert_eq!(BUILTIN_VOICES.len(), 9);
+        assert_eq!(BUILTIN_VOICES.first(), Some(&DEFAULT_VOICE));
+        assert!(BUILTIN_VOICES.contains(&"Serena"));
+        assert!(BUILTIN_VOICES.contains(&"Ono_Anna"));
     }
 
     #[tokio::test]

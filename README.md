@@ -312,7 +312,9 @@ hf download mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit \
 例如 `Vivian`。首版支持用逗号携带情感指令（`Vivian, very happy`）。
 `speed` 参数仍按 `0.25..=4.0` 校验，但当前 `mlx-audio` 的
 `generate_custom_voice` 没有 speed 参数，因此通过校验后不改变合成速度；后续
-若上游提供原生支持再透传。首版不包含流式、声音克隆或 VoiceDesign。
+若上游提供原生支持再透传。详细设置中的默认音色提供 Qwen3-TTS 官方内置的
+`Vivian`、`Serena`、`Uncle_Fu`、`Dylan`、`Eric`、`Ryan`、`Aiden`、
+`Ono_Anna`、`Sohee`；首版不包含流式、声音克隆或 VoiceDesign。
 
 ### 9. 准备 MLX-LM
 
