@@ -719,4 +719,86 @@ mod tests {
         assert_eq!(failure.error.kind, AIError::InvalidRequest);
         assert!(!failure.fatal);
     }
+
+    #[tokio::test]
+    async fn provider_round_trip_formats_fake_worker_inference() {
+        let Some(python) = [
+            "/usr/bin/python3",
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file()) else {
+            return;
+        };
+        let path = env::temp_dir().join(format!(
+            "macai-sherpa-provider-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        for name in [
+            "tokens.txt",
+            "encoder.int8.onnx",
+            "decoder.onnx",
+            "joiner.int8.onnx",
+        ] {
+            fs::write(path.join(name), b"fixture").unwrap();
+        }
+        let script = path.join("fake_worker.py");
+        fs::write(
+            &script,
+            r#"import json, sys
+print(json.dumps({"ready": True, "device": "cpu"}), flush=True)
+for line in sys.stdin:
+    request = json.loads(line)
+    print(json.dumps({"id": request["id"], "ok": True, "text": "  test transcript  ", "language": "Chinese", "device": "cpu"}), flush=True)
+"#,
+        )
+        .unwrap();
+        let audio = path.join("input.wav");
+        fs::write(&audio, b"RIFF-test-WAVE").unwrap();
+        let provider = SherpaOnnxProvider {
+            state: Mutex::new(None),
+            resident: StdRwLock::new(None),
+            python_override: Some(python),
+            script_override: Some(script),
+        };
+        let model = ModelSpec {
+            id: "zh-int8-2025-test".to_string(),
+            name: "Sherpa test".to_string(),
+            model_type: "stt".to_string(),
+            provider: "sherpa-onnx".to_string(),
+            source: None,
+            path: Some(path.to_string_lossy().into_owned()),
+            format: Some("sherpa-onnx-zh-int8-2025".to_string()),
+            size_bytes: None,
+            memory_estimate: None,
+            keep_alive: Some("always".to_string()),
+            context_length: None,
+            default_voice: None,
+        };
+
+        let handle = provider.load(&model).await.unwrap();
+        let response = provider
+            .transcribe(TranscriptionRequest {
+                model: model.id.clone(),
+                file: Some(audio.to_string_lossy().into_owned()),
+                language: Some("zh-CN".to_string()),
+                response_format: Some("json".to_string()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.text, "test transcript");
+        assert_eq!(response.language.as_deref(), Some("Chinese"));
+        assert_eq!(response.model, model.id);
+        assert_eq!(provider.effective_device().await.as_deref(), Some("cpu"));
+
+        provider.unload(&handle).await.unwrap();
+        assert!(!provider.status().await.ready);
+        let _ = fs::remove_dir_all(path);
+    }
 }
