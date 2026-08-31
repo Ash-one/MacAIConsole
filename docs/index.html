@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MacAI — 面向 Apple Silicon 的本地 AI Runtime</title>
+<meta name="description" content="MacAI 把 LLM、语音识别和语音合成装进一个 Rust daemon，跑在你自己的 Mac 上——OpenAI 兼容 API，原生 SwiftUI 控制台，数据不出本机。">
+<link rel="icon" type="image/png" href="logo.png">
+<style>
+  :root {
+    --bg: #050507;
+    --bg-soft: #0b0b0f;
+    --card: rgba(255, 255, 255, 0.035);
+    --card-hover: rgba(255, 255, 255, 0.055);
+    --border: rgba(255, 255, 255, 0.09);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --text: #f5f5f7;
+    --muted: #9b9ba3;
+    --dim: #6e6e76;
+    --accent: #0a84ff;
+    --accent-2: #5ac8fa;
+    --green: #30d158;
+    --amber: #ffd60a;
+    --red: #ff453a;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+    --radius: 18px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  ::selection { background: rgba(10, 132, 255, 0.35); }
+
+  .container { max-width: 1120px; margin: 0 auto; padding: 0 28px; }
+
+  a { color: inherit; text-decoration: none; }
+  code { font-family: var(--mono); font-size: 0.9em; }
+  .inline-code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.1em 0.45em;
+    white-space: nowrap;
+  }
+
+  /* ---------- reveal on scroll ---------- */
+  .reveal { opacity: 0; transform: translateY(26px); transition: opacity 0.7s ease, transform 0.7s ease; }
+  .reveal.in { opacity: 1; transform: none; }
+
+  /* ---------- nav ---------- */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: rgba(5, 5, 7, 0.72);
+    -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.3s ease;
+  }
+  nav.scrolled { border-bottom-color: var(--border); }
+  .nav-inner { display: flex; align-items: center; gap: 28px; height: 62px; }
+  .nav-brand { display: flex; align-items: center; gap: 11px; font-weight: 650; font-size: 17px; letter-spacing: -0.01em; }
+  .nav-logo {
+    width: 30px; height: 30px; border-radius: 8px; overflow: hidden;
+    background: #000; border: 1px solid var(--border-strong); flex: none;
+    position: relative;
+  }
+  .nav-logo img { position: absolute; width: 300%; left: -104%; top: -88%; }
+  .nav-links { display: flex; gap: 26px; margin-left: auto; }
+  .nav-links a { color: var(--muted); font-size: 14px; transition: color 0.2s; }
+  .nav-links a:hover { color: var(--text); }
+  .nav-cta {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border-strong);
+    border-radius: 999px; padding: 7px 16px; font-size: 13.5px; font-weight: 550;
+    transition: background 0.2s;
+  }
+  .nav-cta:hover { background: rgba(255, 255, 255, 0.14); }
+  .nav-cta svg { width: 15px; height: 15px; }
+
+  /* ---------- hero ---------- */
+  .hero { position: relative; padding: 150px 0 40px; }
+  .hero-glow {
+    position: absolute; inset: 0; pointer-events: none; overflow: hidden;
+  }
+  .hero-glow::before {
+    content: ""; position: absolute; top: -320px; left: 50%; transform: translateX(-72%);
+    width: 900px; height: 700px; border-radius: 50%;
+    background: radial-gradient(closest-side, rgba(10, 132, 255, 0.16), transparent 70%);
+  }
+  .hero-glow::after {
+    content: ""; position: absolute; top: -180px; right: -200px;
+    width: 640px; height: 560px; border-radius: 50%;
+    background: radial-gradient(closest-side, rgba(90, 200, 250, 0.08), transparent 70%);
+  }
+  .hero-inner { position: relative; display: grid; grid-template-columns: minmax(0, 1.04fr) minmax(0, 0.96fr); gap: 56px; align-items: center; }
+  .pill-row { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 26px; }
+  .pill {
+    font-size: 12.5px; font-weight: 550; color: var(--muted);
+    border: 1px solid var(--border); background: rgba(255, 255, 255, 0.03);
+    border-radius: 999px; padding: 5px 13px; letter-spacing: 0.02em;
+  }
+  .pill.hot { color: var(--accent-2); border-color: rgba(10, 132, 255, 0.35); background: rgba(10, 132, 255, 0.08); }
+  h1 {
+    font-size: clamp(2.5rem, 4.6vw, 3.55rem);
+    font-weight: 700; letter-spacing: -0.025em; line-height: 1.16;
+    margin-bottom: 22px;
+  }
+  h1 .grad {
+    background: linear-gradient(92deg, var(--accent) 0%, var(--accent-2) 55%, #bfd9ff 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero-sub { color: var(--muted); font-size: 17.5px; max-width: 33em; margin-bottom: 34px; }
+  .hero-sub code { color: #cfe4ff; }
+  .cta-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    border-radius: 12px; padding: 13px 26px; font-size: 15.5px; font-weight: 600;
+    transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.2s;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn.primary {
+    color: #fff;
+    background: linear-gradient(135deg, #0a84ff, #0066e0);
+    box-shadow: 0 8px 28px rgba(10, 132, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  }
+  .btn.primary:hover { box-shadow: 0 10px 34px rgba(10, 132, 255, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.22); }
+  .btn.ghost { border: 1px solid var(--border-strong); background: rgba(255, 255, 255, 0.04); color: var(--text); }
+  .btn.ghost:hover { background: rgba(255, 255, 255, 0.09); }
+  .hero-note { margin-top: 22px; color: var(--dim); font-size: 13px; }
+
+  /* hero visual */
+  .hero-art { position: relative; }
+  .logo-card {
+    position: relative;
+    border-radius: 24px; overflow: hidden;
+    background: #000;
+    border: 1px solid var(--border-strong);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6), 0 0 90px rgba(10, 132, 255, 0.12);
+  }
+  .logo-card img { display: block; width: 100%; aspect-ratio: 2 / 1; object-fit: cover; object-position: 50% 22%; }
+  .chip {
+    position: absolute; z-index: 2;
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 11.5px; color: #d8e6ff;
+    background: rgba(13, 15, 22, 0.82);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    border: 1px solid var(--border-strong); border-radius: 10px;
+    padding: 7px 12px; white-space: nowrap;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  }
+  .chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); flex: none; }
+  .chip.blue .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .chip.c1 { top: 8%; left: -7%; }
+  .chip.c2 { top: 38%; right: -5%; }
+  .chip.c3 { bottom: 10%; left: 2%; }
+  @keyframes floaty { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+  .chip.c1 { animation: floaty 6s ease-in-out infinite; }
+  .chip.c2 { animation: floaty 7s ease-in-out 0.8s infinite; }
+  .chip.c3 { animation: floaty 6.5s ease-in-out 1.6s infinite; }
+
+  /* ---------- terminal ---------- */
+  .term-wrap { position: relative; margin: 72px auto 0; max-width: 940px; }
+  .term {
+    background: rgba(16, 18, 24, 0.92);
+    border: 1px solid var(--border-strong);
+    border-radius: 14px;
+    box-shadow: 0 30px 90px rgba(0, 0, 0, 0.55), 0 0 70px rgba(10, 132, 255, 0.07);
+    overflow: hidden;
+  }
+  .term-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 16px; background: rgba(255, 255, 255, 0.035);
+    border-bottom: 1px solid var(--border);
+  }
+  .term-bar .tl { width: 12px; height: 12px; border-radius: 50%; }
+  .tl.r { background: #ff5f57; } .tl.y { background: #febc2e; } .tl.g { background: #28c840; }
+  .term-title { margin-left: 10px; font-family: var(--mono); font-size: 12px; color: var(--dim); }
+  .term-body { padding: 20px 22px 24px; font-family: var(--mono); font-size: 13.5px; line-height: 1.85; min-height: 218px; }
+  .term-body .ln { white-space: pre-wrap; word-break: break-all; }
+  .t-cmd { color: #e8e8ed; }
+  .t-cmd .ps { color: var(--accent-2); font-weight: 600; }
+  .t-out { color: var(--muted); }
+  .t-ok { color: var(--green); }
+  .t-dim { color: var(--dim); }
+  #term-stats { transition: opacity 0.6s ease; }
+  #term-stats.pending { opacity: 0; }
+  .cursor { display: inline-block; width: 8px; height: 1.05em; background: var(--accent-2); vertical-align: text-bottom; margin-left: 2px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ---------- sections ---------- */
+  section { padding: 104px 0; position: relative; }
+  section.alt { background: var(--bg-soft); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .sec-head { max-width: 640px; margin-bottom: 56px; }
+  .overline {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12.5px; font-weight: 650; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent-2); margin-bottom: 16px;
+  }
+  .overline::before { content: ""; width: 22px; height: 1.5px; background: var(--accent); border-radius: 2px; }
+  h2 { font-size: clamp(1.7rem, 3vw, 2.35rem); font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; margin-bottom: 14px; }
+  .sec-sub { color: var(--muted); font-size: 16.5px; }
+
+  /* ---------- privacy ---------- */
+  .sec-head.center { margin-left: auto; margin-right: auto; text-align: center; }
+  .privacy-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; }
+  .privacy-grid .card p { font-size: 13.5px; }
+  @media (max-width: 1020px) { .privacy-grid { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 560px) { .privacy-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- features ---------- */
+  .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 26px 24px;
+    transition: background 0.25s, border-color 0.25s, transform 0.25s;
+  }
+  .card:hover { background: var(--card-hover); border-color: var(--border-strong); transform: translateY(-3px); }
+  .card .icon {
+    width: 42px; height: 42px; border-radius: 11px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(10, 132, 255, 0.1); border: 1px solid rgba(10, 132, 255, 0.28);
+    color: var(--accent-2); margin-bottom: 18px;
+  }
+  .card .icon svg { width: 21px; height: 21px; }
+  .card h3 { font-size: 16.5px; font-weight: 650; margin-bottom: 8px; letter-spacing: -0.01em; }
+  .card p { color: var(--muted); font-size: 14px; line-height: 1.75; }
+  .card p code { color: #cfe4ff; }
+
+  /* ---------- architecture ---------- */
+  .arch { display: grid; grid-template-columns: 1fr auto 1.5fr auto 1.1fr; gap: 0; align-items: center; }
+  .arch-col { display: flex; flex-direction: column; gap: 14px; justify-content: center; }
+  .arch-node {
+    background: var(--card); border: 1px solid var(--border); border-radius: 13px;
+    padding: 14px 16px;
+  }
+  .arch-node b { display: block; font-size: 14px; font-weight: 620; }
+  .arch-node span { display: block; font-size: 12px; color: var(--dim); font-family: var(--mono); margin-top: 3px; }
+  .arch-node.provider { border-left: 2px solid rgba(10, 132, 255, 0.5); }
+  .arch-node.provider .tag {
+    display: inline-block; margin-top: 7px; font-size: 10.5px; font-family: var(--mono);
+    color: var(--accent-2); background: rgba(10, 132, 255, 0.1);
+    border-radius: 5px; padding: 1px 7px;
+  }
+  .arch-core {
+    background: linear-gradient(180deg, rgba(10, 132, 255, 0.09), rgba(10, 132, 255, 0.03));
+    border: 1px solid rgba(10, 132, 255, 0.4);
+    border-radius: var(--radius);
+    padding: 24px 22px;
+    box-shadow: 0 0 60px rgba(10, 132, 255, 0.08);
+    display: flex; flex-direction: column;
+  }
+  .arch-core-title { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+  .arch-core-title b { font-size: 17px; font-family: var(--mono); letter-spacing: -0.01em; }
+  .arch-core-title em { font-style: normal; font-size: 11.5px; color: var(--accent-2); letter-spacing: 0.1em; text-transform: uppercase; }
+  .arch-core-desc { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  .arch-mods { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: auto; }
+  .arch-mod { background: rgba(0, 0, 0, 0.35); border: 1px solid var(--border); border-radius: 10px; padding: 11px 13px; }
+  .arch-mod b { display: block; font-size: 12.5px; font-family: var(--mono); color: #cfe4ff; }
+  .arch-mod span { display: block; font-size: 11.5px; color: var(--dim); margin-top: 2px; line-height: 1.5; }
+  .arch-link { display: flex; align-items: center; justify-content: center; color: var(--dim); min-width: 54px; }
+  .arch-link svg { width: 34px; height: 14px; }
+  .arch-note { margin-top: 26px; color: var(--dim); font-size: 13.5px; text-align: center; }
+
+  /* ---------- providers ---------- */
+  .moda-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+  .moda { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 26px 24px; display: flex; flex-direction: column; transition: border-color .25s, background .25s; }
+  .moda:hover { border-color: var(--border-strong); background: var(--card-hover); }
+  .moda-head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .moda-head .icon { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; background: rgba(10, 132, 255, 0.1); border: 1px solid rgba(10, 132, 255, 0.28); color: var(--accent-2); }
+  .moda-head .icon svg { width: 19px; height: 19px; }
+  .moda-head h3 { font-size: 16.5px; font-weight: 650; }
+  .moda-head span { display: block; font-size: 11.5px; color: var(--dim); font-family: var(--mono); }
+  .prov-row { border-top: 1px solid var(--border); padding: 13px 0 4px; margin-top: 13px; }
+  .prov-row .name { font-family: var(--mono); font-size: 13.5px; color: #e8e8ed; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .prov-row .meta { color: var(--dim); font-size: 12.5px; margin-top: 4px; line-height: 1.6; }
+  .badge { font-size: 10.5px; font-family: var(--mono); border-radius: 5px; padding: 1px 7px; color: var(--accent-2); background: rgba(10, 132, 255, 0.1); border: 1px solid rgba(10, 132, 255, 0.25); }
+  .badge.gray { color: var(--muted); background: rgba(255,255,255,0.05); border-color: var(--border); }
+
+  /* ---------- console mock ---------- */
+  .console-grid { display: grid; grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr); gap: 52px; align-items: center; }
+  .feat-list { list-style: none; display: flex; flex-direction: column; gap: 15px; margin-top: 26px; }
+  .feat-list li { display: flex; gap: 12px; color: var(--muted); font-size: 15px; }
+  .feat-list li::before { content: ""; flex: none; width: 19px; height: 19px; margin-top: 4px; border-radius: 50%; background: rgba(48, 209, 88, 0.12); border: 1px solid rgba(48, 209, 88, 0.4); position: relative; }
+  .feat-list li { position: relative; }
+  .feat-list li::after { content: ""; position: absolute; left: 6px; top: 10px; width: 6px; height: 3.5px; border-left: 1.6px solid var(--green); border-bottom: 1.6px solid var(--green); transform: rotate(-45deg); }
+  .mock {
+    background: rgba(14, 15, 20, 0.9); border: 1px solid var(--border-strong); border-radius: 16px; overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), 0 0 60px rgba(10, 132, 255, 0.06);
+    font-size: 12.5px;
+  }
+  .mock-bar { display: flex; align-items: center; gap: 7px; padding: 11px 14px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.03); }
+  .mock-bar .tl { width: 11px; height: 11px; border-radius: 50%; }
+  .mock-title { margin-left: 8px; color: var(--dim); font-size: 12px; }
+  .mock-body { display: flex; min-height: 330px; }
+  .mock-side { width: 158px; flex: none; border-right: 1px solid var(--border); padding: 14px 10px; display: flex; flex-direction: column; gap: 4px; background: rgba(0,0,0,0.25); }
+  .mock-side .si { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; color: var(--muted); font-size: 12.5px; }
+  .mock-side .si svg { width: 14px; height: 14px; opacity: .8; }
+  .mock-side .si.on { background: rgba(10, 132, 255, 0.16); color: #cfe4ff; }
+  .mock-side .sep { height: 1px; background: var(--border); margin: 8px 4px; }
+  .mock-main { flex: 1; padding: 16px 18px; }
+  .mock-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+  .mock-stat { background: rgba(255,255,255,0.035); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .mock-stat .k { color: var(--dim); font-size: 10.5px; }
+  .mock-stat .v { font-family: var(--mono); font-size: 14px; margin-top: 2px; }
+  .mock-stat .v small { color: var(--dim); font-size: 10px; }
+  .mock-row { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-top: 1px solid var(--border); font-size: 12px; }
+  .mock-row:first-of-type { border-top: none; }
+  .mock-row .m-name { font-family: var(--mono); color: #e8e8ed; }
+  .mock-row .m-sub { color: var(--dim); font-size: 10.5px; }
+  .st { margin-left: auto; font-size: 10px; font-family: var(--mono); border-radius: 5px; padding: 2px 8px; white-space: nowrap; }
+  .st.resident { color: var(--green); background: rgba(48, 209, 88, 0.1); border: 1px solid rgba(48, 209, 88, 0.3); }
+  .st.idle { color: var(--amber); background: rgba(255, 214, 10, 0.08); border: 1px solid rgba(255, 214, 10, 0.25); }
+  .st.ready { color: var(--accent-2); background: rgba(10, 132, 255, 0.1); border: 1px solid rgba(10, 132, 255, 0.3); }
+
+  /* ---------- quickstart ---------- */
+  .steps { display: flex; flex-direction: column; gap: 22px; max-width: 860px; }
+  .step { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 20px; align-items: start; }
+  .step-no {
+    width: 34px; height: 34px; border-radius: 50%; margin-top: 3px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--accent-2);
+    background: rgba(10, 132, 255, 0.1); border: 1px solid rgba(10, 132, 255, 0.35);
+  }
+  .step h3 { font-size: 16.5px; font-weight: 650; margin-bottom: 4px; }
+  .step .step-desc { color: var(--muted); font-size: 14px; margin-bottom: 12px; }
+  .codeblock { position: relative; background: rgba(13, 15, 21, 0.9); border: 1px solid var(--border-strong); border-radius: 12px; overflow: hidden; }
+  .codeblock pre { padding: 16px 18px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.8; color: #d9d9e0; }
+  .codeblock .cm { color: var(--dim); }
+  .codeblock .str { color: #7ee0a3; }
+  .codeblock .arg { color: #cfe4ff; }
+  .copy-btn {
+    position: absolute; top: 9px; right: 9px;
+    background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border-strong);
+    color: var(--muted); border-radius: 7px; padding: 4px 10px;
+    font-size: 11.5px; font-family: var(--sans); cursor: pointer;
+    opacity: 0; transition: opacity 0.2s, background 0.2s;
+  }
+  .codeblock:hover .copy-btn { opacity: 1; }
+  .copy-btn:hover { background: rgba(255, 255, 255, 0.12); color: var(--text); }
+  .copy-btn.done { color: var(--green); }
+  .req-row { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 34px; }
+  .req-row .lbl { color: var(--dim); font-size: 13px; align-self: center; margin-right: 4px; }
+
+  /* ---------- api ---------- */
+  .api-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 22px; align-items: start; }
+  .ep-list { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 18px; }
+  .ep { display: flex; align-items: center; gap: 12px; padding: 10.5px 0; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 12.5px; }
+  .ep:first-child { border-top: none; }
+  .ep .m { flex: none; width: 44px; font-size: 10.5px; font-weight: 700; text-align: center; border-radius: 5px; padding: 2px 0; }
+  .m.get { color: #6fd598; background: rgba(48, 209, 88, 0.1); }
+  .m.post { color: var(--accent-2); background: rgba(10, 132, 255, 0.12); }
+  .m.del { color: #ff8080; background: rgba(255, 69, 58, 0.1); }
+  .ep .path { color: #d9d9e0; }
+  .ep .desc { margin-left: auto; color: var(--dim); font-size: 11.5px; font-family: var(--sans); white-space: nowrap; }
+  .api-panels { display: flex; flex-direction: column; gap: 18px; }
+  .panel-label { font-size: 12.5px; color: var(--dim); font-weight: 600; letter-spacing: 0.06em; margin-bottom: 8px; display: block; }
+
+  /* ---------- roadmap ---------- */
+  .roadmap-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 28px; max-width: 900px; }
+  .rm { display: flex; gap: 12px; align-items: baseline; color: var(--muted); font-size: 14.5px; }
+  .rm::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px rgba(10, 132, 255, 0.8); align-self: center; }
+
+  /* ---------- footer ---------- */
+  footer { border-top: 1px solid var(--border); padding: 46px 0 56px; background: var(--bg-soft); }
+  .foot-inner { display: flex; flex-wrap: wrap; gap: 20px 40px; align-items: flex-start; justify-content: space-between; }
+  .foot-brand { display: flex; align-items: center; gap: 10px; font-weight: 650; }
+  .foot-brand .nav-logo { width: 26px; height: 26px; }
+  .foot-col { color: var(--dim); font-size: 13px; max-width: 420px; line-height: 1.8; }
+  .foot-links { display: flex; gap: 22px; font-size: 13.5px; }
+  .foot-links a { color: var(--muted); }
+  .foot-links a:hover { color: var(--text); }
+  .foot-bottom { margin-top: 34px; color: var(--dim); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 8px 24px; }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 980px) {
+    .hero-inner { grid-template-columns: 1fr; gap: 44px; }
+    .hero { padding-top: 128px; }
+    .hero-art { max-width: 560px; }
+    .chip.c1 { left: 0; } .chip.c2 { right: 0; }
+    .grid-3 { grid-template-columns: 1fr 1fr; }
+    .arch { grid-template-columns: 1fr; gap: 18px; }
+    .arch-link svg { transform: rotate(90deg); }
+    .arch-link.r { display: none; }
+    .arch-core { order: -1; }
+    .console-grid { grid-template-columns: 1fr; gap: 40px; }
+    .api-grid { grid-template-columns: 1fr; }
+    .moda-grid { grid-template-columns: 1fr; }
+    .roadmap-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 640px) {
+    .nav-links { display: none; }
+    .grid-3 { grid-template-columns: 1fr; }
+    section { padding: 76px 0; }
+    .mock-side { display: none; }
+    .term-body { font-size: 11.5px; padding: 16px; }
+    .ep .desc { display: none; }
+    .codeblock pre { font-size: 11.5px; }
+    .hero-sub { font-size: 15.5px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .reveal { opacity: 1; transform: none; }
+  }
+</style>
+</head>
+<body>
+
+<nav id="nav">
+  <div class="container nav-inner">
+    <a class="nav-brand" href="#top">
+      <span class="nav-logo"><img src="logo.png" alt="MacAI logo"></span>
+      MacAI
+    </a>
+    <div class="nav-links">
+      <a href="#privacy">隐私</a>
+      <a href="#features">特性</a>
+      <a href="#architecture">架构</a>
+      <a href="#providers">模型能力</a>
+      <a href="#console">控制台</a>
+      <a href="#quickstart">快速开始</a>
+      <a href="#api">API</a>
+    </div>
+    <a class="nav-cta" href="https://github.com/GuanXuzeng/MacAI" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+      GitHub
+    </a>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="hero-glow"></div>
+  <div class="container">
+    <div class="hero-inner">
+      <div>
+        <div class="pill-row">
+          <span class="pill hot">Apple Silicon 原生</span>
+          <span class="pill">Rust Daemon</span>
+          <span class="pill">SwiftUI 控制台</span>
+          <span class="pill">OpenAI 兼容</span>
+        </div>
+        <h1>你的 Mac，<br>就是你的 <span class="grad">AI&nbsp;Runtime</span>。</h1>
+        <p class="hero-sub">
+          MacAI 把 LLM、语音识别和语音合成装进一个 daemon：<code class="inline-code">aiworkd</code>
+          管着模型注册、推理 worker 和内存调度。推理全部跑在本机的 Metal 与 MLX 上——
+          没有云端，没有遥测，数据不出这台 Mac，拔了网线照常干活。
+        </p>
+        <div class="cta-row">
+          <a class="btn primary" href="#quickstart">快速开始
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
+          </a>
+          <a class="btn ghost" href="https://github.com/GuanXuzeng/MacAI" target="_blank" rel="noopener">查看源码</a>
+        </div>
+        <p class="hero-note">还在活跃开发 · 适合本地开发、实验和个人工作流</p>
+      </div>
+      <div class="hero-art">
+        <div class="logo-card"><img src="logo.png" alt="MacAI — 本地运行时与 AI 服务交汇"></div>
+        <div class="chip c1"><span class="dot"></span>aiworkd · 127.0.0.1:11435</div>
+        <div class="chip c2 blue"><span class="dot"></span>llama.cpp · Metal</div>
+        <div class="chip c3"><span class="dot"></span>Kokoro · MLX GPU</div>
+      </div>
+    </div>
+
+    <div class="term-wrap reveal">
+      <div class="term">
+        <div class="term-bar">
+          <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+          <span class="term-title">zsh — MacAI</span>
+        </div>
+        <div class="term-body" id="term-body">
+          <div class="ln t-cmd"><span class="ps">$</span> cargo build --release --workspace</div>
+          <div class="ln t-cmd"><span class="ps">$</span> ./target/release/aiworkd</div>
+          <div class="ln t-ok">● aiworkd listening on http://127.0.0.1:11435</div>
+          <div class="ln t-cmd"><span class="ps">$</span> ./target/release/macai load ./model.gguf --id local-model --type llm --keep-alive 5m</div>
+          <div class="ln t-out">registered <span class="t-ok">local-model</span> · provider llama.cpp · Metal</div>
+          <div class="ln t-cmd"><span class="ps">$</span> ./target/release/macai chat local-model "用一句话介绍你自己"</div>
+          <div class="ln t-out" id="term-answer"><span id="answer-text"></span><span class="cursor"></span></div>
+          <div class="ln t-dim" id="term-stats">stream complete · 33 output tokens · 24.6 tok/s</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="privacy">
+  <div class="container">
+    <div class="sec-head center reveal">
+      <div class="overline">隐私优先 · Local-first</div>
+      <h2>所有处理都发生在你的 Mac 上</h2>
+      <p class="sec-sub">没有云端推理，也没有遥测上报。模型、任务数据和日志都收在这台机器里——整条链路从头到尾不碰第三方服务器。</p>
+    </div>
+    <div class="privacy-grid">
+      <div class="card reveal">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2.5"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg></div>
+        <h3>推理全在本地</h3>
+        <p>LLM、语音识别、语音合成，全由本机的 Metal、MLX 和 CPU 执行。代码里没有云端调用路径——想上传也找不到地方。</p>
+      </div>
+      <div class="card reveal">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19v1"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M5 13a10 10 0 0 1 14 0"/><path d="M2 9.5a15 15 0 0 1 20 0"/><path d="m3 3 18 18"/></svg></div>
+        <h3>断网照常工作</h3>
+        <p>模型权重和任务数据都在本机磁盘上。除了第一次下载模型，日常使用用不到网络。</p>
+      </div>
+      <div class="card reveal">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3.5 9h17M3.5 15h17"/><path d="M12 3a14.5 14.5 0 0 1 0 18 14.5 14.5 0 0 1 0-18Z"/></svg></div>
+        <h3>最小网络暴露</h3>
+        <p><code>aiworkd</code> 只绑 <code>127.0.0.1</code>，也没有做认证——所以它只服务本机。没有内置遥测，不向任何服务外发统计。</p>
+      </div>
+      <div class="card reveal">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/><path d="m4 4 16 16"/></svg></div>
+        <h3>最小化落盘</h3>
+        <p>日志里没有 API token，也没有模型内容；原始音频不进任务历史。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="container">
+    <div class="sec-head reveal">
+      <div class="overline">为什么是 MacAI</div>
+      <h2>一个 daemon，管住所有推理</h2>
+      <p class="sec-sub">GUI、CLI、SDK，都只是客户端。模型状态、内存、生命周期，只属于 <code class="inline-code">aiworkd</code>——没有第二套运行时，也不该有。</p>
+    </div>
+    <div class="grid-3">
+      <div class="card reveal">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 12 10 5 10-5"/><path d="m2 17 10 5 10-5"/></svg></div>
+        <h3>单一 Runtime Authority</h3>
+        <p><code>macai</code>、MacAIConsole、OpenAI SDK，全都走同一个 HTTP API。UI 上显示的每个状态值都来自 daemon 本体——客户端自己不知道，也不需要知道模型的事。</p>
+      </div>
+      <div class="card reveal">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-3.5 8-10V5l-8-3-8 3v7c0 6.5 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg></div>
+        <h3>进程级故障隔离</h3>
+        <p>llama.cpp、whisper.cpp、Python worker，各自是独立进程。某个引擎崩了——段错误、OOM 都算——daemon 活得好好的，客户端收到的是 <code>backend_crashed</code> 这样的结构化错误，其他模型照常服务。</p>
+      </div>
+      <div class="card reveal">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14l4-4"/><path d="M3.3 17a9 9 0 1 1 17.4 0"/><circle cx="12" cy="14" r="1.6"/></svg></div>
+        <h3>内存调度与租约保护</h3>
+        <p>预算按 <code>min(RAM×0.75, RAM−8GB)</code> 划，LRU 逐出、keep-alive、空闲自动卸载都可配置。请求期间挂着 model lease——卸载永远打断不了正在跑的推理。</p>
+      </div>
+      <div class="card reveal">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m8 8-5 4 5 4"/><path d="m16 8 5 4-5 4"/><path d="m13.5 5-3 14"/></svg></div>
+        <h3>OpenAI 兼容 API</h3>
+        <p><code>/v1/chat/completions</code>（逐 token SSE）、<code>/v1/audio/transcriptions</code>、<code>/v1/audio/speech</code>。现有的 OpenAI SDK 代码改个 base_url 就能接上。</p>
+      </div>
+      <div class="card reveal">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2.5"/><path d="M3 9h18"/><path d="M6.5 15h4"/></svg></div>
+        <h3>原生 SwiftUI 控制台</h3>
+        <p>运行状态、内存压力、模型仓库、任务历史、分级着色的日志、菜单栏启停，全在原生应用里——不是 Electron 套壳。</p>
+      </div>
+      <div class="card reveal">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l2.5 2.5"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2"/></svg></div>
+        <h3>诚实的 Provider 状态</h3>
+        <p><code>available / ready / resident</code> 三种状态严格分开，探测失败就如实说原因。是好事：状态含糊的系统，排障全靠猜。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="architecture">
+  <div class="container">
+    <div class="sec-head reveal">
+      <div class="overline">架构</div>
+      <h2>客户端 → daemon → Provider</h2>
+      <p class="sec-sub">推理引擎是独立的 worker 进程，daemon 负责剩下的一切：调度、注册、观测。</p>
+    </div>
+    <div class="arch reveal">
+      <div class="arch-col">
+        <div class="arch-node"><b>macai CLI</b><span>Rust · clap</span></div>
+        <div class="arch-node"><b>MacAIConsole</b><span>SwiftUI · 菜单栏</span></div>
+        <div class="arch-node"><b>OpenAI SDK</b><span>Python / JS / 任意语言</span></div>
+      </div>
+      <div class="arch-link"><svg viewBox="0 0 34 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1 7h29m0 0-5-5m5 5-5 5"/></svg></div>
+      <div class="arch-core">
+        <div class="arch-core-title"><b>aiworkd</b><em>Runtime Authority</em></div>
+        <p class="arch-core-desc">默认监听 <span style="font-family:var(--mono)">127.0.0.1:11435</span> · 唯一的模型与调度权威</p>
+        <div class="arch-mods">
+          <div class="arch-mod"><b>scheduler</b><span>内存预算 · LRU · keep-alive reaper</span></div>
+          <div class="arch-mod"><b>registry</b><span>SQLite 模型注册表 · 重启持久</span></div>
+          <div class="arch-mod"><b>lease guard</b><span>busy guard · 卸载不中断推理</span></div>
+          <div class="arch-mod"><b>tasks</b><span>有界任务历史 · 结构化错误</span></div>
+        </div>
+      </div>
+      <div class="arch-link r"><svg viewBox="0 0 34 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1 7h29m0 0-5-5m5 5-5 5"/></svg></div>
+      <div class="arch-col">
+        <div class="arch-node provider"><b>llama.cpp</b><span>LLM · GGUF</span><span class="tag">Metal / Accelerate</span></div>
+        <div class="arch-node provider"><b>mlx-lm</b><span>LLM · MLX safetensors</span><span class="tag">MLX / GPU</span></div>
+        <div class="arch-node provider"><b>whisper.cpp</b><span>STT · .bin</span><span class="tag">Core ML → Metal</span></div>
+        <div class="arch-node provider"><b>Kokoro MLX</b><span>TTS</span><span class="tag">MLX / GPU</span></div>
+        <div class="arch-node provider"><b>Qwen3-ASR 0.6B</b><span>STT</span><span class="tag">MLX 8-bit / MPS</span></div>
+      </div>
+    </div>
+    <p class="arch-note reveal">worker 崩溃时，daemon 返回 <code class="inline-code">backend_crashed</code> 这样的结构化错误，其余模型继续服务。另外，显式指定 provider 是硬选择——不可用就失败，绝不静默回退。悄悄换 provider 省事，但出了问题你永远查不到原因。</p>
+  </div>
+</section>
+
+<section id="providers">
+  <div class="container">
+    <div class="sec-head reveal">
+      <div class="overline">模型能力</div>
+      <h2>对话、听写、朗读，全在本机</h2>
+      <p class="sec-sub">三类模态，多条加速路径，用到哪个注册哪个。</p>
+    </div>
+    <div class="moda-grid">
+      <div class="moda reveal">
+        <div class="moda-head">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2.5-2.5A8 8 0 1 1 21 12Z"/><path d="M8 10h8M8 13.5h5"/></svg></div>
+          <h3>Chat · LLM</h3>
+        </div>
+        <p class="sec-sub" style="font-size:13.5px">逐 token SSE 流式输出，带 token 统计和生成速度。</p>
+        <div class="prov-row">
+          <div class="name">llama.cpp <span class="badge">Metal</span></div>
+          <div class="meta">GGUF 模型 · 可配置 context 长度 · keep-alive 驻留</div>
+        </div>
+        <div class="prov-row">
+          <div class="name">mlx-lm <span class="badge">MLX</span></div>
+          <div class="meta">MLX 模型目录（safetensors）· GGUF 与 MLX 格式互不通用，注册时显式选择</div>
+        </div>
+      </div>
+      <div class="moda reveal">
+        <div class="moda-head">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg></div>
+          <h3>STT · 语音识别</h3>
+        </div>
+        <p class="sec-sub" style="font-size:13.5px">上传 wav / mp3 / flac / ogg / m4a 都行，daemon 在入口统一转成 PCM WAV。</p>
+        <div class="prov-row">
+          <div class="name">whisper.cpp <span class="badge">Core ML</span> <span class="badge gray">Metal 回退</span></div>
+          <div class="meta">ggml .bin 模型 · large-v3-turbo 可选 ANE 编码器</div>
+        </div>
+        <div class="prov-row">
+          <div class="name">Qwen3-ASR 0.6B <span class="badge">MLX 8-bit</span> <span class="badge gray">MPS 回退</span></div>
+          <div class="meta">多语言识别 · 可指定语言提示</div>
+        </div>
+      </div>
+      <div class="moda reveal">
+        <div class="moda-head">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg></div>
+          <h3>TTS · 语音合成</h3>
+        </div>
+        <p class="sec-sub" style="font-size:13.5px">中英混读，长文本自动分段拼接，音色随便挑。</p>
+        <div class="prov-row">
+          <div class="name">Kokoro-82M-zh <span class="badge">MLX</span></div>
+          <div class="meta">常驻 Python worker · 复用 venv · 可设默认音色</div>
+        </div>
+        <div class="prov-row">
+          <div class="name">macos_say <span class="badge gray">系统兜底</span></div>
+          <div class="meta">零依赖的系统 TTS 通道</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="console">
+  <div class="container">
+    <div class="console-grid">
+      <div class="reveal">
+        <div class="overline">MacAIConsole</div>
+        <h2>原生控制台，<br>一切尽收眼底</h2>
+        <p class="sec-sub">SwiftUI 原生应用，连的还是同一个 daemon——本地不加载模型，也不维护第二套状态。</p>
+        <ul class="feat-list">
+          <li>Runtime 状态与系统内存压力实时可见</li>
+          <li>模型仓库：注册、加载、卸载、改名与详细设置</li>
+          <li>推荐模型一键下载（如 Qwen3 8B · MLX 4-bit）</li>
+          <li>Chat / STT / TTS 任务记录与详情回看</li>
+          <li>GUI 与 daemon 双端日志，级别过滤着色</li>
+          <li>菜单栏快速查看状态、启停 daemon</li>
+          <li>Python 运行环境一键安装到 <code class="inline-code">.build/</code></li>
+        </ul>
+      </div>
+      <div class="mock reveal">
+        <div class="mock-bar">
+          <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+          <span class="mock-title">MacAIConsole</span>
+        </div>
+        <div class="mock-body">
+          <div class="mock-side">
+            <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>运行状态</div>
+            <div class="si on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>模型</div>
+            <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a8 8 0 0 1-8 8H4l2.5-2.5A8 8 0 1 1 21 12Z"/></svg>Chat</div>
+            <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/></svg>语音转写</div>
+            <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>语音合成</div>
+            <div class="sep"></div>
+            <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5V6a2 2 0 0 1 2-2h14v16H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>日志</div>
+          </div>
+          <div class="mock-main">
+            <div class="mock-stats">
+              <div class="mock-stat"><div class="k">内存预算</div><div class="v">36.0 <small>GB</small></div></div>
+              <div class="mock-stat"><div class="k">驻留模型</div><div class="v">2</div></div>
+              <div class="mock-stat"><div class="k">活跃请求</div><div class="v" style="color:var(--green)">0</div></div>
+            </div>
+            <div class="mock-row"><div><div class="m-name">qwen3-8b</div><div class="m-sub">llama.cpp · Metal · keep-alive 5m</div></div><span class="st resident">resident · 6.2 GB</span></div>
+            <div class="mock-row"><div><div class="m-name">whisper-large-v3-turbo</div><div class="m-sub">whisper.cpp · Core ML</div></div><span class="st idle">idle · 已卸载</span></div>
+            <div class="mock-row"><div><div class="m-name">Kokoro-82M-zh</div><div class="m-sub">Kokoro MLX · 常驻 worker</div></div><span class="st ready">ready</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="quickstart">
+  <div class="container">
+    <div class="sec-head reveal">
+      <div class="overline">快速开始</div>
+      <h2>五分钟跑起来</h2>
+      <p class="sec-sub">需要一台 Apple Silicon Mac、macOS 14+、Rust stable 和 Xcode Command Line Tools；Kokoro TTS 还要 Python 3.12。</p>
+    </div>
+    <div class="steps">
+      <div class="step reveal">
+        <div class="step-no">1</div>
+        <div>
+          <h3>构建 workspace</h3>
+          <p class="step-desc">克隆仓库，在根目录把 daemon 和 CLI 编出来。</p>
+          <div class="codeblock">
+            <button class="copy-btn" data-copy>复制</button>
+            <pre>git clone https://github.com/GuanXuzeng/MacAI.git
+cd MacAI
+cargo build --release --workspace</pre>
+          </div>
+        </div>
+      </div>
+      <div class="step reveal">
+        <div class="step-no">2</div>
+        <div>
+          <h3>启动 daemon 并注册模型</h3>
+          <p class="step-desc"><code class="inline-code">aiworkd</code> 起来后监听 <code class="inline-code">127.0.0.1:11435</code>，随便找个本地 GGUF 注册进去就能聊。</p>
+          <div class="codeblock">
+            <button class="copy-btn" data-copy>复制</button>
+            <pre>./target/release/aiworkd
+<span class="cm"># 另开一个终端：</span>
+./target/release/macai load /path/to/model.gguf <span class="arg">\</span>
+  <span class="arg">--id</span> local-model <span class="arg">--type</span> llm <span class="arg">--keep-alive</span> 5m <span class="arg">--context-length</span> 4096
+./target/release/macai chat local-model <span class="str">"Hello"</span> <span class="arg">--temperature</span> 0.2</pre>
+          </div>
+        </div>
+      </div>
+      <div class="step reveal">
+        <div class="step-no">3</div>
+        <div>
+          <h3>接入 OpenAI SDK</h3>
+          <p class="step-desc">任何 OpenAI 客户端，把 base_url 指过来就行，流式也一样。</p>
+          <div class="codeblock">
+            <button class="copy-btn" data-copy>复制</button>
+            <pre><span class="cm"># curl</span>
+curl http://127.0.0.1:11435/v1/chat/completions <span class="arg">\</span>
+  -H <span class="str">'Content-Type: application/json'</span> <span class="arg">\</span>
+  -d <span class="str">'{"model":"local-model","messages":[{"role":"user","content":"Hello"}]}'</span></pre>
+          </div>
+        </div>
+      </div>
+      <div class="step reveal">
+        <div class="step-no">4</div>
+        <div>
+          <h3>打开原生控制台（可选）</h3>
+          <p class="step-desc">whisper.cpp / Kokoro / Qwen3-ASR 的准备步骤，README「快速开始」里写得全。</p>
+          <div class="codeblock">
+            <button class="copy-btn" data-copy>复制</button>
+            <pre>./scripts/build-llama-server.sh <span class="cm"># 固定经过验证的 revision</span>
+./scripts/build-whisper-cli.sh
+./scripts/download-whisper-model.sh base
+
+<span class="cm"># GUI 控制台</span>
+cargo build --release -p ai-daemon
+cd apps/MacAIConsole && scripts/build-app.sh release
+open build/MacAIConsole.app</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="req-row reveal">
+      <span class="lbl">构建脚本内置：</span>
+      <span class="pill">llama.cpp（固定 revision）</span>
+      <span class="pill">whisper.cpp（固定 revision）</span>
+      <span class="pill">whisper 模型下载</span>
+      <span class="pill">Kokoro / Qwen3-ASR / mlx-lm venv 一键安装</span>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="api">
+  <div class="container">
+    <div class="sec-head reveal">
+      <div class="overline">HTTP API</div>
+      <h2>OpenAI 兼容，再加一层完整管理面</h2>
+      <p class="sec-sub"><code class="inline-code">/v1/*</code> 管推理，<code class="inline-code">/api/*</code> 管运行时。</p>
+    </div>
+    <div class="api-grid">
+      <div class="ep-list reveal">
+        <div class="ep"><span class="m get">GET</span><span class="path">/health</span><span class="desc">健康检查</span></div>
+        <div class="ep"><span class="m get">GET</span><span class="path">/v1/models</span><span class="desc">模型列表</span></div>
+        <div class="ep"><span class="m post">POST</span><span class="path">/v1/chat/completions</span><span class="desc">对话 · SSE 流式</span></div>
+        <div class="ep"><span class="m post">POST</span><span class="path">/v1/audio/transcriptions</span><span class="desc">语音转文字</span></div>
+        <div class="ep"><span class="m post">POST</span><span class="path">/v1/audio/speech</span><span class="desc">语音合成</span></div>
+        <div class="ep"><span class="m get">GET</span><span class="path">/api/runtime</span><span class="desc">运行状态</span></div>
+        <div class="ep"><span class="m get">GET</span><span class="path">/api/providers</span><span class="desc">Provider 状态</span></div>
+        <div class="ep"><span class="m get">GET</span><span class="path">/api/tasks</span><span class="desc">任务历史</span></div>
+        <div class="ep"><span class="m post">POST</span><span class="path">/api/models/load</span><span class="desc">注册模型</span></div>
+        <div class="ep"><span class="m post">POST</span><span class="path">/api/models/{id}/unload</span><span class="desc">卸载模型</span></div>
+        <div class="ep"><span class="m post">POST</span><span class="path">/api/models/{id}/keep-alive</span><span class="desc">驻留时长</span></div>
+        <div class="ep"><span class="m del">DEL</span><span class="path">/api/models/{id}</span><span class="desc">删除注册</span></div>
+      </div>
+      <div class="api-panels">
+        <div class="reveal">
+          <span class="panel-label">OpenAI Python SDK</span>
+          <div class="codeblock">
+            <button class="copy-btn" data-copy>复制</button>
+            <pre>from openai import OpenAI
+
+client = OpenAI(
+    base_url=<span class="str">"http://127.0.0.1:11435/v1"</span>,
+    api_key=<span class="str">"local"</span>,
+)
+
+resp = client.chat.completions.create(
+    model=<span class="str">"local-model"</span>,
+    messages=[{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: <span class="str">"你好"</span>}],
+)
+print(resp.choices[0].message.content)</pre>
+          </div>
+        </div>
+        <div class="reveal">
+          <span class="panel-label">CLI 一览</span>
+          <div class="codeblock">
+            <button class="copy-btn" data-copy>复制</button>
+            <pre>macai status · list · ps · providers · tasks
+macai load · start · unload · remove · rename
+macai keep-alive · pull · chat · run
+macai transcribe · speak · voice · logging · serve</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap">
+  <div class="container">
+    <div class="sec-head reveal">
+      <div class="overline">路线图</div>
+      <h2>正在路上</h2>
+      <p class="sec-sub">项目还在活跃开发。完整目标设计在 <code class="inline-code">handoff.md</code> 里，当前做到哪一步，以 README 和代码为准。</p>
+    </div>
+    <div class="roadmap-grid reveal">
+      <div class="rm">MLX-native ASR（mlx-whisper / parakeet-mlx）</div>
+      <div class="rm">LLM / STT / TTS benchmark 框架（MLX vs llama.cpp 对比）</div>
+      <div class="rm">per-device 请求队列与持久任务回放</div>
+      <div class="rm">VAD、streaming STT 与 streaming TTS</div>
+      <div class="rm">GUI Chat、语音与 Hugging Face 下载界面</div>
+      <div class="rm">readiness / deep-health 与完整可观测性</div>
+      <div class="rm">Homebrew 分发、签名、公证与安装包</div>
+      <div class="rm">发布版 API 稳定性承诺</div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <div class="foot-inner">
+      <div>
+        <div class="foot-brand">
+          <span class="nav-logo"><img src="logo.png" alt=""></span>
+          MacAI
+        </div>
+        <p class="foot-col" style="margin-top:14px">面向 Apple Silicon 的本地 AI Runtime。<br>Rust · SwiftUI · Metal · MLX</p>
+      </div>
+      <div class="foot-links">
+        <a href="#features">特性</a>
+        <a href="#architecture">架构</a>
+        <a href="#quickstart">快速开始</a>
+        <a href="#api">API</a>
+        <a href="https://github.com/GuanXuzeng/MacAI/blob/main/README.md" target="_blank" rel="noopener">README</a>
+      </div>
+      <p class="foot-col">安全提醒：<code class="inline-code">aiworkd</code> 只绑 <code class="inline-code">127.0.0.1</code> 且没有认证，别通过端口转发或反向代理把它暴露到不受信任的网络。</p>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 GuanXuzeng · MIT License</span>
+      <span>状态展示仅为示意图，实际以 daemon 返回为准</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // nav border on scroll
+  var nav = document.getElementById('nav');
+  var onScroll = function () { nav.classList.toggle('scrolled', window.scrollY > 8); };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  // reveal on scroll
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var revealEls = document.querySelectorAll('.reveal');
+  if (reduced || !('IntersectionObserver' in window)) {
+    revealEls.forEach(function (el) { el.classList.add('in'); });
+  } else {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+    revealEls.forEach(function (el) { io.observe(el); });
+  }
+
+  // copy buttons
+  document.querySelectorAll('[data-copy]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var text = btn.parentElement.querySelector('pre').innerText;
+      var done = function () {
+        btn.textContent = '已复制'; btn.classList.add('done');
+        setTimeout(function () { btn.textContent = '复制'; btn.classList.remove('done'); }, 1600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, done);
+      } else { done(); }
+    });
+  });
+
+  // terminal typing (the answer line only; commands stay static for reliability)
+  (function () {
+    var target = document.getElementById('answer-text');
+    var stats = document.getElementById('term-stats');
+    if (!target) return;
+    var text = '我是运行在你 Mac 上的本地模型，不出网络，随叫随到。';
+    if (reduced) { target.textContent = text; return; }
+    stats.classList.add('pending');
+    var started = false;
+    var type = function () {
+      if (started) return; started = true;
+      var i = 0;
+      (function tick() {
+        if (i <= text.length) {
+          target.textContent = text.slice(0, i);
+          i += 1;
+          setTimeout(tick, 42);
+        } else {
+          stats.classList.remove('pending');
+        }
+      })();
+    };
+    var tio = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { if (e.isIntersecting) { setTimeout(type, 700); tio.disconnect(); } });
+    }, { threshold: 0.4 });
+    tio.observe(document.getElementById('term-body'));
+  })();
+</script>
+</body>
+</html>
