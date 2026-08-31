@@ -16,7 +16,8 @@ MacAIConsole (SwiftUI) ├── HTTP ──> aiworkd ──┬── llama.cpp 
 OpenAI-compatible SDK ┘                      ├── mlx-lm ──────> MLX / Metal
                                              ├── whisper.cpp ─> Core ML / Metal
                                              ├── sherpa-onnx ─> ONNX Runtime / CPU or Core ML
-                                             └── Kokoro MLX ──> local TTS
+                                             ├── Kokoro MLX ──> local TTS
+                                             └── Qwen3-TTS MLX ─> local TTS
 
                                              ├── SQLite model registry
                                              ├── memory budget / LRU / keep-alive
@@ -50,6 +51,7 @@ OpenAI-compatible SDK ┘                      ├── mlx-lm ─────�
 | STT | whisper.cpp | `.bin` + PCM WAV | Core ML 优先，Metal 回退 |
 | STT | sherpa-onnx | zh-int8-2025 model directory + PCM WAV | CPU（可选 Core ML） |
 | TTS | Kokoro MLX | Kokoro 模型目录 | MLX / Metal GPU |
+| TTS | Qwen3-TTS MLX | Qwen3-TTS CustomVoice 模型目录 | MLX / Metal GPU |
 
 每个 Provider 都是独立进程。这不是设计洁癖，是故障隔离的实际需要：某个推理引擎崩了——llama.cpp 段错误、Python worker OOM——`aiworkd` 本身保持存活，客户端收到的是 `backend_crashed` 这样的结构化错误，其他模型照常服务。另外有一点是刻意的：显式指定 `--provider` 是硬选择，provider 不可用就直接失败，绝不悄悄换一个。静默 fallback 会让「为什么变慢了」这种问题永远查不出原因。
 
@@ -259,7 +261,7 @@ export AIWORK_SHERPA_ONNX_DEVICE=coreml
 `AIWORK_SHERPA_ONNX_LOAD_TIMEOUT_SECS` 与
 `AIWORK_SHERPA_ONNX_INFERENCE_TIMEOUT_SECS` 分别控制加载和识别超时。
 
-### 8. 准备 Kokoro TTS
+### 7. 准备 Kokoro TTS
 
 ```bash
 python3.12 -m venv .build/kokoro-venv
@@ -279,7 +281,41 @@ python3.12 -m venv .build/kokoro-venv
 
 同样，`AIWORK_KOKORO_PYTHON` 可以指向其他 Python 环境。
 
+### 8. 准备 Qwen3-TTS CustomVoice
+
+Qwen3-TTS 与 Kokoro 复用同一个 `mlx-audio` Python 环境。推荐使用
+`mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit`，它通过常驻 worker
+运行在 MLX/Metal 上：
+
+```bash
+.build/kokoro-venv/bin/pip install -U mlx-audio
+hf download mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit \
+  --local-dir "$HOME/Library/Application Support/MacAIConsole/Models/tts/Qwen3-TTS-0.6B-CustomVoice-4bit"
+```
+
+注册时显式选择 `qwen3-tts`：
+
+```bash
+./target/release/macai load \
+  "$HOME/Library/Application Support/MacAIConsole/Models/tts/Qwen3-TTS-0.6B-CustomVoice-4bit" \
+  --id qwen3-tts-customvoice-4bit \
+  --type tts \
+  --provider qwen3-tts \
+  --keep-alive always
+
+./target/release/macai speak qwen3-tts-customvoice-4bit "你好，这是本地模型。"
+```
+
+可用 `AIWORK_QWEN3_TTS_PYTHON` 覆盖 Python 路径，`AIWORK_QWEN3_TTS_SCRIPT`
+覆盖 worker 脚本路径。请求只支持 WAV；`voice` 传递 Qwen3-TTS 的 speaker，
+例如 `Vivian`。首版支持用逗号携带情感指令（`Vivian, very happy`）。
+`speed` 参数仍按 `0.25..=4.0` 校验，但当前 `mlx-audio` 的
+`generate_custom_voice` 没有 speed 参数，因此通过校验后不改变合成速度；后续
+若上游提供原生支持再透传。首版不包含流式、声音克隆或 VoiceDesign。
+
 ### 9. 准备 MLX-LM
+
+创建 Python 环境（也可在 MacAIConsole「设置 → Python 运行环境」中一键安装）：
 
 ```bash
 python3.12 -m venv .build/mlx-lm-venv
