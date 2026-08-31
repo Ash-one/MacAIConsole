@@ -613,7 +613,8 @@ async fn set_model_voice(
     }
 }
 
-/// 列出 TTS 模型可用的音色：扫描模型目录下 voices/*.safetensors。
+/// 列出 TTS 模型可用的音色：Qwen3-TTS 使用 provider 内置 speaker，其他
+/// 目录模型扫描 voices/*.safetensors。
 async fn list_model_voices(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<String>,
@@ -621,20 +622,34 @@ async fn list_model_voices(
     let Some(spec) = state.runtime.get_model(&id).await else {
         return api_error(AIError::ModelNotFound, format!("model '{id}' not found"));
     };
-    let mut voices: Vec<String> = Vec::new();
-    if let Some(path) = &spec.path {
-        let dir = FilePath::new(path).join("voices");
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if let Some(stem) = name.strip_suffix(".safetensors") {
-                    voices.push(stem.to_string());
+    let (voices, default_voice) = if spec.provider == "qwen3-tts" {
+        (
+            providers::qwen3_tts::BUILTIN_VOICES
+                .iter()
+                .map(|voice| (*voice).to_string())
+                .collect(),
+            spec.default_voice
+                .clone()
+                .filter(|voice| providers::qwen3_tts::BUILTIN_VOICES.contains(&voice.as_str()))
+                .or_else(|| Some(providers::qwen3_tts::DEFAULT_VOICE.to_string())),
+        )
+    } else {
+        let mut voices: Vec<String> = Vec::new();
+        if let Some(path) = &spec.path {
+            let dir = FilePath::new(path).join("voices");
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if let Some(stem) = name.strip_suffix(".safetensors") {
+                        voices.push(stem.to_string());
+                    }
                 }
             }
         }
-    }
-    voices.sort();
-    Json(json!({"id": id, "voices": voices, "default_voice": spec.default_voice})).into_response()
+        voices.sort();
+        (voices, spec.default_voice.clone())
+    };
+    Json(json!({"id": id, "voices": voices, "default_voice": default_voice})).into_response()
 }
 
 async fn chat_completions(State(state): State<AppState>, Json(req): Json<ChatRequest>) -> Response {
@@ -1025,6 +1040,42 @@ mod tests {
             log_filter,
             log_level: Arc::new(AtomicU8::new(LOG_LEVEL_INFO)),
         }
+    }
+
+    fn qwen_tts_model() -> ai_core::model::ModelSpec {
+        ai_core::model::ModelSpec {
+            id: "qwen-tts".to_string(),
+            name: "Qwen3-TTS".to_string(),
+            model_type: "tts".to_string(),
+            provider: "qwen3-tts".to_string(),
+            source: None,
+            path: None,
+            format: Some("qwen3-tts".to_string()),
+            size_bytes: None,
+            memory_estimate: None,
+            keep_alive: Some("always".to_string()),
+            context_length: None,
+            default_voice: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn qwen3_tts_voice_endpoint_exposes_builtin_voices() {
+        let runtime = Arc::new(Runtime::new());
+        runtime.register(qwen_tts_model()).await;
+
+        let response =
+            list_model_voices(State(app_state(runtime)), AxumPath("qwen-tts".to_string())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        let voices = payload["voices"].as_array().unwrap();
+        assert_eq!(voices.len(), 9);
+        assert_eq!(voices[0], "Vivian");
+        assert_eq!(payload["default_voice"], "Vivian");
+        assert!(voices.iter().any(|voice| voice == "Ono_Anna"));
     }
 
     #[tokio::test]
