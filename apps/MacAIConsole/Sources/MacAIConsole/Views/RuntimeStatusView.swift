@@ -585,26 +585,12 @@ struct ProviderRow: View {
     let entry: ProviderEntry
 
     var body: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(entry.descriptor.id)
-                        .font(.body.weight(.medium))
-                    if let isolation = entry.descriptor.isolation, !isolation.isEmpty {
-                        Chip(text: isolation)
-                    }
-                }
-                if let capabilities = entry.descriptor.capabilities, !capabilities.isEmpty {
-                    Text(capabilities.joined(separator: "、"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if let reason = entry.status.reason, !reason.isEmpty {
-                    Text(reason)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
+        HStack(spacing: 8) {
+            Text(entry.descriptor.id)
+                .font(.body.weight(.medium))
+                .lineLimit(1)
+            engineTag
+            typeTag
             Spacer(minLength: 12)
             HStack(spacing: 5) {
                 StatusDot(
@@ -619,6 +605,30 @@ struct ProviderRow: View {
         }
         .padding(.vertical, 7)
         .padding(.horizontal, 2)
+    }
+
+    /// 引擎 tag：MLX 与 CPP 两种后端用颜色区分，其余引擎（mock、macos-say）不标。
+    @ViewBuilder
+    private var engineTag: some View {
+        let id = entry.descriptor.id.lowercased()
+        if id.contains("mlx") {
+            Chip(text: "MLX", color: Theme.warning)
+        } else if id.contains(".cpp") {
+            Chip(text: "CPP", color: Theme.info)
+        }
+    }
+
+    /// 类型 tag：按能力归类为 STT / TTS / LLM，中性灰与引擎 tag 区分。
+    @ViewBuilder
+    private var typeTag: some View {
+        let capabilities = entry.descriptor.capabilities ?? []
+        if capabilities.contains("speech_to_text") {
+            Chip(text: "STT")
+        } else if capabilities.contains("text_to_speech") {
+            Chip(text: "TTS")
+        } else if capabilities.contains("chat") || capabilities.contains("completion") {
+            Chip(text: "LLM")
+        }
     }
 
     private var statusText: String {
