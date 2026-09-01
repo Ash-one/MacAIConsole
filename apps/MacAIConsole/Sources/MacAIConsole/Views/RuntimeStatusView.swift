@@ -376,13 +376,28 @@ struct RunningModelSettingsView: View {
 
     private var contextLengthValid: Bool {
         guard let value = parsedContextLength else { return false }
-        return value >= 256 && value <= 1024 * 1024
+        let detectedLimit = repoModel?.ggufMetadata?.contextLength ?? 1024 * 1024
+        return value >= 256 && value <= min(detectedLimit, 1024 * 1024)
+    }
+
+    private var contextDescription: String {
+        guard let repoModel else {
+            return "该模型不在模型仓库中，无法从这里重载上下文"
+        }
+        if let detectionError = repoModel.detectionError {
+            return "GGUF 检测失败：\(detectionError)"
+        }
+        if let contextLength = repoModel.ggufMetadata?.contextLength {
+            return "模型原生上限 \(GGUFMetadata.formatTokenCount(contextLength))；修改后会同步注册设置并重载 LLM"
+        }
+        return "修改后会同步模型注册设置并重载 LLM"
     }
 
     private var canApply: Bool {
         guard controller.phase == .online, !isReloading else { return false }
         guard modelType == "llm" else { return true }
-        return !contextLengthChanged || (contextLengthValid && repoModel != nil)
+        guard contextLengthChanged else { return true }
+        return contextLengthValid && repoModel?.detectionError == nil
     }
 
     var body: some View {
@@ -408,7 +423,12 @@ struct RunningModelSettingsView: View {
                             Text("上下文长度")
                             Spacer()
                             HStack(spacing: 4) {
-                                TextField("4", text: $contextLengthDraft)
+                                TextField(
+                                    "上下文长度",
+                                    text: $contextLengthDraft,
+                                    prompt: Text("4")
+                                )
+                                    .labelsHidden()
                                     .font(.body.monospacedDigit())
                                     .textFieldStyle(.plain)
                                     .frame(width: 72)
@@ -432,7 +452,7 @@ struct RunningModelSettingsView: View {
                                     .strokeBorder(Theme.hairlineStrong)
                             )
                         }
-                        Text(repoModel == nil ? "该模型不在模型仓库中，无法从这里重载上下文" : "修改后会同步模型注册设置并重载 LLM")
+                        Text(contextDescription)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -535,6 +555,7 @@ struct RunningModelSettingsView: View {
               let value = parsedContextLength,
               contextLengthValid,
               let repoModel,
+              repoModel.detectionError == nil,
               !isReloading else { return }
 
         ModelRepository.setContextLength(value, for: model.id)
