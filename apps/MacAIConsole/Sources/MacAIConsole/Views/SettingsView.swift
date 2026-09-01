@@ -15,16 +15,20 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("外观") {
-                Picker("应用外观", selection: $appearance) {
-                    ForEach(AppearanceMode.allCases) { mode in
-                        Text(mode.title).tag(mode.rawValue)
+                HStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Text("应用外观")
+                        InfoTip(text: appearanceDescription)
                     }
+                    Spacer(minLength: 12)
+                    Picker("应用外观", selection: $appearance) {
+                        ForEach(AppearanceMode.allCases) { mode in
+                            Text(mode.title).tag(mode.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
                 }
-                .pickerStyle(.segmented)
-
-                Text(appearanceDescription)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             Section("守护进程") {
@@ -36,32 +40,37 @@ struct SettingsView: View {
                 HStack {
                     TextField("自动（按物理内存计算）", text: $memoryBudget)
                         .textFieldStyle(.roundedBorder)
-                    Text("例如 8G、8192M")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    InfoTip(text: memoryBudgetDescription, maxWidth: 320)
                 }
                 LabeledContent("当前生效预算", value: Format.bytes(controller.info?.memoryBudget))
-                Text("留空使用自动策略：物理内存的 75%，且最多保留 8 GB 给系统。修改后需要重启 aiworkd 才会生效。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
-            Section("Python 运行环境") {
+            Section {
                 ForEach(PythonEnvironmentSpec.all) { spec in
                     PythonEnvironmentRow(spec: spec)
                 }
-                Text("Qwen3-ASR、sherpa-onnx 与 Kokoro 的 worker 依赖仓库 .build/ 下的 Python 3.12 环境，安装需联网下载数百 MB 至数 GB 依赖。已用 AIWORK_*_PYTHON 指向自定义环境的无需安装。安装完成后重启 aiworkd 生效。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            } header: {
+                HStack(spacing: 6) {
+                    Text("Python 运行环境")
+                    InfoTip(text: pythonEnvironmentDescription, maxWidth: 320)
+                }
             }
 
             Section("网络代理") {
-                Picker("代理模式", selection: $proxyMode) {
-                    ForEach(ProxyMode.allCases) { mode in
-                        Text(mode.title).tag(mode.rawValue)
+                HStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Text("代理模式")
+                        InfoTip(text: proxyDescription, maxWidth: 320)
                     }
+                    Spacer(minLength: 12)
+                    Picker("代理模式", selection: $proxyMode) {
+                        ForEach(ProxyMode.allCases) { mode in
+                            Text(mode.title).tag(mode.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
                 }
-                .pickerStyle(.segmented)
 
                 if proxyMode == ProxyMode.manual.rawValue {
                     TextField("HTTP 代理，例如 127.0.0.1:6152", text: $httpProxy)
@@ -70,18 +79,23 @@ struct SettingsView: View {
                         .textFieldStyle(.roundedBorder)
                 }
 
-                Text(proxyDescription)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             Section("模型下载源") {
-                Picker("下载源", selection: $downloadSource) {
-                    ForEach(ModelDownloadSource.allCases) { source in
-                        Text(source.title).tag(source.rawValue)
+                HStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Text("下载源")
+                        InfoTip(text: downloadSourceDescription, maxWidth: 320)
                     }
+                    Spacer(minLength: 12)
+                    Picker("下载源", selection: $downloadSource) {
+                        ForEach(ModelDownloadSource.allCases) { source in
+                            Text(source.title).tag(source.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
                 }
-                .pickerStyle(.menu)
 
                 if selectedDownloadSource == .custom {
                     TextField("例如 https://hf.example.com", text: $customDownloadEndpoint)
@@ -95,9 +109,6 @@ struct SettingsView: View {
                 }
 
                 LabeledContent("重启后使用", value: downloadEndpointText)
-                Text(downloadSourceDescription)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -138,6 +149,14 @@ struct SettingsView: View {
         case .dark:
             "始终使用暗黑外观。"
         }
+    }
+
+    private var memoryBudgetDescription: String {
+        "留空使用自动策略：物理内存的 75%，且最多保留 8 GB 给系统。示例：8G、8192M。修改后需要重启 aiworkd 才会生效。"
+    }
+
+    private var pythonEnvironmentDescription: String {
+        "Qwen3-ASR、sherpa-onnx 与 Kokoro 的 worker 依赖仓库 .build/ 下的 Python 3.12 环境，安装需联网下载数百 MB 至数 GB 依赖。已用 AIWORK_*_PYTHON 指向自定义环境的无需安装。安装完成后重启 aiworkd 生效。"
     }
 
     private var settingsAreValid: Bool {
@@ -214,11 +233,11 @@ struct PythonEnvironmentRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(spec.label)
-                    .font(.body.weight(.medium))
-                Text(spec.summary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Text(spec.label)
+                        .font(.body.weight(.medium))
+                    InfoTip(text: spec.summary, maxWidth: 260)
+                }
                 if isInstalling {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)

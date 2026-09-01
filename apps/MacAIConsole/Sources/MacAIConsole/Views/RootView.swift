@@ -45,6 +45,7 @@ struct RootView: View {
             .background {
                 Theme.background.ignoresSafeArea()
             }
+            .infoTipPresenter()
             .toolbarBackground(Theme.background, for: .windowToolbar)
         }
         // 设置合并进主窗口后，用主窗口级的 Cmd+, 维持 macOS 设置快捷键惯例。
