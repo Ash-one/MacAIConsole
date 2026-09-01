@@ -7,3 +7,4 @@ __pycache__/
 kokoro.wav
 # QA 用的 git worktree 副本（含独立 .git 与 target/），不属于本仓库
 /.wt-qa/
+.pytest_cache/
