@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct MacAIConsoleApp: App {
     @State private var router = AppRouter()
+    @AppStorage(AppSettings.appearanceKey) private var appearance = AppearanceMode.system.rawValue
     private let controller = DaemonController()
     @State private var pythonEnvironments = PythonEnvironmentManager()
 
@@ -14,7 +15,7 @@ struct MacAIConsoleApp: App {
                 .environment(pythonEnvironments)
                 .frame(minWidth: 780, minHeight: 520)
                 .tint(Theme.accent)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(preferredColorScheme)
         }
         .windowResizability(.contentMinSize)
 
@@ -22,7 +23,7 @@ struct MacAIConsoleApp: App {
             MenuBarContentView()
                 .environment(controller)
                 .tint(Theme.accent)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(preferredColorScheme)
         } label: {
             Image(systemName: menuBarIcon)
         }
@@ -34,6 +35,14 @@ struct MacAIConsoleApp: App {
         case .online: "antenna.radiowaves.left.and.right"
         case .starting, .stopping: "hourglass"
         case .offline: "antenna.radiowaves.left.and.right.slash"
+        }
+    }
+
+    private var preferredColorScheme: ColorScheme? {
+        switch AppearanceMode(rawValue: appearance) ?? .system {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
         }
     }
 }

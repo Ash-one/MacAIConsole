@@ -25,6 +25,14 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings.proxyMode(in: defaults), .manual)
     }
 
+    func testAppearanceDefaultsToSystemAndLoadsSavedMode() {
+        XCTAssertEqual(AppSettings.appearance(in: defaults), .system)
+        defaults.set(AppearanceMode.dark.rawValue, forKey: AppSettings.appearanceKey)
+        XCTAssertEqual(AppSettings.appearance(in: defaults), .dark)
+        defaults.set("unsupported", forKey: AppSettings.appearanceKey)
+        XCTAssertEqual(AppSettings.appearance(in: defaults), .system)
+    }
+
     func testProxyURLNormalizationAcceptsNewbieFriendlyHostAndRejectsInvalidSchemes() {
         XCTAssertEqual(
             AppSettings.normalizedProxyURL("127.0.0.1:6152"),

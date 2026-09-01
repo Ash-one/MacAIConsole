@@ -208,8 +208,8 @@ struct LogsView: View {
 
     private func color(for level: LogLevel) -> Color {
         switch level {
-        case .debug: Color.white.opacity(0.35)
-        case .info: Color.white.opacity(0.85)
+        case .debug: Color.primary.opacity(0.35)
+        case .info: Color.primary.opacity(0.85)
         case .warning: Theme.warning
         case .error: Theme.danger
         }
