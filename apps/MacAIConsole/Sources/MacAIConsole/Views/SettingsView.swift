@@ -51,8 +51,8 @@ struct SettingsView: View {
                 }
             } header: {
                 HStack(spacing: 6) {
-                    Text("Python 运行环境")
-                    InfoTip(text: pythonEnvironmentDescription, maxWidth: 320)
+                    Text("运行环境")
+                    InfoTip(text: runtimeEnvironmentDescription, maxWidth: 320)
                 }
             }
 
@@ -155,8 +155,8 @@ struct SettingsView: View {
         "留空使用自动策略：物理内存的 75%，且最多保留 8 GB 给系统。示例：8G、8192M。修改后需要重启 aiworkd 才会生效。"
     }
 
-    private var pythonEnvironmentDescription: String {
-        "Qwen3-ASR、sherpa-onnx 与 Kokoro 的 worker 依赖仓库 .build/ 下的 Python 3.12 环境，安装需联网下载数百 MB 至数 GB 依赖。已用 AIWORK_*_PYTHON 指向自定义环境的无需安装。安装完成后重启 aiworkd 生效。"
+    private var runtimeEnvironmentDescription: String {
+        "各 Provider worker 依赖仓库 .build/ 下的运行环境：Python worker 使用 Python 3.12 venv，llama.cpp 由脚本克隆源码并编译（需要 Xcode 或 Command Line Tools 与 cmake）。安装需联网下载数百 MB 至数 GB 依赖。已用 AIWORK_* 变量指向自定义环境的无需安装。安装完成后重启 aiworkd 生效。"
     }
 
     private var settingsAreValid: Bool {
@@ -212,8 +212,8 @@ struct SettingsView: View {
     }
 }
 
-/// 「Python 运行环境」区块的一行：环境名 + 就绪状态 + 安装/取消/重试。
-/// 安装是显式触发的长任务，进度以步骤文案 + 输出尾部呈现（pip 不提供百分比）。
+/// 「运行环境」区块的一行：环境名 + 就绪状态 + 安装/取消/重试。
+/// 安装是显式触发的长任务，进度以步骤文案 + 输出尾部呈现（pip / cmake 都不提供百分比）。
 struct PythonEnvironmentRow: View {
     @Environment(PythonEnvironmentManager.self) private var pythonEnvironments
     let spec: PythonEnvironmentSpec

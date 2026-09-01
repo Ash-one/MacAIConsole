@@ -22,6 +22,7 @@ final class PythonEnvironmentTests: XCTestCase {
     func testVenvPathsMatchDaemonProbeLayout() {
         let repoRoot = URL(fileURLWithPath: "/repo")
         for spec in PythonEnvironmentSpec.all {
+            if spec.installScript != nil { continue }
             let python = PythonEnvironmentManager.venvPythonURL(repoRoot: repoRoot, spec: spec)
             XCTAssertEqual(
                 python.standardizedFileURL.path,
@@ -29,6 +30,16 @@ final class PythonEnvironmentTests: XCTestCase {
                 "GUI 安装路径必须与 daemon 的 .build/<venv>/bin/python 探测布局一致"
             )
         }
+    }
+
+    @MainActor
+    func testLlamaCppArtifactMatchesDaemonProbePath() {
+        // llama.cpp 是脚本安装型环境：就绪判定与安装产物必须指向 daemon
+        // 的开发态探测路径 .build/llama.cpp/bin/llama-server。
+        let spec = PythonEnvironmentSpec.llamaCpp
+        XCTAssertNotNil(spec.installScript)
+        XCTAssertEqual(spec.artifactRelativePath, ".build/llama.cpp/bin/llama-server")
+        XCTAssertTrue(spec.installScript?.hasSuffix("build-llama-server.sh") ?? false)
     }
 
     @MainActor
