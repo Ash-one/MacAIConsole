@@ -140,6 +140,9 @@ struct AddModelSheet: View {
         let id = modelID
         Task {
             do {
+                if type == "llm" {
+                    _ = try await ModelRepository.inspectGGUFInBackground(at: source)
+                }
                 // 先拷入仓库（失败则中止，不碰 daemon），再注册加载。
                 let imported = try ModelRepository.importFile(at: source, type: type)
                 if type == "stt", let coreMLSource = pickedCoreMLURL {
