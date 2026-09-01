@@ -492,13 +492,13 @@ struct RepoModelRow: View {
                             .help("推荐模型")
                     }
                 }
-                Text("\(Format.bytes(model.sizeBytes)) · Models/\(model.modelType)/")
+                Text(repositorySubtitle)
                     .font(.caption)
-                    .foregroundStyle(isRegistered ? .quaternary : .tertiary)
+                    .foregroundStyle(model.detectionError == nil ? Color.secondary : Theme.warning)
                     .lineLimit(1)
             }
             Spacer(minLength: 12)
-            if isLLM {
+            if isLLM, model.detectionError == nil {
                 contextEditor
             }
             if isTTS && isLoaded {
@@ -510,6 +510,17 @@ struct RepoModelRow: View {
         .padding(.horizontal, 8)
         .hoverableRow()
         .onAppear { contextDraft = Self.displayValue(ModelRepository.contextLength(for: model.modelID)) }
+    }
+
+    private var repositorySubtitle: String {
+        var parts = [Format.bytes(model.sizeBytes)]
+        if let metadata = model.ggufMetadata {
+            parts.append(metadata.summary)
+        } else if let detectionError = model.detectionError {
+            parts.append("GGUF 检测失败：\(detectionError)")
+        }
+        parts.append("Models/\(model.modelType)/")
+        return parts.joined(separator: " · ")
     }
 
     /// TTS 试听：合成一句固定文本并立即播放。
@@ -577,7 +588,12 @@ struct RepoModelRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack(spacing: 2) {
-                TextField("4", text: $contextDraft)
+                TextField(
+                    "上下文长度",
+                    text: $contextDraft,
+                    prompt: Text("4")
+                )
+                    .labelsHidden()
                     .font(.caption.monospacedDigit())
                     .textFieldStyle(.plain)
                     .frame(width: 42)
@@ -608,6 +624,14 @@ struct RepoModelRow: View {
                     .disabled(!isValidContext || isReloading || controller.phase != .online)
             }
         }
+        .help(contextHelp)
+    }
+
+    private var contextHelp: String {
+        if let contextLength = model.ggufMetadata?.contextLength {
+            return "模型声明的原生上下文上限为 \(GGUFMetadata.formatTokenCount(contextLength))"
+        }
+        return "设置 llama.cpp 的运行上下文长度"
     }
 
     private var contextChanged: Bool {
@@ -619,7 +643,8 @@ struct RepoModelRow: View {
 
     private var isValidContext: Bool {
         guard let value = parsedContext else { return false }
-        return value >= 256 && value <= 1024 * 1024
+        let detectedLimit = model.ggufMetadata?.contextLength ?? 1024 * 1024
+        return value >= 256 && value <= min(detectedLimit, 1024 * 1024)
     }
 
     private func applyContext() {
@@ -665,9 +690,16 @@ struct RepoModelRow: View {
             .buttonStyle(.bordered)
             .tint(isRegistered ? Color(nsColor: .secondaryLabelColor) : Theme.accent)
             .font(.callout.weight(isRegistered ? .regular : .medium))
-            .help(isRegistered ? "以当前设置重新注册并加载" : "注册到运行时并立即加载")
-            .disabled(controller.phase != .online)
+            .help(loadHelp)
+            .disabled(controller.phase != .online || model.detectionError != nil)
         }
+    }
+
+    private var loadHelp: String {
+        if let detectionError = model.detectionError {
+            return "GGUF 检测失败：\(detectionError)"
+        }
+        return isRegistered ? "以当前设置重新注册并加载" : "注册到运行时并立即加载"
     }
 
     private func register() async {

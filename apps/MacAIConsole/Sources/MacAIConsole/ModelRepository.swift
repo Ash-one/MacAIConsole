@@ -9,6 +9,26 @@ struct RepoModel: Identifiable, Hashable {
     let provider: String
     let path: String
     let sizeBytes: UInt64
+    let ggufMetadata: GGUFMetadata?
+    let detectionError: String?
+
+    init(
+        fileName: String,
+        modelType: String,
+        provider: String,
+        path: String,
+        sizeBytes: UInt64,
+        ggufMetadata: GGUFMetadata? = nil,
+        detectionError: String? = nil
+    ) {
+        self.fileName = fileName
+        self.modelType = modelType
+        self.provider = provider
+        self.path = path
+        self.sizeBytes = sizeBytes
+        self.ggufMetadata = ggufMetadata
+        self.detectionError = detectionError
+    }
 
     /// 注册到 daemon 时使用的模型 ID：文件去掉最后扩展名，目录保留完整名称。
     var modelID: String {
@@ -69,7 +89,28 @@ enum ModelRepository {
                 }
                 let size = (try? item.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(UInt64.init) ?? 0
                 let provider = type == "llm" ? "llama.cpp" : "whisper.cpp"
-                models.append(RepoModel(fileName: item.lastPathComponent, modelType: type, provider: provider, path: item.path, sizeBytes: size))
+                var ggufMetadata: GGUFMetadata?
+                var detectionError: String?
+                if type == "llm" {
+                    if item.pathExtension.lowercased() == "gguf" {
+                        do {
+                            ggufMetadata = try GGUFMetadataReader.read(from: item)
+                        } catch {
+                            detectionError = error.localizedDescription
+                        }
+                    } else {
+                        detectionError = "LLM 文件必须使用 .gguf 扩展名"
+                    }
+                }
+                models.append(RepoModel(
+                    fileName: item.lastPathComponent,
+                    modelType: type,
+                    provider: provider,
+                    path: item.path,
+                    sizeBytes: size,
+                    ggufMetadata: ggufMetadata,
+                    detectionError: detectionError
+                ))
             }
         }
         return models
@@ -87,6 +128,12 @@ enum ModelRepository {
     static func scanInBackground() async -> [RepoModel] {
         await Task.detached(priority: .userInitiated) {
             scan()
+        }.value
+    }
+
+    static func inspectGGUFInBackground(at url: URL) async throws -> GGUFMetadata {
+        try await Task.detached(priority: .userInitiated) {
+            try GGUFMetadataReader.read(from: url)
         }.value
     }
 
