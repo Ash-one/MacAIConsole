@@ -115,44 +115,12 @@ struct LogsView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                GeometryReader { geometry in
-                    ScrollViewReader { proxy in
-                        ScrollView([.horizontal, .vertical]) {
-                            LazyVStack(alignment: .leading, spacing: 2) {
-                                ForEach(visibleEntries) { entry in
-                                    Text(entry.text)
-                                        .font(.system(size: 11, design: .monospaced))
-                                        .foregroundStyle(color(for: entry.level))
-                                        .multilineTextAlignment(.leading)
-                                        .textSelection(.enabled)
-                                        .fixedSize(horizontal: true, vertical: true)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                Color.clear
-                                    .frame(height: 1)
-                                    .id("log-bottom")
-                            }
-                            .frame(
-                                minWidth: max(geometry.size.width - 20, 0),
-                                minHeight: max(geometry.size.height - 20, 0),
-                                alignment: .topLeading
-                            )
-                            .padding(10)
-                        }
-                        .background(Theme.inset)
-                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.hairline))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .onAppear {
-                            proxy.scrollTo("log-bottom", anchor: .bottom)
-                        }
-                        .onChange(of: snapshot.entries) { _, _ in
-                            proxy.scrollTo("log-bottom", anchor: .bottom)
-                        }
-                        .onChange(of: logLevelRaw) { _, _ in
-                            proxy.scrollTo("log-bottom", anchor: .bottom)
-                        }
-                    }
-                }
+                LogConsoleView(entries: visibleEntries)
+                    .id("\(source.rawValue)-\(logLevelRaw)")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Theme.inset)
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.hairline))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -204,14 +172,5 @@ struct LogsView: View {
             NSWorkspace.shared.open(LogFiles.directory)
         }
         AppLogger.info("已在访达中显示 \(source.title) 日志")
-    }
-
-    private func color(for level: LogLevel) -> Color {
-        switch level {
-        case .debug: Color.primary.opacity(0.35)
-        case .info: Color.primary.opacity(0.85)
-        case .warning: Theme.warning
-        case .error: Theme.danger
-        }
     }
 }
