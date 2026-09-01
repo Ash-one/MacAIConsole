@@ -51,7 +51,7 @@ struct Chip: View {
     }
 
     private var backgroundFill: Color {
-        color?.opacity(0.13) ?? Color.white.opacity(0.07)
+        color?.opacity(0.13) ?? Color.primary.opacity(0.07)
     }
 
     private var borderFill: Color {
@@ -178,7 +178,7 @@ struct InfoTip: View {
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Theme.elevatedSurface)
-                    .shadow(color: .black.opacity(0.35), radius: 9, y: 4)
+                    .shadow(color: Theme.overlayShadow, radius: 6, y: 2)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -244,7 +244,7 @@ struct ProminentButtonStyle: ButtonStyle {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                    .strokeBorder(.white.opacity(0.22))
+                    .strokeBorder(Color.primary.opacity(0.12))
             )
             .opacity(opacity(isPressed: configuration.isPressed))
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
@@ -411,7 +411,7 @@ struct GhostActionButton: View {
                 )
                 .background(
                     Circle()
-                        .fill(Color.white.opacity(isHovering && !isDisabled ? 0.09 : 0))
+                        .fill(Color.primary.opacity(isHovering && !isDisabled ? 0.09 : 0))
                         .frame(width: 26, height: 26)
                 )
                 .opacity(isDisabled ? 0.5 : 1)

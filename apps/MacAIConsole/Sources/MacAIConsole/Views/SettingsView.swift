@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @AppStorage(AppSettings.autoStartKey) private var autoStart = true
     @AppStorage(AppSettings.memoryBudgetKey) private var memoryBudget = ""
+    @AppStorage(AppSettings.appearanceKey) private var appearance = AppearanceMode.system.rawValue
     @AppStorage(AppSettings.proxyModeKey) private var proxyMode = ProxyMode.system.rawValue
     @AppStorage(AppSettings.httpProxyKey) private var httpProxy = ""
     @AppStorage(AppSettings.httpsProxyKey) private var httpsProxy = ""
@@ -13,6 +14,19 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("外观") {
+                Picker("应用外观", selection: $appearance) {
+                    ForEach(AppearanceMode.allCases) { mode in
+                        Text(mode.title).tag(mode.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text(appearanceDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("守护进程") {
                 Toggle("启动应用时自动拉起守护进程", isOn: $autoStart)
                 LabeledContent("aiworkd 路径（自动探测）", value: resolvedText)
@@ -113,6 +127,17 @@ struct SettingsView: View {
             return binary.path
         }
         return "未找到，请先在 MacAI 仓库构建"
+    }
+
+    private var appearanceDescription: String {
+        switch AppearanceMode(rawValue: appearance) ?? .system {
+        case .system:
+            "根据 macOS 当前外观自动切换明亮或暗黑模式。"
+        case .light:
+            "始终使用明亮外观。"
+        case .dark:
+            "始终使用暗黑外观。"
+        }
     }
 
     private var settingsAreValid: Bool {

@@ -32,10 +32,27 @@ enum ModelDownloadSource: String, CaseIterable, Identifiable {
     }
 }
 
+enum AppearanceMode: String, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .system: "跟随系统"
+        case .light: "明亮"
+        case .dark: "暗黑"
+        }
+    }
+}
+
 enum AppSettings {
     static let autoStartKey = "autoStartDaemon"
     static let memoryBudgetKey = "memoryBudget"
     static let logLevelKey = "logLevel"
+    static let appearanceKey = "appearance"
     static let proxyModeKey = "proxyMode"
     static let httpProxyKey = "httpProxy"
     static let httpsProxyKey = "httpsProxy"
@@ -57,6 +74,10 @@ enum AppSettings {
     static var logLevel: LogLevel {
         let rawValue = UserDefaults.standard.string(forKey: logLevelKey) ?? LogLevel.info.rawValue
         return LogLevel(rawValue: rawValue) ?? .info
+    }
+
+    static var appearance: AppearanceMode {
+        appearance(in: .standard)
     }
 
     static var proxyMode: ProxyMode {
@@ -84,6 +105,11 @@ enum AppSettings {
     static func proxyMode(in defaults: UserDefaults) -> ProxyMode {
         let rawValue = defaults.string(forKey: proxyModeKey) ?? ProxyMode.system.rawValue
         return ProxyMode(rawValue: rawValue) ?? .system
+    }
+
+    static func appearance(in defaults: UserDefaults) -> AppearanceMode {
+        let rawValue = defaults.string(forKey: appearanceKey) ?? AppearanceMode.system.rawValue
+        return AppearanceMode(rawValue: rawValue) ?? .system
     }
 
     static func downloadSource(in defaults: UserDefaults) -> ModelDownloadSource {

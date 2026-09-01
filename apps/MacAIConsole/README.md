@@ -8,7 +8,7 @@ MacAIConsole 是 MacAI 的原生 macOS 控制台。应用只通过本地 HTTP AP
 - 任务：当前运行及最近完成的 Chat / STT / TTS 请求，支持查看输入、输出、耗时和错误
 - 模型管理：按 LLM / STT / TTS 分组显示模型仓库和注册状态，支持加载、卸载、改名与删除注册
 - 日志：查看 GUI 与 daemon 最近日志，默认显示 Info，可启用 Debug，并按日志级别着色；"在访达中显示"可打开日志目录
-- 设置：自动拉起守护进程开关、内存预算、Python 运行环境、网络代理和模型下载源
+- 设置：应用外观（跟随系统 / 明亮 / 暗黑）、自动拉起守护进程开关、内存预算、Python 运行环境、网络代理和模型下载源
   - 模型下载源可切换 Hugging Face 官方源、`hf-mirror.com` 或自定义 Hugging Face 兼容源；修改后重启 aiworkd 生效
   - Python 运行环境：一键安装 Qwen3-ASR（MLX / PyTorch）与 Kokoro TTS worker 所需的 Python 3.12 venv 及固定版本依赖（仓库 `.build/` 下，与 daemon 探测路径一致），支持取消与失败重试
 - 模型管理中的推荐模型在 Provider 环境未就绪时，行内会显示 daemon 上报的具体原因，并提供「安装运行环境」入口
