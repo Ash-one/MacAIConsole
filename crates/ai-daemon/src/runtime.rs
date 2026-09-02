@@ -191,6 +191,17 @@ impl Runtime {
         self.runner_instances.clone()
     }
 
+    /// 查询 provider（含动态装配的 Runner）是否声明给定能力。注册/管理面校验用。
+    pub fn provider_has_capability(
+        &self,
+        provider_id: &str,
+        capability: ai_core::provider::Capability,
+    ) -> bool {
+        self.providers
+            .get(provider_id)
+            .is_some_and(|provider| provider.descriptor().capabilities.contains(&capability))
+    }
+
     /// Runner-backed Provider 装配（Phase 4）。main 构造 Runtime 后、Arc 包装前
     /// 调用：按 descriptor 注册进 providers 与 capability 表，并挂上 instance
     /// manager 供 `shutdown_all` 收口。一个 Runner 一个 RunnerProvider。
@@ -1159,6 +1170,20 @@ mod tests {
             "runner provider must be registered as a TTS provider"
         );
         assert!(runtime.runner_instances.is_some());
+        assert!(
+            runtime.provider_has_capability(
+                "org.example.runner",
+                ai_core::provider::Capability::TextToSpeech
+            ),
+            "capability lookup must see dynamically attached providers"
+        );
+        assert!(
+            !runtime.provider_has_capability(
+                "org.example.runner",
+                ai_core::provider::Capability::SpeechToText
+            ),
+            "capability lookup must not over-report"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

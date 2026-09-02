@@ -472,27 +472,38 @@ async fn register_and_load_model(
         }
     };
     let requested_provider = request.provider.as_deref().map(str::trim);
-    let provider = match (model_type, requested_provider) {
-        ("llm", None | Some("llama.cpp")) => "llama.cpp",
-        ("llm", Some("mlx-lm")) => "mlx-lm",
-        ("stt", None | Some("whisper.cpp")) => "whisper.cpp",
-        ("stt", Some("qwen3-asr-mlx")) => "qwen3-asr-mlx",
-        ("stt", Some("sherpa-onnx")) => "sherpa-onnx",
-        ("tts", None | Some("kokoro-mlx")) => "kokoro-mlx",
-        ("tts", Some("qwen3-tts")) => "qwen3-tts",
+    let provider: std::borrow::Cow<'_, str> = match (model_type, requested_provider) {
+        ("llm", None | Some("llama.cpp")) => "llama.cpp".into(),
+        ("llm", Some("mlx-lm")) => "mlx-lm".into(),
+        ("stt", None | Some("whisper.cpp")) => "whisper.cpp".into(),
+        ("stt", Some("qwen3-asr-mlx")) => "qwen3-asr-mlx".into(),
+        ("stt", Some("sherpa-onnx")) => "sherpa-onnx".into(),
+        ("tts", None | Some("kokoro-mlx")) => "kokoro-mlx".into(),
+        ("tts", Some("qwen3-tts")) => "qwen3-tts".into(),
         (other_type, None) => {
             return api_error(
                 AIError::InvalidRequest,
                 format!("no default provider is defined for model type '{other_type}'"),
             );
         }
+        // 动态 provider（Runner 装配的 org.macai.* 等）：按 descriptor 能力判定，
+        // 使 Runner-backed 模型能走产品注册/加载路径（UI 不自推，注册即显式）。
         (_, Some(other)) => {
-            return api_error(
-                AIError::InvalidRequest,
-                format!("provider '{other}' does not support model type '{model_type}'"),
-            );
+            let capability = match model_type {
+                "tts" => ai_core::provider::Capability::TextToSpeech,
+                "stt" => ai_core::provider::Capability::SpeechToText,
+                _ => ai_core::provider::Capability::Chat,
+            };
+            if !state.runtime.provider_has_capability(other, capability) {
+                return api_error(
+                    AIError::InvalidRequest,
+                    format!("provider '{other}' does not support model type '{model_type}'"),
+                );
+            }
+            other.to_string().into()
         }
     };
+    let provider = provider.as_ref();
     match provider {
         "llama.cpp" if path.extension().and_then(|value| value.to_str()) != Some("gguf") => {
             return api_error(
