@@ -294,7 +294,12 @@ Phase 4 切片进度（2026-09-02）：
   profile bind + attach（artifact 缺失跳过、不假装 ready）。直接证据：
   `cargo test -p ai-daemon --bin aiworkd`（含 attach 注册/provider+profile
   持久化两测试；全套 bin tests 绿）。
-  尚未接入：Plugins 目录与显式信任、HTTP 管理面端点（下一 slice）。
+- **HTTP 管理面**：`GET /api/runners`（trusted python-uv Runner 列表：root/state/
+  environment phase（missing→ready→failed）/bundled profiles；无装配时空数组）与
+  `POST /api/runners/{runner}/install`（显式触发环境安装的唯一个人入口，幂等，
+  daemon 拥有 uv；未知 runner 404）。证据：`cargo test -p ai-daemon --bin aiworkd`
+  93 tests 绿（含 handler 空装配/404 测试）。README 端点表已同步。
+- 尚未接入：Plugins 目录与显式信任、GUI 消费端、cancel 双向通路。
 
 真实用户路径：
 

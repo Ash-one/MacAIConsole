@@ -118,6 +118,11 @@ async fn main() {
         .route("/api/tasks", get(list_tasks))
         .route("/api/tasks/{id}", get(task_detail))
         .route("/api/providers", get(provider_statuses))
+        .route("/api/runners", get(runner_statuses))
+        .route(
+            "/api/runners/{runner}/install",
+            post(install_runner_environment),
+        )
         .route("/api/models/load", post(register_and_load_model))
         .route("/api/models/pull", post(pull_model))
         .route("/api/models/{id}/load", post(load_registered_model))
@@ -290,6 +295,100 @@ async fn provider_statuses(State(state): State<AppState>) -> Json<Value> {
         .map(|(descriptor, status)| json!({"descriptor": descriptor, "status": status}))
         .collect();
     Json(json!({"data": providers}))
+}
+
+/// Runner 管理面状态（Phase 4）：已发现/受信任 Runner + python 环境 phase +
+/// bundled Model Profile。UI 只消费 daemon 数据，不自行推断。
+async fn runner_statuses(State(state): State<AppState>) -> Json<Value> {
+    let Some(manager) = state.runtime.runner_instances() else {
+        return Json(json!({ "data": [] }));
+    };
+    let statuses = manager.environments().statuses();
+    let mut data: Vec<Value> = Vec::new();
+    for entry in manager.discovered() {
+        let Some(manifest) = entry.manifest.clone() else {
+            continue;
+        };
+        if manifest.runtime.runtime_type != "python-uv" {
+            continue;
+        }
+        let environment_id = manifest.runtime.id.clone();
+        let phase = statuses
+            .iter()
+            .find(|status| status.environment_id == environment_id)
+            .map(|status| status.phase.as_str().to_string())
+            .unwrap_or_else(|| "missing".to_string());
+        let models: Vec<Value> = manifest
+            .models
+            .iter()
+            .map(|model| json!({ "profile": format!("{}", model.profile) }))
+            .collect();
+        data.push(json!({
+            "id": manifest.id,
+            "root": format!("{}", entry.root.display()),
+            "state": if matches!(entry.state, ai_daemon::runners::RunnerState::Trusted) { "trusted" } else { "untrusted" },
+            "environment_id": environment_id,
+            "phase": phase,
+            "models": models,
+        }));
+    }
+    Json(json!({ "data": data }))
+}
+
+/// 显式安装 Runner python 环境（唯一网络/安装入口，daemon 拥有 uv）。幂等：
+/// 已 ready 时直接返回 ready。同步等待完成（uv sync 上限 600s）。
+async fn install_runner_environment(
+    State(state): State<AppState>,
+    AxumPath(runner): AxumPath<String>,
+) -> Response {
+    let Some(manager) = state.runtime.runner_instances() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": { "code": "runner_unavailable", "message": "no Runner assembly" } })),
+        )
+            .into_response();
+    };
+    let Some(entry) = manager.discovered().into_iter().find(|entry| {
+        entry
+            .manifest
+            .as_ref()
+            .is_some_and(|manifest| manifest.id == runner)
+    }) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": { "code": "runner_not_found", "message": format!("runner '{runner}' not discovered") } })),
+        )
+            .into_response();
+    };
+    let manifest = entry
+        .manifest
+        .clone()
+        .expect("filtered runner has manifest");
+    if manifest.runtime.runtime_type != "python-uv" {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": { "code": "unsupported_runner", "message": "only python-uv runtime supports explicit install" } })),
+        )
+            .into_response();
+    }
+    match manager
+        .ensure_environment(&manifest, &entry.root)
+        .await
+    {
+        Ok(status) => (
+            StatusCode::OK,
+            Json(json!({
+                "environment_id": manifest.runtime.id,
+                "phase": status.phase.as_str(),
+            })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": { "code": "environment_not_ready", "message": format!("{error:?}") } })),
+        )
+            .into_response(),
+    }
 }
 
 /// POST /api/models/pull —— 下载 HF 单文件或目录清单到模型仓库，可选择立即注册加载。
@@ -1372,6 +1471,19 @@ mod tests {
     /// 回归：卸载已加载模型时，unregister / rename 曾在 registry 读守卫内
     /// 触发 set_state 写锁互等（tokio RwLock 写优先）导致请求永久挂起。
     /// 用超时兜底，回归时快速失败而不是卡死测试套件。
+    #[tokio::test]
+    async fn runner_statuses_report_empty_without_assembly() {
+        let runtime = Arc::new(Runtime::new());
+        let state = app_state(runtime);
+        let Json(body) = runner_statuses(State(state.clone())).await;
+        assert_eq!(body["data"], serde_json::json!([]));
+
+        let unknown =
+            install_runner_environment(State(state), AxumPath("org.missing.runner".to_string()))
+                .await;
+        assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    }
+
     #[tokio::test]
     async fn unregister_loaded_model_completes_without_deadlock() {
         let runtime = Arc::new(Runtime::new());

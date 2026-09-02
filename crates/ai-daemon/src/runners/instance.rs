@@ -148,6 +148,11 @@ impl RunnerInstanceManager {
         &self.environments
     }
 
+    /// discovery 快照（管理面/状态用）。返回克隆，不含任何进行中状态。
+    pub fn discovered(&self) -> Vec<super::RunnerDescriptor> {
+        self.registry.entries().iter().cloned().collect()
+    }
+
     fn next_id(&self, prefix: &str) -> String {
         let n = self.request_counter.fetch_add(1, Ordering::SeqCst);
         format!("{prefix}-{n}")
