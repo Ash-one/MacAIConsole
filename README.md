@@ -412,6 +412,8 @@ POST /v1/audio/speech
 
 GET  /api/runtime
 GET  /api/providers
+GET  /api/runners
+POST /api/runners/{runner}/install
 GET  /api/tasks
 GET  /api/tasks/{id}
 GET  /api/logging
