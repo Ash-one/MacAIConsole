@@ -23,6 +23,12 @@ jobs:
         with:
           components: rustfmt
 
+      # Phase 1B environment manager 的集成测试使用真实 uv；固定经过测试的版本。
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.9.21"
+          python-version: "3.12"
+
       - uses: Swatinem/rust-cache@v2
 
       - run: cargo fmt --all -- --check

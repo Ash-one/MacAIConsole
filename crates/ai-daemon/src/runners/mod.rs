@@ -10,7 +10,11 @@ mod protocol;
 mod registry;
 mod supervisor;
 
-pub use environment::{EnvironmentFingerprint, EnvironmentInput};
+pub use environment::{
+    EnvironmentError, EnvironmentFingerprint, EnvironmentInput, EnvironmentManager,
+    EnvironmentManagerConfig, EnvironmentPhase, EnvironmentStatus, PythonInfo, UvSource,
+    TESTED_UV_VERSION,
+};
 pub use manifest::{ManifestError, RunnerManifest, RunnerRuntime};
 pub use profile::{ModelProfile, ProfileDefaults, ProfileError, ProfileResources};
 pub use protocol::{

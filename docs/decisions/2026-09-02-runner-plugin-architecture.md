@@ -253,8 +253,8 @@ Runtime Authority；以后可单独设计 unmanaged endpoint bridge。
 
 ## Implementation status
 
-2026-09-02：merge `232f010` 引入了实验性 Runner 骨架（分支
-`kanban/t_c7c07867`，commit `f0bc102`）：
+2026-09-02：merge `232f010` 引入了实验性 Runner 骨架（原实现 commit `f0bc102`）；
+commit `cadfa31` 收敛了已发现的启动、契约与信任边界：
 
 - `crates/ai-daemon/src/runners/`：manifest、profile、protocol、registry、
   supervisor、environment 六模块与 `lib.rs` 导出；
@@ -273,14 +273,17 @@ Runtime Authority；以后可单独设计 unmanaged endpoint bridge。
 - discovery 时解析 Model Profile snapshot，启动前复核 package digest，并只执行
   daemon-owned staging 副本。
 
-本提案保持 `proposed`：这些修订只收敛实验性骨架，不能把 Phase 1、Kokoro 迁移或
-对外插件契约标记为完成。
+本提案保持 `proposed`：这些修订只完成 Phase 1A isolated foundation；Phase 1B
+daemon-owned uv environment manager 已作为第二个 isolated foundation 完成（见 uv
+提案的 Implementation status）。当前下一步依次是 Phase 1C Runtime/scheduler Runner
+Instance 组合、Kokoro 迁移基线、uv-lock Kokoro Runner 和最终产品 cutover。详细阶段
+门槛由 [`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md) 拥有。
 
 下表是提案完成后的直接证据要求。`Result` 在实施前保持 `not run`。
 
 | Acceptance | Failure surface | Direct evidence | Result |
 | --- | --- | --- | --- |
-| 已验证 package 的 fake Runner 可在 isolated test 中完成发现、信任、加载、调用和卸载；启动失败不留下进程，源码 package 修改后不可执行 | manifest、trust、supervision、composition | `cargo test -p ai-daemon --test runner_plugin_composition` | passed in this revision |
+| 已验证 package 的 fake Runner 可在 isolated test 中完成发现、信任、加载、调用和卸载；启动失败不留下进程，源码 package 修改后不可执行 | manifest、trust、supervision、composition | `cargo test -p ai-daemon --test runner_plugin_composition` | passed at `cadfa31`（5 tests） |
 | 新 Model Profile 可选择 Runner，且不需要修改 `main.rs` provider 白名单 | profile resolution、registration | `cargo test -p ai-daemon model_profile_runner_resolution`；负向搜索旧白名单 | not run |
 | Worker 崩溃返回 `backend_crashed`，aiworkd 仍可通过 health/status 访问 | process supervision、error mapping | `cargo test -p ai-daemon runner_crash_isolated` | not run |
 | lease、busy guard、LRU 和 keep-alive 对 Runner Instance 生效 | lifecycle composition | `cargo test -p ai-daemon runner_lifecycle` | not run |

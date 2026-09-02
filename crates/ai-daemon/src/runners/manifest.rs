@@ -41,6 +41,10 @@ pub struct RunnerRuntime {
     pub project: String,
     pub lock: String,
     pub python: Option<String>,
+    /// 离线只读环境探针。`python-uv` runtime 必须声明；daemon 在锁定环境同步
+    /// 完成后、提升为最终目录前执行，见 runner-manifest-v1 的 probe 契约。
+    #[serde(default)]
+    pub probe: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -157,20 +161,34 @@ impl RunnerManifest {
                 "runtime type and id must not be empty".to_string(),
             ));
         }
+        if !valid_id(&self.runtime.id) {
+            return Err(ManifestError(
+                "runtime id must use lowercase ASCII letters, digits, '.' or '-'".to_string(),
+            ));
+        }
         validate_runtime_project(&self.runtime.project)?;
         validate_relative_path("runtime.lock", &self.runtime.lock)?;
-        if self.runtime.runtime_type == "python-uv"
-            && self
+        if self.runtime.runtime_type == "python-uv" {
+            if self
                 .runtime
                 .python
                 .as_deref()
                 .unwrap_or("")
                 .trim()
                 .is_empty()
-        {
-            return Err(ManifestError(
-                "python-uv runtime requires a Python constraint".to_string(),
-            ));
+            {
+                return Err(ManifestError(
+                    "python-uv runtime requires a Python constraint".to_string(),
+                ));
+            }
+            if self.runtime.probe.is_empty() {
+                return Err(ManifestError(
+                    "python-uv runtime requires a probe command".to_string(),
+                ));
+            }
+        }
+        for (index, argument) in self.runtime.probe.iter().enumerate() {
+            validate_command_argument(argument, index == 0)?;
         }
         if self.capacity.max_instances == 0 || self.capacity.max_concurrency_per_instance == 0 {
             return Err(ManifestError(
@@ -243,6 +261,36 @@ impl RunnerManifest {
         environment_python: &Path,
         runtime_temp_root: &Path,
     ) -> Result<Vec<String>, ManifestError> {
+        self.resolve_argv(
+            &self.entrypoint.command,
+            package_root,
+            environment_python,
+            runtime_temp_root,
+        )
+    }
+
+    /// Resolve the runtime probe argv against the staged package and managed interpreter.
+    pub fn resolve_probe(
+        &self,
+        package_root: &Path,
+        environment_python: &Path,
+        runtime_temp_root: &Path,
+    ) -> Result<Vec<String>, ManifestError> {
+        self.resolve_argv(
+            &self.runtime.probe,
+            package_root,
+            environment_python,
+            runtime_temp_root,
+        )
+    }
+
+    fn resolve_argv(
+        &self,
+        command: &[String],
+        package_root: &Path,
+        environment_python: &Path,
+        runtime_temp_root: &Path,
+    ) -> Result<Vec<String>, ManifestError> {
         self.validate_package(package_root)?;
         let root = package_root.canonicalize().map_err(|error| {
             ManifestError(format!(
@@ -250,8 +298,7 @@ impl RunnerManifest {
                 package_root.display()
             ))
         })?;
-        self.entrypoint
-            .command
+        command
             .iter()
             .enumerate()
             .map(|(index, argument)| {
@@ -379,6 +426,7 @@ id = "org.example.fake-python"
 project = "."
 lock = "uv.lock"
 python = ">=3.12,<3.13"
+probe = ["{environment.python}", "-c", "print('probe')"]
 
 [capacity]
 max_instances = 1
@@ -415,5 +463,59 @@ inherit_environment = ["HTTPS_PROXY"]
     fn accepts_package_root_as_the_runtime_project() {
         let manifest = RunnerManifest::parse(manifest()).unwrap();
         assert_eq!(manifest.runtime.project, ".");
+    }
+
+    #[test]
+    fn python_uv_requires_probe_and_rejects_unsafe_probe_argv() {
+        assert!(RunnerManifest::parse(&manifest().replace(
+            "probe = [\"{environment.python}\", \"-c\", \"print('probe')\"]\n",
+            ""
+        ))
+        .is_err());
+        assert!(RunnerManifest::parse(&manifest().replace(
+            "probe = [\"{environment.python}\", \"-c\", \"print('probe')\"]",
+            "probe = [\"/bin/echo\"]"
+        ))
+        .is_err());
+        assert!(RunnerManifest::parse(&manifest().replace(
+            "probe = [\"{environment.python}\", \"-c\", \"print('probe')\"]",
+            "probe = [\"{environment.python}\", \";\", \"rm\"]"
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn invalid_runtime_id_is_rejected() {
+        assert!(RunnerManifest::parse(
+            &manifest().replace("id = \"org.example.fake-python\"", "id = \"Bad_Runtime\"")
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn resolve_probe_expands_template_variables() {
+        let manifest = RunnerManifest::parse(manifest()).unwrap();
+        let package =
+            std::env::temp_dir().join(format!("macai-manifest-probe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&package);
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("pyproject.toml"), "[project]\nname='fake'\n").unwrap();
+        std::fs::write(package.join("uv.lock"), "version = 1\n").unwrap();
+        let resolved = manifest
+            .resolve_probe(
+                &package,
+                Path::new("/managed/env/.venv/bin/python"),
+                Path::new("/managed/temp"),
+            )
+            .unwrap();
+        assert_eq!(
+            resolved,
+            vec![
+                "/managed/env/.venv/bin/python".to_string(),
+                "-c".to_string(),
+                "print('probe')".to_string()
+            ]
+        );
+        let _ = std::fs::remove_dir_all(package);
     }
 }

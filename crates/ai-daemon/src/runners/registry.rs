@@ -614,6 +614,7 @@ id = "org.example.fake-python"
 project = "."
 lock = "uv.lock"
 python = ">=3.12,<3.13"
+probe = ["{environment.python}", "-c", "print('probe')"]
 [capacity]
 max_instances = 1
 max_concurrency_per_instance = 1

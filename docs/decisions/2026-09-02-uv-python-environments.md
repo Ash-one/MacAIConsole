@@ -185,6 +185,35 @@ Kokoro 的 uv project 是首个完整实例。它必须锁定当前 worker 真�
 中的未固定包名只能作为调查输入，不能直接抄成最终 lock。解析或模型行为不正确时，
 在 Kokoro 工作提案内记录观察，再调整 project 和 lock。
 
+## Implementation status and next slice
+
+截至 2026-09-02 commit `cadfa31`，`ai-daemon::runners::environment` 只实现由 environment
+ID、project/lock 内容、Python ABI、平台和 uv source 生成 fingerprint。uv executable
+解析、受管目录、跨任务安装锁、staging sync、probe、原子提升、持久状态、取消与恢复
+均未实现；现有 GUI 仍直接创建 `.build/*-venv`，既有 Python worker CI 仍使用 pip。
+
+Phase 1B（daemon-owned `python-uv` environment manager）已于 `cadfa31` 之后的本轮
+bounded change 实现，完成面与本节第 1–8 项一一对应：
+
+1. `EnvironmentManager::resolve_uv`（`MACAI_UV_PATH` → PATH 绝对路径 fallback，
+   实测版本缓存）；Python 来源经 `uv python install` + `--offline find` 解析；
+2. 以 environment ID 为 key 的单飞异步安装锁 + 磁盘持久状态（`ready.json`）；
+3. staging `uv sync --locked --no-dev`（`UV_PROJECT_ENVIRONMENT` 指向与最终
+   fingerprint 目录同父级的 `installing/`）；
+4. manifest `runtime.probe` 契约执行（离线、`boot_seconds` deadline、清空环境
+   变量 + allowlist）；
+5. probe 成功后同目录 rename 原子提升；失败/取消保留已有 ready 环境；
+6. `missing/resolving/syncing/probing/ready/failed` descriptor，状态查询只读
+   内存快照、不等待安装锁；
+7. daemon 重启恢复 ready/failed，遗留 `installing/` 标记为 failed；
+8. `tests/runner_environment_manager.rs` 8 个真实 uv isolated integration tests
+   覆盖 cold sync、重复 exact sync、stale lock、probe failure（非零退出与超时）、
+   取消、promotion 与重启恢复；CI 通过 `astral-sh/setup-uv` 固定 uv 0.9.21。
+
+它不创建 Kokoro Runner，也不修改现有 Provider 或 GUI 安装路径（boundary 保持）。
+该 slice 的直接证据和后续 Runtime/scheduler 接线顺序由
+[`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md) 追踪。
+
 ## Migration
 
 1. 引入 daemon-owned uv probe、环境 identity 和状态模型；

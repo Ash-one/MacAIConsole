@@ -78,6 +78,36 @@ crates/ai-daemon/src/runners/
 路径是计划的一部分，实施发现更清晰的本地模块边界时可在同一工作提案中调整。不要
 同时保留新的 Runner owner 和旧 Provider owner。
 
+## Current status and execution order
+
+截至 2026-09-02 commit `cadfa31`：
+
+| Slice | Current state | Direct evidence / gap |
+| --- | --- | --- |
+| Phase 1A：contract、registry、trust、supervisor | completed as isolated foundation | Runner lib 12 tests；composition 5 tests；启动失败清理、SemVer 选择和 digest-bound staging 已覆盖 |
+| Phase 1B：daemon-owned uv environment | completed as isolated foundation | `tests/runner_environment_manager.rs` 8 tests（真实 uv：cold/exact sync、stale lock、probe failure/timeout、cancel、promotion、重启恢复）；manifest `runtime.probe` parser + 拒绝路径；CI 固定 uv 0.9.21。未接入 Runtime/scheduler/HTTP |
+| Phase 1C：Runtime/scheduler Runner Instance | not implemented | `main.rs`、Runtime、scheduler 不引用 Runner foundation |
+| Phase 0：旧 Kokoro 基线 | partially checked | Rust Kokoro tests passed；Python pytest 环境和真实 WAV/性能基线未完成 |
+| Phase 2–5：Kokoro package、adapter、product composition、cutover | not implemented | 没有 `runners/kokoro/`，产品仍使用 `KokoroMlxProvider` 与 `.build/kokoro-venv` |
+
+从当前状态按以下 bounded changes 前进：
+
+1. **Phase 1B — uv environment manager**：实现 uv 定位、安装状态、staging sync、
+   manifest probe、原子 promotion、失败/取消恢复及真实 uv integration tests；
+2. **Phase 1C — Runner Instance composition**：让 fake Runner 经模型注册、Runtime、
+   scheduler 和 `tts.v1` capability bridge 完成 load/infer/unload，而不是测试直接调用
+   `RunnerProcess`；
+3. **Phase 0 completion**：在改动 Kokoro worker 前补齐 Python tests 和目标 Apple
+   Silicon 的中文、混合中英、长文本、RSS、时延与并发 status 基线；
+4. **Phase 2 + 3**：生成真实可冷安装的 Kokoro uv lock，再迁移 adapter；
+5. **Phase 4 + 5**：接入 daemon/GUI 产品路径，真实验收后一次性切换并删除旧 owner。
+
+Phase 1C 必须先定义并实现 Model Profile 持久 snapshot/digest 与 legacy `ModelSpec`
+迁移边界。Runner Instance 需要拥有协议事件分发、并发容量、cancel、crash/error mapping、
+PID/RSS/status snapshot，以及 graceful shutdown、异常退出和 drop 后的 worker、package
+staging 与 request output 清理；lease、busy guard、LRU 和 keep-alive 继续由现有 Runtime/
+scheduler 裁决。生产代码不得出现 fake 或 Kokoro 专属分支。
+
 ## Phase 0: freeze evidence
 
 在改动 Kokoro 前：
@@ -92,24 +122,43 @@ crates/ai-daemon/src/runners/
 这些结果是迁移比较输入，不成为黄金音频 snapshot。模型和依赖可能存在浮点或声学
 差异，验收关注可听内容完整性、时长、格式、错误和生命周期。
 
+Phase 0 只要求在首次修改 Kokoro worker/依赖前完成，因此不阻塞通用 Phase 1B/1C。
+本轮 `cargo test -p ai-daemon --lib --tests` 已覆盖现有 Rust Kokoro Provider tests；
+`python3.12 -m pytest scripts/tests -v` 因当前解释器未安装 pytest 而未运行，不能记录
+为通过。
+
 ## Phase 1: generic foundation
 
-先实现与 Kokoro 无关的最小通用能力：
+### Phase 1A: isolated contract and process foundation（completed）
 
-- Runner Manifest 和 Model Profile parser；
-- protocol frame codec；
-- process supervisor、stderr capture、deadline 和 shutdown；
-- Runner registry 和 trust state；
-- uv environment identity、staging sync、probe 和 status；
-- fake Runner fixture；
-- Runtime 与 scheduler 的 Runner Instance adapter。
+当前已完成：Runner Manifest / Model Profile parser、protocol frame codec、Runner registry、
+trust snapshot、digest-bound package staging、process supervisor、fake Runner fixture，以及
+启动失败 kill/wait。直接证据是 `cargo test -p ai-daemon --lib --tests` 中 12 个 Runner
+lib tests 和 5 个 composition tests。
 
-完成条件包括：fake Runner 从发现到 infer/unload 的 composition test；boot deadline、
-hello identity 与协议错误均 kill/wait 子进程且清理 stderr task；执行前把已验证 digest
-复制到 daemon 私有 staging 并从该副本启动；Profile 的 SemVer compatibility 实际参与
-选择且多版本没有扫描顺序 fallback；以及 daemon-owned uv environment 和 Runtime/
-scheduler Runner Instance adapter 的组合证据。仅有 parser unit tests 或 isolated fake
-Runner happy path 都不足以进入下一阶段。
+### Phase 1B: daemon-owned uv environment（completed as isolated foundation）
+
+按 [`uv Python 环境`](../decisions/2026-09-02-uv-python-environments.md) 的 next slice 实现
+环境 manager。Phase 1B 的 composition fixture 使用真实 uv 和无外部依赖的锁定
+project，覆盖 cold/exact sync、stale lock、probe failure（非零退出与超时）、取消、
+原子提升和重启恢复（`tests/runner_environment_manager.rs`，8 tests）。CI 固定
+uv 0.9.21 + Python 3.12。环境 manager 尚未接入 Runtime/scheduler/HTTP 管理面。
+
+### Phase 1C: Runtime and scheduler composition
+
+补齐与 Kokoro 无关的真实 daemon 组合能力：
+
+- 持久化注册 Model Profile snapshot/digest，并保持用户 override；
+- 建立 Runner Instance manager 与 `tts.v1` capability bridge；
+- Runtime 与 scheduler 的 Runner Instance adapter；
+- 结构化映射 unavailable、load failure、protocol violation、backend crash、cancel 和 timeout；
+- status/PID/RSS snapshot 不等待活动 inference I/O；
+- 所有退出路径清理 worker、package staging 和 request output。
+
+Phase 1 完成条件是在 isolated foundation 已通过的基础上，fake Runner 从已注册 Model
+Profile 经 environment manager、Runtime 和 scheduler 完成 infer/unload；lease/busy guard、
+LRU、keep-alive、取消、crash、status 并发与所有临时目录清理都有直接组合证据。仅有
+parser unit tests 或直接调用 `RunnerProcess` 的 isolated test 不足以进入下一阶段。
 
 ## Phase 2: uv-lock Kokoro
 
@@ -192,6 +241,8 @@ MacAIConsole / macai
 | 当前代码仍使用旧 Provider 和手工 venv | source/README inspection | inspected |
 | 文档明确区分 proposal、draft contract 和 current behavior | local Markdown link check and terminology review | passed / inspected |
 | 没有把提案描述成已实现 | `rg` review of status fields and README wording | inspected |
+| Phase 1A 启动、版本与 trust 修订 | `cargo fmt --all -- --check`；`cargo test -p ai-daemon --lib --tests`；`cargo test --workspace` | passed at `cadfa31`（12 Runner lib + 88 daemon + 5 composition；workspace passed） |
+| 旧 Python worker tests | `python3.12 -m pytest scripts/tests -v` | not run：当前 Python 3.12 环境缺少 pytest |
 
 ### Planned automated evidence
 
