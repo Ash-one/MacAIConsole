@@ -107,9 +107,14 @@ impl StartupGuard {
 }
 
 impl RunnerProcess {
+    /// 从受信任 descriptor 启动 Runner。
+    ///
+    /// `runtime_python` 是环境已同步 venv 的运行解释器
+    /// （`<env_root>/.venv/bin/python`），manifest entrypoint 的
+    /// `{environment.python}` 模板展开为它。
     pub async fn spawn(
         descriptor: &RunnerDescriptor,
-        environment_python: &Path,
+        runtime_python: &Path,
         runtime_temp_root: &Path,
     ) -> Result<Self, SupervisorError> {
         let manifest = descriptor
@@ -125,7 +130,7 @@ impl RunnerProcess {
         let package_staging = descriptor.stage_for_execution(runtime_temp_root)?;
         match Self::spawn_staged(
             &manifest,
-            environment_python,
+            runtime_python,
             runtime_temp_root,
             package_staging.clone(),
         )
@@ -141,12 +146,12 @@ impl RunnerProcess {
 
     async fn spawn_staged(
         manifest: &RunnerManifest,
-        environment_python: &Path,
+        runtime_python: &Path,
         runtime_temp_root: &Path,
         package_staging: PathBuf,
     ) -> Result<Self, SupervisorError> {
         let command =
-            manifest.resolve_command(&package_staging, environment_python, runtime_temp_root)?;
+            manifest.resolve_command(&package_staging, runtime_python, runtime_temp_root)?;
         let (program, arguments) = command
             .split_first()
             .expect("validated Runner command is non-empty");

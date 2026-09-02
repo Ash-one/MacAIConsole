@@ -366,6 +366,43 @@ async fn daemon_restart_restores_ready_and_does_not_fake_in_progress_phases() {
 }
 
 #[tokio::test]
+async fn probe_runs_under_the_synced_venv_interpreter() {
+    require_uv();
+    let root = temp_root("probevenv");
+    let package = root.join("package");
+    // probe 把 sys.path 写进 probe-runtime 目录（staging 内，原子提升 rename
+    // 后随目录保留）。只有运行在依赖已 sync 的 venv 解释器上，sys.path 才含
+    // `<env-id>/installing/.venv/`；基础解释器（uv `--python` 输入）不含该段。
+    write_fixture(
+        &package,
+        "[\"{environment.python}\", \"-c\", \"print(repr(__import__('sys').path), file=open('probe-syspath','w'))\"]",
+    );
+    let manager = manager(&root);
+
+    let status = manager
+        .ensure_environment(&manifest_of(&package), &package, Duration::from_secs(120))
+        .await
+        .expect("install with a path-writing probe must succeed");
+    assert_eq!(status.phase, EnvironmentPhase::Ready);
+    let runtime_python = status
+        .runtime_python()
+        .expect("ready environment exposes the synced venv interpreter");
+    let env_path = status.path.expect("ready environment has a path");
+    assert_eq!(
+        runtime_python,
+        env_path.join(".venv/bin/python"),
+        "runtime_python must be the synced venv interpreter"
+    );
+    let recorded = std::fs::read_to_string(env_path.join("probe-runtime/probe-syspath"))
+        .expect("probe must write its sys.path into the runtime dir");
+    assert!(
+        recorded.contains("installing/.venv/"),
+        "probe must run under the synced venv interpreter, not the base interpreter: {recorded}"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
 async fn uv_resolution_reports_the_actual_version() {
     require_uv();
     let root = temp_root("uvversion");

@@ -11,9 +11,11 @@ Decision owner: [`2026-09-02-runner-plugin-architecture.md`](../decisions/2026-0
 路径/entrypoint 约束与字段拒绝），并在 Phase 1B 中实现了 `runtime.probe`
 （`python-uv` 必填、与 entrypoint 相同的 argv 安全校验和模板解析）。isolated
 fake Runner 测试覆盖 discovery、信任、digest-bound staging、Profile snapshot 和启动
-握手；真实 uv 的环境行为由 `tests/runner_environment_manager.rs` 覆盖。它尚未接入
-`aiworkd` 的 Runtime、scheduler 或 HTTP 管理面；当前 Provider/worker 不经 manifest
-运行。
+握手；真实 uv 的环境行为由 `tests/runner_environment_manager.rs` 覆盖。Runtime/
+scheduler 对 Runner Instance 的组合路径与 Kokoro 首个 Runner package 已分别落地
+（见 [`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md) Phase 1C/2），
+但 daemon 生产装配（`main.rs`、HTTP 管理面、GUI）尚未接入 Runner；当前
+Provider/worker 仍不经 manifest 运行。
 
 ## Location
 
@@ -50,7 +52,8 @@ id = "org.macai.kokoro-python"
 project = "."
 lock = "uv.lock"
 python = ">=3.12,<3.13"
-probe = ["{environment.python}", "-m", "macai_kokoro_runner", "--probe"]
+# probe argv 与 entrypoint 同受 shell 元字符校验（禁 `;`），用纯 import 表达式
+probe = ["{environment.python}", "-c", "import mlx_audio, misaki, phonemizer, espeakng_loader"]
 
 [capacity]
 max_instances = 1
@@ -103,7 +106,7 @@ adapter = "kokoro-mlx"
 
 `entrypoint.command` 是 argv array，不经过 shell。允许的模板变量仅包括：
 
-- `{environment.python}`；
+- `{environment.python}`——展开为环境的运行解释器（`<fingerprint>/.venv/bin/python`）；
 - `{package.root}`；
 - `{runtime.temp_root}`。
 
@@ -125,7 +128,8 @@ id = "org.macai.kokoro-python"
 project = "."
 lock = "uv.lock"
 python = ">=3.12,<3.13"
-probe = ["{environment.python}", "-m", "macai_kokoro_runner", "--probe"]
+# probe argv 与 entrypoint 同受 shell 元字符校验（禁 `;`），用纯 import 表达式
+probe = ["{environment.python}", "-c", "import mlx_audio, misaki, phonemizer, espeakng_loader"]
 ```
 
 `id` 标识可独立复用的 environment project；两个 Runner 只有 ID、project/lock
@@ -140,14 +144,20 @@ digest、Python ABI 和平台产生的完整 fingerprint 一致时才能共享�
 首 argv 和无 shell 规则，并在已锁定环境同步完成后由 daemon 执行：
 
 ```toml
-probe = ["{environment.python}", "-m", "macai_kokoro_runner", "--probe"]
+probe = ["{environment.python}", "-c", "import mlx_audio, misaki, phonemizer, espeakng_loader"]
 ```
 
+`{environment.python}` 展开为该环境的**运行解释器**：`uv sync`（`UV_PROJECT_ENVIRONMENT`）
+创建的 `<fingerprint>/.venv/bin/python`，lock 依赖都已同步进该 venv。manifest `[runtime].python`
+声明的版本约束只选择 uv `--python` 输入的基础解释器，它不含任何依赖，不能被 probe 或
+entrypoint 直接执行。probe 在 staging venv 上以 `timeouts.boot_seconds` 为 deadline 运行，
+成功后才原子提升为最终 fingerprint 目录；entrypoint 在提升后的同一 venv 解释器上启动。
+
 probe 只验证受管解释器、Runner package import 和运行依赖，不加载模型 artifact，也不
-创建常驻 worker。v1 使用 `timeouts.boot_seconds` 作为 probe deadline；退出码 0 表示
-成功，非零、超时或 signal exit 均使环境进入 `failed`。daemon 使用清空后的环境变量
-和 manifest allowlist 启动 probe，`network_during_runtime = false` 时必须保持离线。
-stdout/stderr 只作为有界诊断输出处理，不进入 Runner Protocol。
+创建常驻 worker。退出码 0 表示成功，非零、超时或 signal exit 均使环境进入 `failed`。
+daemon 使用清空后的环境变量和 manifest allowlist 启动 probe，
+`network_during_runtime = false` 时必须保持离线。stdout/stderr 只作为有界诊断输出处理，
+不进入 Runner Protocol。
 
 该字段已由本 draft 确定，`RunnerRuntime` 解析器已实现（Phase 1B）：`python-uv`
 缺少 probe、probe 首个 argv 非法或包含 shell 元字符时 manifest 拒绝解析；probe

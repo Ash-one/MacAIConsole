@@ -136,7 +136,17 @@ daemon 负责定位并报告 `uv`，GUI 只消费状态。解析顺序提案为�
 ### Network and cache
 
 - 安装只能由用户显式触发，并展示下载、解析、同步和 probe 状态；
-- daemon 统一传递已经脱敏的代理与 index 配置；
+- daemon 统一传递已经脱敏的代理配置（HTTP_PROXY/HTTPS_PROXY/NO_PROXY）；
+- 安装使用 **uv 默认共享 cache**（不强制私有 `UV_CACHE_DIR`）：热 cache 时
+  `--locked` 安装离线即可完成，失败重试复用已下载 artifact；
+- 受管 Python（python-build-standalone，GitHub）下载镜像经
+  `MACAI_UV_PYTHON_INSTALL_MIRROR` 透传（默认关闭；2026-09-02 实测 TUNA/
+  SJTU/华为等公共 github-release 镜像均未托管该仓库资产，需运维提供可用镜像）；
+- PyPI 镜像加速边界（2026-09-02 实测记录）：`uv.lock` v1 逐包写死
+  `registry = "https://pypi.org/simple"` 与 files.pythonhosted.org 直链，
+  把 default index 换成 TUNA 会让 `uv sync --locked` 报「lockfile needs to be
+  updated」而拒绝安装。已提交 lock 保持官方源身份，仓库可移植；镜像/加速只经
+  共享 cache 预热或代理实现，不得替换 lock 的 index 身份；
 - API token 不写入 manifest、lock、任务历史或日志；
 - 默认使用 uv 自身 cache，同 fingerprint 的失败重试复用已下载 artifact；
 - 离线 probe 和 worker 启动不得访问网络；
@@ -155,8 +165,12 @@ daemon 对每个 Python 环境至少报告：
 - runner consumers；
 - phase：`missing / resolving / syncing / probing / ready / failed`；
 - uv version；
-- Python implementation、version 和 source（managed/system）；
-- environment path；
+- Python implementation、version 和 source（managed/system）——`status.python`
+  描述 uv `--python` 输入的基础解释器（不含 lock 依赖）；环境的**运行解释器**
+  固定为 `<environment path>/.venv/bin/python`，由 `status.path` 派生
+  （`EnvironmentStatus::runtime_python`），probe 与 Runner entrypoint 的
+  `{environment.python}` 模板都解析到它；
+- environment path（受管 fingerprint 目录：`<environment-id>/<fingerprint>/`）；
 - lock digest；
 - install/update time；
 - structured failure kind、message 和可重试性；
@@ -214,14 +228,17 @@ bounded change 实现，完成面与本节第 1–8 项一一对应：
 该 slice 的直接证据和后续 Runtime/scheduler 接线顺序由
 [`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md) 追踪。
 
-**已知缺陷（2026-09-02 Phase 2 收尾时由真实 Kokoro Runner 接线暴露）**：
-`run_probe` 与 entrypoint 的 `{environment.python}` 解析为受管基础解释器，
-而 `uv sync` 经 `UV_PROJECT_ENVIRONMENT` 把依赖写入 staging `.venv`——真实
-probe 因此报 `ModuleNotFoundError`。fake fixture 的 no-op probe 掩盖了该语义
-分裂。修复方向：probe 与 entrypoint 解析为 `<fingerprint>/.venv/bin/python`，
-基础解释器只作为 `uv sync --python` 输入；`status.python` 语义随修复澄清。
-该修复属于本 decision 的 environment manager owner 职权，证据追踪见
-[`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md) Phase 2 节。
+**解释器语义修正（2026-09-02，真实 Kokoro Runner 接线暴露并修复）**：
+真实接线曾暴露 `run_probe` 与 entrypoint 的 `{environment.python}` 解析为受管
+基础解释器，而 `uv sync` 经 `UV_PROJECT_ENVIRONMENT` 把依赖写入 staging
+`.venv`——真实 probe 因此报 `ModuleNotFoundError`。fake fixture 的 no-op probe
+掩盖了该语义分裂。修复后：probe 与 entrypoint 解析为 `<fingerprint>/.venv/bin/python`
+（运行解释器，见上方 status contract 与 `EnvironmentStatus::runtime_python`），
+基础解释器只作为 uv `--python` 输入；probe 在 staging venv 上运行、entrypoint 在
+提升后的同一 venv 上启动。回归证据：`runner_environment_manager.rs` 新增
+`probe_runs_under_the_synced_venv_interpreter`（probe 写入 sys.path，断言含
+`installing/.venv/`），并复跑真实 Kokoro Runner 接线（结果见
+[`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md) Phase 2 证据表）。
 
 ## Migration
 
