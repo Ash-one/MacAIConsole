@@ -28,8 +28,9 @@ use super::{
 struct RunnerInstance {
     manifest: RunnerManifest,
     process: Mutex<Option<RunnerProcess>>,
-    /// 环境管理器报告的受管解释器（entrypoint 模板解析用）。
-    environment_python: PathBuf,
+    /// 环境的运行解释器（`<env_root>/.venv/bin/python`，manifest
+    /// `{environment.python}` 模板的解析结果）。
+    runtime_python: PathBuf,
 }
 
 /// Runner instance manager：跨模型共享的进程与协议 owner。
@@ -217,14 +218,17 @@ impl RunnerInstanceManager {
                     requirement: requirement.to_string(),
                 })?;
 
-        // 环境必须 ready（Phase 1B manager 保证）；python 路径来自状态。
+        // 环境必须 ready（Phase 1B manager 保证）。运行解释器固定为
+        // <env_root>/.venv/bin/python（lock 依赖已 sync 进该 venv）；
+        // status.python 只是 uv `--python` 输入的基础解释器，不能执行依赖。
         let status = self.ensure_environment(&manifest, &descriptor.root).await?;
-        let environment_python = status.python.map(|python| python.path).ok_or_else(|| {
-            RunnerInstanceError::EnvironmentNotReady {
-                environment_id: manifest.runtime.id.clone(),
-                phase: status.phase.as_str().to_string(),
-            }
-        })?;
+        let runtime_python =
+            status
+                .runtime_python()
+                .ok_or_else(|| RunnerInstanceError::EnvironmentNotReady {
+                    environment_id: manifest.runtime.id.clone(),
+                    phase: status.phase.as_str().to_string(),
+                })?;
 
         let mut instances = self.instances.lock().await;
         if let Some(existing) = instances.get(runner_id) {
@@ -249,7 +253,7 @@ impl RunnerInstanceManager {
         }
 
         let instance = Arc::new(
-            self.spawn_instance(&descriptor, &manifest, environment_python)
+            self.spawn_instance(&descriptor, &manifest, runtime_python)
                 .await?,
         );
         {
@@ -278,7 +282,7 @@ impl RunnerInstanceManager {
         &self,
         descriptor: &RunnerDescriptor,
         manifest: &RunnerManifest,
-        environment_python: PathBuf,
+        runtime_python: PathBuf,
     ) -> Result<RunnerInstance, RunnerInstanceError> {
         let instance_temp = self.temp_root.join(format!(
             "runner-instance-{}-{}",
@@ -289,8 +293,7 @@ impl RunnerInstanceManager {
             context: format!("cannot create instance temp {}", instance_temp.display()),
             source: error,
         })?;
-        let spawn_result =
-            RunnerProcess::spawn(descriptor, &environment_python, &instance_temp).await;
+        let spawn_result = RunnerProcess::spawn(descriptor, &runtime_python, &instance_temp).await;
         let mut process = match spawn_result {
             Ok(process) => process,
             Err(error) => {
@@ -306,7 +309,7 @@ impl RunnerInstanceManager {
         Ok(RunnerInstance {
             manifest: manifest.clone(),
             process: Mutex::new(Some(process)),
-            environment_python,
+            runtime_python,
         })
     }
 

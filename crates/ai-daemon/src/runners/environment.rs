@@ -174,11 +174,28 @@ pub struct EnvironmentStatus {
     pub fingerprint: String,
     pub phase: EnvironmentPhase,
     pub uv_version: Option<String>,
+    /// uv `--python` 输入的基础解释器（版本与 managed/system 来源）。
+    /// 它不含任何 lock 依赖；probe 与 entrypoint 的实际运行解释器是
+    /// `<environment path>/.venv/bin/python`，见 [`Self::runtime_python`]。
     pub python: Option<PythonInfo>,
+    /// 受管环境目录：`<fingerprint>/`（含 `.venv` 与 ready.json）。
     pub path: Option<PathBuf>,
     pub lock_digest: String,
     pub installed_at: Option<u64>,
     pub failure: Option<EnvironmentFailure>,
+}
+
+impl EnvironmentStatus {
+    /// 环境的实际运行解释器：`<environment path>/.venv/bin/python`。
+    ///
+    /// `uv sync` 经 `UV_PROJECT_ENVIRONMENT` 把 lock 依赖装进该 venv，
+    /// 因此 manifest 的 `{environment.python}` 模板（probe 与 entrypoint）
+    /// 只解析到这里；`python` 字段的基础解释器不能直接执行任何依赖。
+    /// phase ready 前 path 未设置时返回 None。
+    pub fn runtime_python(&self) -> Option<PathBuf> {
+        let env_root = self.path.as_ref()?;
+        Some(venv_python_path(env_root))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -542,9 +559,7 @@ impl EnvironmentManager {
 
         status.phase = EnvironmentPhase::Probing;
         self.set_status(status.clone());
-        let probe = self
-            .run_probe(manifest, package_root, &staging, &python.path)
-            .await;
+        let probe = self.run_probe(manifest, package_root, &staging).await;
         if let Err(error) = probe {
             return self
                 .fail_install(&environment_id, status, &fingerprint.0, error, true)
@@ -619,15 +634,26 @@ impl EnvironmentManager {
         manifest: &RunnerManifest,
         package_root: &Path,
         staging: &Path,
-        environment_python: &Path,
     ) -> Result<(), EnvironmentError> {
+        // probe 必须运行在依赖已同步的 staging venv 解释器上。基础解释器只
+        // 作为 uv `--python` 输入、不含任何 lock 依赖——真实 Kokoro probe 曾
+        // 因解析到基础解释器而报 `ModuleNotFoundError: mlx_audio`。
+        let environment_python = venv_python_path(staging);
+        if !environment_python.is_file() {
+            return Err(EnvironmentError::ProbeFailed {
+                reason: format!(
+                    "uv sync did not produce {}; the probe cannot run",
+                    environment_python.display()
+                ),
+            });
+        }
         let runtime_temp = staging.join("probe-runtime");
         std::fs::create_dir_all(&runtime_temp).map_err(|error| EnvironmentError::Io {
-            context: format!("cannot create probe runtime dir {}", runtime_temp.display()),
+            context: format!("cannot create probe runtime dir {runtime_temp:?}"),
             source: error,
         })?;
         let command = manifest
-            .resolve_probe(package_root, environment_python, &runtime_temp)
+            .resolve_probe(package_root, &environment_python, &runtime_temp)
             .map_err(|error| EnvironmentError::ProbeFailed {
                 reason: format!("invalid probe command: {error}"),
             })?;
@@ -826,11 +852,11 @@ impl EnvironmentManager {
             .args(arguments)
             .env_clear()
             .env("HOME", dirs_home())
-            .env("UV_CACHE_DIR", uv_cache_dir(&self.config.runtime_root))
             .env(
                 "UV_PYTHON_INSTALL_DIR",
                 python_install_dir(&self.config.runtime_root),
-            );
+            )
+            .envs(python_mirror_environment());
         if offline {
             command.env("UV_OFFLINE", "1");
         } else {
@@ -863,6 +889,10 @@ fn run_sync(
     python_path: &Path,
     runtime_root: &Path,
 ) -> Result<(), EnvironmentError> {
+    // 安装使用 uv 默认共享 cache（不强制私有 UV_CACHE_DIR）：热 cache 时
+    // `--locked` 安装可离线完成；本机 Phase 2 已灌满 ~/.cache/uv。PyPI 源
+    // 替换与已提交 uv.lock 的 registry 绑定冲突（--locked 会要求重锁），
+    // 加速只能经共享 cache 预热或代理，不能替换 lock 的 index 身份。
     let output = std::process::Command::new(&uv.path)
         .args(["sync", "--project"])
         .arg(project)
@@ -870,7 +900,6 @@ fn run_sync(
         .arg(python_path)
         .env_clear()
         .env("HOME", dirs_home())
-        .env("UV_CACHE_DIR", uv_cache_dir(runtime_root))
         .env("UV_PYTHON_INSTALL_DIR", python_install_dir(runtime_root))
         .env("UV_PROJECT_ENVIRONMENT", staging.join(VENV_DIR))
         .envs(proxy_environment())
@@ -912,8 +941,14 @@ fn is_path_fallback(candidate: &Path) -> bool {
         .unwrap_or(true)
 }
 
+/// 运行解释器路径：`uv sync`（`UV_PROJECT_ENVIRONMENT`）创建的 venv 解释器。
+/// probe 与 Runner entrypoint 的 `{environment.python}` 模板都解析到这里。
+fn venv_python_path(env_root: &Path) -> PathBuf {
+    env_root.join(VENV_DIR).join("bin/python")
+}
+
 fn is_ready_dir(dir: &Path) -> bool {
-    dir.join(METADATA_FILE).is_file() && dir.join(VENV_DIR).join("bin/python").exists()
+    dir.join(METADATA_FILE).is_file() && venv_python_path(dir).is_file()
 }
 
 fn file_digest(path: &Path) -> std::io::Result<String> {
@@ -927,10 +962,6 @@ fn unix_now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-}
-
-fn uv_cache_dir(runtime_root: &Path) -> PathBuf {
-    runtime_root.join(".cache")
 }
 
 fn python_install_dir(runtime_root: &Path) -> PathBuf {
@@ -957,6 +988,21 @@ fn proxy_environment() -> Vec<(String, String)> {
                 .map(|value| (name.to_string(), value))
         })
         .collect()
+}
+
+/// uv 受管 Python 下载镜像。`MACAI_UV_PYTHON_INSTALL_MIRROR` 显式设置时以
+/// `UV_PYTHON_INSTALL_MIRROR` 传给 `uv python install`（astral
+/// python-build-standalone 走 GitHub，部分网络下慢且易断；镜像 URL 由运维
+/// 提供，需与 GitHub release 的 `<tag>/<asset>` 目录布局一致）。默认关闭。
+fn python_mirror_environment() -> Vec<(String, String)> {
+    std::env::var_os("MACAI_UV_PYTHON_INSTALL_MIRROR")
+        .map(|value| {
+            vec![(
+                "UV_PYTHON_INSTALL_MIRROR".to_string(),
+                value.to_string_lossy().into_owned(),
+            )]
+        })
+        .unwrap_or_default()
 }
 
 fn bounded_output(bytes: &[u8]) -> String {

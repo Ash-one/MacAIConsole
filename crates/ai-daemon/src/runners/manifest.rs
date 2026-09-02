@@ -269,7 +269,9 @@ impl RunnerManifest {
         )
     }
 
-    /// Resolve the runtime probe argv against the staged package and managed interpreter.
+    /// Resolve the runtime probe argv against the staged package and the synced
+    /// venv interpreter（`{environment.python}` 展开为环境运行解释器，
+    /// 即 `<env_root>/.venv/bin/python`，而非 uv `--python` 输入的基础解释器）。
     pub fn resolve_probe(
         &self,
         package_root: &Path,

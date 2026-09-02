@@ -8,9 +8,11 @@ stdout 只承载 length-prefixed JSON frame（Runner Protocol v1）；
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import time
 
@@ -19,6 +21,48 @@ import numpy as np
 
 def log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
+
+
+def _ensure_short_espeak_data() -> None:
+    """espeak-ng 固定缓冲会截断过长的 data 路径（实测 ~255 字符以上失败）：
+    受管环境位于 `Runtimes/python/<env-id>/<64-hex-fingerprint>/.venv/…` 时
+    espeak-ng-data 绝对路径超过限制，espeak_Initialize 回退编译期默认路径并
+    exit(1) 杀死整个 worker。修复：把 espeakng_loader 的 data 复制到 `/tmp`
+    短路径，并把 phonemizer 的 data path 指向副本；路径本身够短时零开销跳过。
+
+    只复制 21MB 目录一次（按源路径 hash 去重），由 OS 清理临时副本。
+    """
+    try:
+        import espeakng_loader
+        from phonemizer.backend.espeak.wrapper import EspeakWrapper
+    except Exception:  # noqa: BLE001 — espeak 不可用时保持原状
+        return
+    # misaki/espeak.py 在模块级执行 set_data_path(长路径)；必须先触发它，
+    # 否则后续首次 import 会把下面设置的短路径覆盖回去。
+    try:
+        from misaki import espeak as _misaki_espeak  # noqa: F401
+    except Exception:  # noqa: BLE001
+        pass
+
+    source = espeakng_loader.get_data_path()
+    # 阈值取 200，远低于 espeak-ng 实测截断点（~255）。
+    if len(source) <= 200 and os.path.isdir(source):
+        EspeakWrapper.set_data_path(source)
+        return
+    digest = hashlib.sha1(source.encode("utf-8")).hexdigest()[:10]
+    target_root = os.path.join("/tmp", f"macai-espeak-{digest}")
+    target = os.path.join(target_root, "espeak-ng-data")
+    if not os.path.isdir(target):
+        staging = f"{target_root}.staging-{os.getpid()}"
+        shutil.rmtree(staging, ignore_errors=True)
+        os.makedirs(staging, exist_ok=True)
+        shutil.copytree(source, os.path.join(staging, "espeak-ng-data"))
+        try:
+            os.replace(staging, target_root)
+        except FileExistsError:
+            shutil.rmtree(staging, ignore_errors=True)
+    EspeakWrapper.set_data_path(target)
+    log(f"[kokoro-runner] espeak data relocated to short path: {target}")
 
 
 def _split_long_text_for_kokoro(text: str, max_chars: int = 150) -> str:
@@ -100,6 +144,9 @@ class KokoroEngine:
 
     def __init__(self, model_root: str) -> None:
         self.model_root = model_root
+        # 必须先于任何 EspeakBackend 构造修复 espeak data 路径（短路径），
+        # 长路径会被 espeak-ng 固定缓冲截断并 exit(1) 杀死 worker。
+        _ensure_short_espeak_data()
         _patch_misaki_zh_version()
         from mlx_audio.tts.generate import load_model
 

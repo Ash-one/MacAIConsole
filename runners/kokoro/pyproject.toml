@@ -10,6 +10,10 @@ dependencies = [
     "numpy>=2,<3",
     "phonemizer-fork==3.3.2",
     "espeakng-loader==0.2.4",
+    # misaki 英文/中文 G2P 在 trf=False 时需要 spaCy en_core_web_sm，缺失时
+    # 会尝试自动下载（env_clear/离线运行时无 pip/uv 即失败）。锁定为直接 URL
+    # 依赖（spacy-models 官方 GitHub release），使环境离线自包含。
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
     "macai-kokoro-runner",
 ]
 
@@ -24,6 +28,10 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# en-core-web-sm 是 direct URL 依赖；hatchling 默认拒绝打包这类引用。
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/macai_kokoro_runner"]

@@ -180,7 +180,10 @@ parser unit tests 或直接调用 `RunnerProcess` 的 isolated test 不足以进
   daemon 对称、engine 迁移 G2P v1.1 patch / 长文本切分 / 多段拼接）、
   `--probe` 离线探针；
 - `tests/test_adapter.py` 10 tests（切分不丢字符、wire format 对齐、
-  EOF 语义）。
+  EOF 语义）；
+- 解释器接线修复：`status.python` 只描述 uv `--python` 输入的基础解释器；
+  probe 与 entrypoint 的 `{environment.python}` 解析为运行解释器
+  `status.runtime_python()`（`<env_root>/.venv/bin/python`）。
 
 直接证据：
 
@@ -197,7 +200,8 @@ parser unit tests 或直接调用 `RunnerProcess` 的 isolated test 不足以进
 | immutable HF revision 核对 | HF commit `4bd6c964…8ba7e8` 的 `model.safetensors` LFS sha256 与本地文件一致（config.json size 3380 一致）；revision 已填入 `profiles/kokoro-82m-zh.toml` | passed |
 | 第二次 sync exact/no-op 与离线 sync | `uv sync --locked --no-dev` 二次运行为纯 audit；`--offline` sync 与离线 `--probe` 通过 | passed |
 | 真实模型经 Runner Protocol 端到端 | `MACAI_KOKORO_SMOKE_MODEL=… scripts/tests/kokoro_runner_smoke.sh`（自带独立 frame codec）：短中文 4.45s、混合中英 5.0s、长中文 116 字 22.9s 无截断 @ 24000Hz，unload/shutdown 无残留 | passed |
-| daemon 侧 RunnerProvider 真实接线 | `MACAI_KOKORO_WIRING_MODEL=… cargo test -p ai-daemon --test runner_kokoro_real_wiring`（env-gated） | blocked：environment manager 解释器接线缺陷，见下 |
+| probe/entrypoint 解析到 synced venv 解释器（接线缺陷回归） | `cargo test -p ai-daemon --test runner_environment_manager probe_runs_under_the_synced_venv_interpreter` | passed（runner_environment_manager 9 tests 全绿） |
+| daemon 侧 RunnerProvider 真实接线 | `MACAI_KOKORO_WIRING_MODEL=… cargo test -p ai-daemon --test runner_kokoro_real_wiring`（env-gated） | 修复后复跑结果见下节 |
 
 Phase 2 收尾（2026-09-02 第二轮 bounded change）已完成 revision 核对、exact/no-op
 与离线 sync、真实模型端到端 smoke（上表）。该轮暴露并处理：
@@ -207,16 +211,19 @@ Phase 2 收尾（2026-09-02 第二轮 bounded change）已完成 revision 核对
 - profile `artifacts.directory = "."` 被 `safe_relative` 拒绝；已按
   [`model-profile-v1`](../specs/model-profile-v1.md) 示例改为 `kokoro-82m-zh`。
 
-**未修缺陷（转下一 bounded change，owner：`ai-daemon::runners::environment`）**：
-`run_sync` 经 `UV_PROJECT_ENVIRONMENT` 把依赖装进 staging `.venv`，而 `run_probe`
-与 `instance.rs` entrypoint 的 `{environment.python}` 都解析为受管**基础解释器**，
-真实 probe 报 `ModuleNotFoundError: mlx_audio`。fake fixture 的 probe 只 `print`，
-掩盖了该缺陷。修复方向：probe 与 entrypoint 解析为
-`<fingerprint>/.venv/bin/python`，基础解释器只作为 uv `--python` 输入；
-`status.python` 语义随修复澄清。真实接线测试在修复前保持 env-gated 跳过。
+**解释器接线修复（2026-09-02 第三轮 bounded change，owner：
+`ai-daemon::runners::environment`）**：真实接线曾暴露 `run_sync` 经
+`UV_PROJECT_ENVIRONMENT` 把依赖装进 staging `.venv`，而 `run_probe` 与
+`instance.rs` entrypoint 的 `{environment.python}` 都解析为受管**基础解释器**，
+真实 probe 报 `ModuleNotFoundError: mlx_audio`。fake fixture 的 no-op probe
+掩盖了该缺陷。修复后：probe 在 staging `.venv/bin/python` 上运行（sync 产物缺失时
+结构化失败），entrypoint 用 `status.runtime_python()`（`<env_root>/.venv/bin/python`）
+启动，基础解释器只作为 uv `--python` 输入；`status.python` 语义已在 uv 提案与
+runner-manifest-v1 spec 中澄清为「uv 输入基础解释器的 provenance」。回归测试见下表
+`probe_runs_under_the_synced_venv_interpreter`。
 
 Phase 2 完成条件在接线测试通过后判定：中英文混合、长文本已由 smoke 覆盖；
-daemon 侧真实接线等待上述缺陷修复后复跑。
+daemon 侧真实接线修复后复跑结果见下表。
 
 ## Phase 3: Runner adapter
 
