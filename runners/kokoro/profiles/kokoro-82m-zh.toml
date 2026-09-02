@@ -1,0 +1,28 @@
+schema = "macai.model.v1"
+id = "kokoro-82m-zh"
+name = "Kokoro 82M zh"
+capabilities = ["tts.v1"]
+runner = "org.macai.kokoro"
+adapter = "kokoro-mlx"
+format = "directory"
+
+[source]
+type = "huggingface"
+repo = "1038lab/Kokoro-82M-zh-MLX"
+# immutable revision 待模型目录核对后由 Phase 2 完成时确认填入
+revision = "0123456789abcdef0123456789abcdef01234567"
+
+[artifacts]
+directory = "."
+files = ["config.json", "model.safetensors"]
+
+[defaults]
+keep_alive = "always"
+voice = "zf_001"
+format = "wav"
+
+[resources]
+memory_estimate_bytes = 400000000
+
+[compatibility]
+runner = ">=0.1,<0.2"

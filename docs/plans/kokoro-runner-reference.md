@@ -170,15 +170,37 @@ parser unit tests 或直接调用 `RunnerProcess` 的 isolated test 不足以进
 
 ## Phase 2: uv-lock Kokoro
 
-1. 从当前 worker import 和真实冷安装确定直接依赖；
-2. 创建 `pyproject.toml`，声明 CPython 3.12 约束和 dev test group；
-3. 用当时选定并记录的 uv 版本生成 `uv.lock`；
-4. 在没有旧 `.build/kokoro-venv` 的隔离位置执行 cold sync；
-5. 验证 import、Kokoro model load、中英文和长文本；
-6. 执行第二次 `uv sync --locked`，确认 exact/no-op 行为；
-7. 在 cache 完整后执行离线 sync/probe。
+当前状态（2026-09-02，Phase 2 环境与 adapter 基线完成）：
 
-最终 lock 由实际成功环境产生。当前 README 包名和已安装环境只作为调查输入。
+- `runners/kokoro/` 已建立：`runner.toml`（python-uv、probe、capacity 1/1）、
+  `pyproject.toml`（mlx-audio 0.5.1、misaki[zh]/[en] 0.9.4、numpy>=2<3、
+  phonemizer-fork 3.3.2、espeakng-loader 0.2.4；dev group: pytest）、
+  `uv.lock`（124 packages，misaki 中文依赖链 jieba/spacy 显式锁定）；
+- `src/macai_kokoro_runner/`：Runner Protocol v1 adapter（frame codec 与
+  daemon 对称、engine 迁移 G2P v1.1 patch / 长文本切分 / 多段拼接）、
+  `--probe` 离线探针；
+- `tests/test_adapter.py` 10 tests（切分不丢字符、wire format 对齐、
+  EOF 语义）。
+
+直接证据：
+
+| Claim | Evidence | Result |
+| --- | --- | --- |
+| 提交的 lock 可在无旧 venv 的隔离位置冷安装 | `uv sync --project runners/kokoro --locked --no-dev` → `/tmp/kokoro-cold-venv`（124 packages） | passed |
+| 冷安装环境 import 全部运行依赖 | `import mlx_audio, misaki, phonemizer, espeakng_loader, jieba` | passed |
+| manifest probe 在冷安装环境离线通过 | `python -m macai_kokoro_runner --probe` | passed |
+| 冷安装环境真实合成有效 WAV | kokoro_worker.py 驱动：`ok=true`，4.15s @ 24000Hz | passed |
+| 旧 Python worker tests 基线（Phase 0） | `uv run --with pytest python -m pytest scripts/tests -v` | passed（34 tests） |
+| Rust Kokoro Provider tests 基线（Phase 0） | `cargo test -p ai-daemon kokoro` | passed（4 tests） |
+| 旧环境真实合成基线（Phase 0） | `.build/kokoro-venv`：`ok=true`，3.83s @ 24000Hz | passed |
+| adapter 逻辑单测 | `uv run --with pytest --with-editable . python -m pytest tests/test_adapter.py` | passed（10 tests） |
+
+Phase 2 完成前仍需：
+
+1. 核对 Model Profile 的 immutable HF revision 并填入 `profiles/kokoro-82m-zh.toml`；
+2. 真实模型经 Runner Protocol（而非旧 worker 协议）的端到端 load/infer smoke；
+3. 第二次 `uv sync --locked` 的 exact/no-op 验证与离线 sync 验证；
+4. 中英文混合、长文本与 daemon 侧 RunnerProvider 接线验证。
 
 ## Phase 3: Runner adapter
 
