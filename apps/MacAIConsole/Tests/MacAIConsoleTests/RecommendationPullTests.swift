@@ -18,7 +18,7 @@ final class RecommendationPullTests: XCTestCase {
             session: session
         )
         let model = try XCTUnwrap(
-            RecommendedModel.builtIns.first { $0.provider == "qwen3-asr-mlx" }
+            RecommendedModel.builtIns.first { $0.provider == "org.macai.qwen3-asr" }
         )
 
         let response = try await api.pull(model, autoLoad: true)
@@ -29,7 +29,7 @@ final class RecommendationPullTests: XCTestCase {
             JSONSerialization.jsonObject(with: body) as? [String: Any]
         )
         XCTAssertEqual(json["repo"] as? String, model.repository)
-        XCTAssertEqual(json["provider"] as? String, "qwen3-asr-mlx")
+        XCTAssertEqual(json["provider"] as? String, "org.macai.qwen3-asr")
         XCTAssertEqual(json["directory"] as? String, model.directoryName)
         XCTAssertEqual(json["auto_load"] as? Bool, true)
         XCTAssertEqual(json["files"] as? [String], model.files)
@@ -100,7 +100,7 @@ private final class RecommendationURLProtocol: URLProtocol {
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(
             self,
-            didLoad: Data(#"{"id":"qwen3-asr-mlx-8bit","state":"ready"}"#.utf8)
+            didLoad: Data(#"{"id":"Qwen3-ASR-0.6B-MLX-4bit","state":"ready"}"#.utf8)
         )
         client?.urlProtocolDidFinishLoading(self)
     }

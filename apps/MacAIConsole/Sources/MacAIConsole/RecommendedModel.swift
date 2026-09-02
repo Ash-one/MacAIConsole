@@ -116,32 +116,30 @@ struct RecommendedModel: Identifiable, Hashable {
             estimatedSizeBytes: 4_623_782_544
         ),
         RecommendedModel(
-            id: "qwen3-asr-mlx-8bit",
-            title: "Qwen3-ASR 0.6B · MLX 8-bit",
-            summary: "中文优先的高质量语音识别，Apple Silicon Metal 加速",
+            id: "Qwen3-ASR-0.6B-MLX-4bit",
+            title: "Qwen3-ASR 0.6B · MLX 4-bit (Runner)",
+            summary: "中文优先语音识别，Apple Silicon Metal 加速（daemon Runner 受管环境；ModelScope: aufklarer/…）",
             modelType: "stt",
-            provider: "qwen3-asr-mlx",
-            repository: "mlx-community/Qwen3-ASR-0.6B-8bit",
+            provider: "org.macai.qwen3-asr",
+            repository: "aufklarer/Qwen3-ASR-0.6B-MLX-4bit",
             files: [
-                "chat_template.json",
                 "config.json",
-                "generation_config.json",
+                "configuration.json",
                 "merges.txt",
                 "model.safetensors",
                 "model.safetensors.index.json",
-                "preprocessor_config.json",
                 "tokenizer_config.json",
                 "vocab.json",
             ],
-            directoryName: "qwen3-asr-mlx-8bit",
-            estimatedSizeBytes: 1_010_771_234
+            directoryName: "Qwen3-ASR-0.6B-MLX-4bit",
+            estimatedSizeBytes: 850_000_000
         ),
         RecommendedModel(
             id: "kokoro-82m-zh",
-            title: "Kokoro 82M · 中文 MLX",
-            summary: "轻量中文语音合成，完整内置 103 个音色",
+            title: "Kokoro 82M · 中文 MLX (Runner)",
+            summary: "轻量中文语音合成，完整内置 103 个音色（daemon Runner 受管环境）",
             modelType: "tts",
-            provider: "kokoro-mlx",
+            provider: "org.macai.kokoro",
             repository: "1038lab/Kokoro-82M-zh-MLX",
             files: [
                 "config.json",
