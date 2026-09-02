@@ -1182,6 +1182,7 @@ mod tests {
         ));
         let provider = Arc::new(RunnerProvider::new(
             "org.example.runner".to_string(),
+            &["tts.v1".to_string()],
             instances.clone(),
             root.join("temp"),
         ));

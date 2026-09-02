@@ -75,7 +75,9 @@ Legacy 语义已核对：
    profile Qwen3-ASR-0.6B-MLX-4bit、pyproject+uv.lock 40 包、probe 导入通过）。
 3. ✅ adapter：`macai_qwen3_asr_runner`（协议入口 + engine 语义迁移；engine
    校验单测 4 passed）。
-4. ⏳ 接线证据：env-gated real model（ModelScope 4bit 下载后）。
+4. ✅ 接线证据（真实）：Kokoro 生成 WAV → Qwen3-ASR Runner 转写逐字还原
+   （"你好，这是Runner接线后的声音。"）。模型源补 preprocessor_config.json
+   （mlx-audio feature extractor 必需，ModelScope 仓库未带；取原 8bit HF 同款）。
 5. ⏳ 默认切换 + 删 legacy。
 
 阻塞（已解除）：模型源与 immutable revision 已核（ModelScope
