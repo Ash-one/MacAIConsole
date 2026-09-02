@@ -277,7 +277,7 @@ cancel 帧的**双向通路在全栈缺失**：worker 单线程事件循环在�
 
 ## Phase 4: real composition
 
-Phase 4 切片进度（2026-09-02，首块已落地）：
+Phase 4 切片进度（2026-09-02）：
 
 - **Model Profile 持久 snapshot/digest**：`ModelProfile::canonical_json`/`digest`
   （sha256 of canonical JSON，与 package digest 分离）；`RegistryStore` 新增
@@ -285,7 +285,16 @@ Phase 4 切片进度（2026-09-02，首块已落地）：
   `get_profile`/`load_profiles`（同 id 新 digest 覆盖内容、installed_at 保留首
   次注册值）。直接证据：`cargo test -p ai-daemon registry:: profile::`（registry
   6 tests 含 profile roundtrip/重开恢复；profile 3 tests 含 digest 确定性）。
-  尚未接入 main.rs 装配路径（下一 slice）。
+- **daemon 装配（built-in Runner）**：`Runtime::attach_runner`（按 descriptor 进
+  providers/tts 表并挂 instance manager，`shutdown_all` 收口）与
+  `Runtime::register_runner_profile`（持久化到 store，内存模式 Ok(None)）；
+  main.rs `bootstrap_runners`：定位 Runner 目录（`MACAI_RUNNERS_DIR` → cwd
+  `runners`/`../runners`）→ discovery（built-in 信任）→ 仅 python-uv 且
+  Trusted → bundled Model Profile 解析校验 → 持久化 → 对 artifact 存在的
+  profile bind + attach（artifact 缺失跳过、不假装 ready）。直接证据：
+  `cargo test -p ai-daemon --bin aiworkd`（含 attach 注册/provider+profile
+  持久化两测试；全套 bin tests 绿）。
+  尚未接入：Plugins 目录与显式信任、HTTP 管理面端点（下一 slice）。
 
 真实用户路径：
 

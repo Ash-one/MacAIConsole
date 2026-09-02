@@ -95,7 +95,11 @@ async fn main() {
                 .join("Library/Application Support/MacAIConsole/models.db")
         })
         .unwrap_or_else(|_| std::path::PathBuf::from("models.db"));
-    let runtime = Arc::new(Runtime::with_store(&db_path));
+    let mut runtime = Runtime::with_store(&db_path);
+    // Phase 4：装配仓库随附 built-in Runner（无 Runner/模型时静默跳过，
+    // 保留纯内置 Provider 路径）。
+    bootstrap_runners(&mut runtime).await;
+    let runtime = Arc::new(runtime);
     runtime.spawn_idle_reaper();
 
     let state = AppState {
@@ -978,6 +982,158 @@ fn api_error(error: AIError, message: impl Into<String>) -> Response {
     let status =
         StatusCode::from_u16(error.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (status, Json(ApiErrorBody::new(error, message))).into_response()
+}
+
+/// Phase 4：装配仓库随附 built-in Runner。
+///
+/// 流程：定位 Runner 目录（`MACAI_RUNNERS_DIR` → cwd `runners`/`../runners`）
+/// → discovery（built-in root 直接信任）→ 逐 manifest 读取 bundled Model
+/// Profile → 持久化 profile snapshot（models.db）→ 对已有模型 artifact 的
+/// profile 建立 RunnerProvider 绑定并 `attach_runner` 进 Runtime。
+///
+/// 找不到 Runner 目录、无 python-uv Runner 或模型目录缺失时静默跳过，保留纯
+/// 内置 Provider 路径；模型目录缺失表示用户尚未下载 artifact，不假装 ready。
+/// Plugins 目录与显式信任留到安装 slice。
+async fn bootstrap_runners(runtime: &mut Runtime) {
+    use std::collections::HashMap;
+    use std::collections::HashSet;
+
+    use ai_daemon::runners::{
+        EnvironmentManager, EnvironmentManagerConfig, ModelProfile, RunnerInstanceManager,
+        RunnerModelBinding, RunnerProvider, RunnerRegistry, RunnerState,
+    };
+
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let app_support = PathBuf::from(&home).join("Library/Application Support/MacAIConsole");
+    let runner_root = match std::env::var_os("MACAI_RUNNERS_DIR") {
+        Some(dir) => Some(PathBuf::from(dir)),
+        None => match std::env::current_dir() {
+            Ok(cwd) => [cwd.join("runners"), cwd.join("../runners")]
+                .into_iter()
+                .find(|candidate| candidate.is_dir()),
+            Err(_) => None,
+        },
+    };
+    let Some(runner_root) = runner_root else {
+        tracing::info!("no built-in runners dir; Runner assembly skipped");
+        return;
+    };
+    if !runner_root.is_dir() {
+        tracing::info!(path = %runner_root.display(), "built-in runners dir unavailable");
+        return;
+    }
+
+    let registry = RunnerRegistry::discover(&[runner_root.clone()], &[], &HashSet::new());
+    let entries: Vec<_> = registry
+        .entries()
+        .iter()
+        .cloned()
+        .filter(|entry| {
+            entry.manifest.is_some()
+                && matches!(entry.state, RunnerState::Trusted)
+                && entry
+                    .manifest
+                    .as_ref()
+                    .is_some_and(|manifest| manifest.runtime.runtime_type == "python-uv")
+        })
+        .collect();
+    if entries.is_empty() {
+        tracing::info!(path = %runner_root.display(), "no trusted python-uv Runner discovered");
+        return;
+    }
+
+    let environments = EnvironmentManager::new(EnvironmentManagerConfig::for_app_support());
+    let temp_root = app_support.join("Runtimes/tmp");
+    if let Err(error) = std::fs::create_dir_all(&temp_root) {
+        tracing::warn!(%error, path = %temp_root.display(), "cannot create runner temp root");
+        return;
+    }
+    let instances = Arc::new(RunnerInstanceManager::new(
+        registry,
+        environments,
+        temp_root.clone(),
+    ));
+    let models_root = app_support.join("Models");
+    let mut providers: HashMap<String, Arc<RunnerProvider>> = HashMap::new();
+
+    for entry in &entries {
+        let manifest = entry.manifest.as_ref().expect("filtered above");
+        let runner_id = manifest.id.clone();
+        for model in &manifest.models {
+            let profile = match ModelProfile::load(&entry.root.join(&model.profile)) {
+                Ok(profile) => profile,
+                Err(error) => {
+                    tracing::warn!(
+                        profile = %model.profile,
+                        runner = %runner_id,
+                        %error,
+                        "skip invalid bundled Model Profile"
+                    );
+                    continue;
+                }
+            };
+            let kind = if profile.capabilities.iter().any(|cap| cap == "stt.v1") {
+                "stt"
+            } else if profile.capabilities.iter().any(|cap| cap == "tts.v1") {
+                "tts"
+            } else {
+                "llm"
+            };
+            let model_dir = models_root.join(kind).join(&profile.artifacts.directory);
+            if !model_dir.is_dir() {
+                tracing::info!(
+                    profile = %profile.id,
+                    path = %model_dir.display(),
+                    "model artifact missing; Runner binding skipped (not pretending ready)"
+                );
+                continue;
+            }
+            match runtime.register_runner_profile(&profile) {
+                Ok(Some(digest)) => {
+                    tracing::info!(profile = %profile.id, digest = %digest, "runner profile persisted")
+                }
+                Ok(None) => {
+                    tracing::info!(profile = %profile.id, "runner profile registered (memory mode)")
+                }
+                Err(error) => {
+                    tracing::warn!(profile = %profile.id, %error, "profile persist failed")
+                }
+            }
+            let provider = match providers.get(&runner_id).cloned() {
+                Some(provider) => provider,
+                None => {
+                    let provider = Arc::new(RunnerProvider::new(
+                        runner_id.clone(),
+                        instances.clone(),
+                        temp_root.clone(),
+                    ));
+                    providers.insert(runner_id.clone(), provider.clone());
+                    provider
+                }
+            };
+            provider
+                .bind_model(RunnerModelBinding {
+                    model_id: profile.id.clone(),
+                    profile: profile.clone(),
+                    environment_id: manifest.runtime.id.clone(),
+                    artifact_root: model_dir.clone(),
+                })
+                .await;
+            tracing::info!(
+                runner = %runner_id,
+                profile = %profile.id,
+                artifact = %model_dir.display(),
+                "runner model bound"
+            );
+        }
+    }
+
+    for (runner_id, provider) in providers {
+        runtime.attach_runner(provider, instances.clone());
+        tracing::info!(runner = %runner_id, "built-in Runner attached");
+    }
 }
 
 #[cfg(test)]
