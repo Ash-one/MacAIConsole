@@ -40,6 +40,8 @@ pub struct RunnerModelBinding {
 /// 协议细节全部委托给 RunnerInstanceManager。
 pub struct RunnerProvider {
     runner_id: String,
+    /// manifest 声明的 ai-core Capability（tts.v1→TextToSpeech、stt.v1→SpeechToText）。
+    capabilities: Vec<Capability>,
     /// capability 名到模型 ID 的映射（当前 v1 只桥接 tts.v1）。
     bindings: tokio::sync::RwLock<Vec<RunnerModelBinding>>,
     instances: Arc<RunnerInstanceManager>,
@@ -49,11 +51,21 @@ pub struct RunnerProvider {
 impl RunnerProvider {
     pub fn new(
         runner_id: String,
+        manifest_capabilities: &[String],
         instances: Arc<RunnerInstanceManager>,
         temp_root: PathBuf,
     ) -> Self {
+        let mut capabilities = Vec::new();
+        for name in manifest_capabilities {
+            match name.as_str() {
+                "tts.v1" => capabilities.push(Capability::TextToSpeech),
+                "stt.v1" => capabilities.push(Capability::SpeechToText),
+                _ => {}
+            }
+        }
         Self {
             runner_id,
+            capabilities,
             bindings: tokio::sync::RwLock::new(Vec::new()),
             instances,
             temp_root,
@@ -145,13 +157,13 @@ impl Provider for RunnerProvider {
     }
 
     fn capabilities(&self) -> Vec<Capability> {
-        vec![Capability::TextToSpeech]
+        self.capabilities.clone()
     }
 
     fn descriptor(&self) -> ProviderDescriptor {
         ProviderDescriptor {
             id: self.runner_id.clone(),
-            capabilities: vec![Capability::TextToSpeech],
+            capabilities: self.capabilities.clone(),
             isolation: IsolationMode::Worker,
             supported_devices: vec!["metal".to_string()],
         }

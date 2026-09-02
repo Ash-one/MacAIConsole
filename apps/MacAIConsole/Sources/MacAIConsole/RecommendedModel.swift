@@ -128,6 +128,7 @@ struct RecommendedModel: Identifiable, Hashable {
                 "merges.txt",
                 "model.safetensors",
                 "model.safetensors.index.json",
+                "preprocessor_config.json",
                 "tokenizer_config.json",
                 "vocab.json",
             ],

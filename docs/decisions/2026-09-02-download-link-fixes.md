@@ -35,9 +35,13 @@ HTTP 500 / “error sending request”，日志显示 ModelScope LFS CDN 403。
 
 ## 验证
 
-- `cargo test` 相关（lib + bin discovery 回归）；
-- 真实链：`download（ModelScope，代理开/关两态）→ daemon restart → Runner
-  available → STT`（大权重 ~700MB，证据落在 roadmap）。
+- `cargo test` 相关（lib + bin discovery 回归）通过；
+- 真实链：ModelScope 无代理拉取 693M 全目录成功 → Runner
+  `org.macai.qwen3-asr` ready 且模型绑定 → 注册加载（capability 由 manifest
+  推导 stt.v1）→ **Kokoro 合成 WAV 经 Runner 转写逐字还原**（
+  「你好，这是Runner接线后的声音。」）；
+- 链路发现补充：ModelScope 仓库未带 `preprocessor_config.json`（mlx-audio
+  feature extractor 必需），已从原 8bit HF 同款补入 artifact 清单。
 
 ## 关联
 

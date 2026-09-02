@@ -1258,6 +1258,7 @@ async fn bootstrap_runners(runtime: &mut Runtime) {
                 None => {
                     let provider = Arc::new(RunnerProvider::new(
                         runner_id.clone(),
+                        &manifest.capabilities,
                         instances.clone(),
                         temp_root.clone(),
                     ));
