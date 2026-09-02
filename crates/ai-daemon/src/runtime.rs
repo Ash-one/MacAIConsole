@@ -217,7 +217,13 @@ impl Runtime {
             .capabilities
             .contains(&ai_core::provider::Capability::TextToSpeech)
         {
-            self.tts_providers.insert(id, provider);
+            self.tts_providers.insert(id.clone(), provider.clone());
+        }
+        if descriptor
+            .capabilities
+            .contains(&ai_core::provider::Capability::SpeechToText)
+        {
+            self.stt_providers.insert(id, provider);
         }
         self.runner_instances = Some(instances);
     }

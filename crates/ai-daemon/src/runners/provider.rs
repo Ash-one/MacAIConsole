@@ -308,6 +308,66 @@ impl TTSProvider for RunnerProvider {
     }
 }
 
+#[async_trait]
+impl ai_core::provider::STTProvider for RunnerProvider {
+    /// STT 请求：daemon 已把上传音频归一化为 PCM WAV（`request.file`），Runner
+    /// worker 读该路径并返回文本。无授权输出目录（读取而非写出），结果经
+    /// infer result 帧返回 text/language/device。
+    async fn transcribe(
+        &self,
+        request: ai_core::request::TranscriptionRequest,
+    ) -> Result<ai_core::response::TranscriptionResponse, ProviderError> {
+        let binding = self.binding(&request.model).await?;
+        let runner_id = binding.profile.runner.clone();
+        let audio = request.file.clone().ok_or_else(|| {
+            ProviderError::new(
+                AIError::InvalidRequest,
+                "transcription requires an audio file",
+            )
+        })?;
+        let stt_request = json!({
+            "audio": audio,
+            "language": request.language,
+        });
+        let deadline = Duration::from_secs(300);
+        let result = self
+            .instances
+            .infer(
+                &runner_id,
+                "stt.v1",
+                stt_request,
+                json!({}),
+                deadline,
+                |_| {},
+            )
+            .await;
+        match result {
+            Ok(payload) => {
+                let text = payload
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        ProviderError::new(
+                            AIError::Internal,
+                            "runner result did not include transcription text",
+                        )
+                    })?
+                    .to_string();
+                let language = payload
+                    .get("language")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                Ok(ai_core::response::TranscriptionResponse {
+                    text,
+                    language,
+                    model: request.model.clone(),
+                })
+            }
+            Err(error) => Err(Self::map_error(error)),
+        }
+    }
+}
+
 /// Model Profile 到 Runner `load` payload 的规范化映射。
 fn profile_load_payload(binding: &RunnerModelBinding, model: &ModelSpec) -> Value {
     json!({
