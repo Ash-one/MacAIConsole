@@ -179,10 +179,17 @@ pub fn configured_endpoint() -> Result<String, String> {
     }
 }
 
-/// 使用指定 Hugging Face 兼容源构造 resolve URL。
+/// 组装下载 URL。huggingface.co（含 hf-mirror 等）与 modelscope.cn 的
+/// resolve 分支不同：HF 用 `resolve/main`，ModelScope 用 `resolve/master`。
+/// ModelScope 作为镜像源时，endpoint 填 `https://modelscope.cn/models`。
 pub fn resolve_url_with_endpoint(endpoint: &str, repo: &str, filename: &str) -> String {
+    let branch = if endpoint.contains("modelscope.cn") {
+        "resolve/master"
+    } else {
+        "resolve/main"
+    };
     format!(
-        "{}/{repo}/resolve/main/{filename}",
+        "{}/{repo}/{branch}/{filename}",
         endpoint.trim_end_matches('/')
     )
 }
