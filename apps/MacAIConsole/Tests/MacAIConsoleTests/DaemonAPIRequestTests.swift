@@ -12,7 +12,7 @@ final class DaemonAPIRequestTests: XCTestCase {
     }
 
     func testPullBuildsDirectoryManifestPayload() async throws {
-        let api = try makeAPI(status: 200, body: #"{"id":"kokoro-82m-zh","provider":"kokoro-mlx"}"#)
+        let api = try makeAPI(status: 200, body: #"{"id":"kokoro-82m-zh","provider":"org.macai.kokoro"}"#)
 
         let kokoro = try XCTUnwrap(RecommendedModel.builtIns.first { $0.id == "kokoro-82m-zh" })
         _ = try await api.pull(kokoro, autoLoad: true)
@@ -23,7 +23,7 @@ final class DaemonAPIRequestTests: XCTestCase {
         XCTAssertEqual(payload["repo"] as? String, "1038lab/Kokoro-82M-zh-MLX")
         XCTAssertEqual(payload["model_type"] as? String, "tts")
         XCTAssertEqual(payload["id"] as? String, "kokoro-82m-zh")
-        XCTAssertEqual(payload["provider"] as? String, "kokoro-mlx")
+        XCTAssertEqual(payload["provider"] as? String, "org.macai.kokoro")
         XCTAssertEqual(payload["auto_load"] as? Bool, true)
         XCTAssertEqual(payload["directory"] as? String, "kokoro-82m-zh")
         XCTAssertNil(payload["filename"])
