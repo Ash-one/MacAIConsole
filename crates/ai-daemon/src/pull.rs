@@ -241,34 +241,15 @@ fn content_range_total(value: &header::HeaderValue) -> Option<u64> {
 }
 
 fn build_client() -> Result<reqwest::Client, String> {
-    let mut builder = reqwest::Client::builder()
+    reqwest::Client::builder()
         // Large HF files have previously failed with an HTTP/2 response-body
         // decoding error. Keep this transfer path on HTTP/1.1, then retry from
         // the durable .part offset if the body still ends unexpectedly.
         .http1_only()
         .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(120))
         .pool_idle_timeout(std::time::Duration::from_secs(90))
-        .tcp_keepalive(std::time::Duration::from_secs(30));
-    // ModelScope 的 LFS CDN 走本地代理（海外节点）会空转后 403；CN 源直连更稳。
-    let proxy_env = std::env::var("HTTPS_PROXY")
-        .or_else(|_| std::env::var("https_proxy"))
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    if let Some(proxy_env) = proxy_env {
-        if let Ok(proxy_url) = reqwest::Url::parse(&proxy_env).map(std::sync::Arc::new) {
-            let bypass = std::sync::Arc::clone(&proxy_url);
-            let custom = reqwest::Proxy::custom(move |url: &reqwest::Url| {
-                let host = url.host_str().unwrap_or("");
-                if host == "modelscope.cn" || host.ends_with(".modelscope.cn") {
-                    None
-                } else {
-                    Some((*bypass).clone())
-                }
-            });
-            builder = builder.proxy(custom);
-        }
-    }
-    builder
+        .tcp_keepalive(std::time::Duration::from_secs(30))
         .build()
         .map_err(|error| format!("http client: {error}"))
 }
