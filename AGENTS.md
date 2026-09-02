@@ -29,7 +29,9 @@
 
 # MacAI 项目指南
 
-本节是本仓库的项目级事实与约定索引，供编码 Agent 使用；上方各节的通用规则继续适用。事实核对于 2026-08 的当前代码。文档分工：`README.md` 记录当前实现状态（与 `handoff.md` 冲突时以 README 和代码为准）；`handoff.md` 是长期目标架构与决策记录，§70 起为已落地的决策记录（问题 / 决策 / 被放弃方案 / 后果 / 验证）；`apps/MacAIConsole/README.md` 专述 GUI。
+本节是本仓库的项目级事实与约定索引，供编码 Agent 使用；上方各节的通用规则继续适用。事实核对应 2026-09-02 的当前代码。文档分工：`README.md` 记录当前实现状态；`apps/MacAIConsole/README.md` 专述 GUI；`docs/decisions/` 记录工作提案和已落地决策；`docs/specs/` 记录提案或实现引用的精确契约；`docs/plans/` 只保存尚未完成的实施与验证计划。`handoff.md` 是历史设计材料，不再作为当前事实、工作提案或决策 owner。
+
+每个改变行为、架构、共享契约、持久格式、工具流程或测试策略的非机械改动，都必须在同一 bounded change 中创建或更新一个 owning decision record。提案只有在代码、证据和当前文档全部收敛后，才能改写为已落地决策。
 
 ## 项目一句话
 
@@ -37,11 +39,11 @@ MacAI 是面向 Apple Silicon 的本地 AI Runtime：Rust daemon `aiworkd`（默
 
 ## 架构不变量（改动前先对照）
 
-来自 `handoff.md` §59 与已落地决策记录，违反即架构回归：
+以下不变量由当前代码、README 与 `docs/decisions/` 中已落地记录共同约束，违反即架构回归：
 
 1. **客户端不拥有模型**：GUI / CLI / API 只通过 `aiworkd` 的 HTTP API 工作。给 GUI 加功能时不得引入本地推理、本地模型状态或第二套 Provider 推断；UI 展示的状态必须来自 daemon（`/api/providers`、`/api/runtime` 等）。
 2. **故障隔离**：Provider 以独立进程承载（llama.cpp / whisper.cpp 二进制；Kokoro、Qwen3-ASR Python worker）。worker 崩溃时 `aiworkd` 必须保持存活并返回结构化错误（如 `backend_crashed`）。
-3. **Python worker 常驻**：按 Provider 复用 persistent worker 与 venv，禁止一请求一进程的 spawn → load → infer → exit。
+3. **Python worker 常驻**：按可复用推理边界维持 persistent worker，禁止一请求一进程的 spawn → load → infer → exit。Python 环境的未来 owner 与迁移方向由 `docs/decisions/2026-09-02-uv-python-environments.md` 提案定义；提案落地前以当前代码为准。
 4. **卸载经过 lease / busy guard**：手动 unload、LRU 逐出和 keep-alive reaper 都不能中断 lease count > 0 的进行中请求。
 5. **禁止静默 fallback**：Provider 选择结果必须显式记录（requested / selected / effective device / reason）；显式指定 `--provider` 是硬选择，不可用时失败而非切换。UI 不得自行推断设备或可用性。
 6. **单一 owner**：keep_alive 字符串解析只有 `ai-daemon::scheduler::parse_keep_alive`；STT 上传音频格式裁决只有 daemon 入口 `crates/ai-daemon/src/audio.rs`（decode-on-ingest 归一化为 PCM WAV，Provider 契约始终是"只接收 PCM WAV"）；GUI 设置只有主窗口侧边栏一页（经 `AppRouter` 导航），没有独立 Settings scene。修改这些行为时改 owner，不要新增平行实现。
@@ -53,10 +55,10 @@ MacAI 是面向 Apple Silicon 的本地 AI Runtime：Rust daemon `aiworkd`（默
 | 路径 | 内容 |
 | --- | --- |
 | `crates/ai-core` | 共享类型：model / provider / request / response / errors |
-| `crates/ai-daemon` | `aiworkd` 本体。`main.rs` HTTP endpoints；`runtime.rs` 模型与 Provider 生命周期（lease）；`scheduler.rs` 内存预算（`min(ram*0.75, ram-8GB)`，`AIWORKD_MEMORY_BUDGET` 可覆盖）、LRU 与 keep-alive reaper；`registry.rs` SQLite 注册表（内存 HashMap 为唯一读路径）；`tasks.rs` 有界任务历史（终态保留最近 100 条）；`pull.rs` Hugging Face 下载（断点续传）；`audio.rs` STT 音频归一化；`providers/` 含 llama_cpp、whisper_cpp、kokoro_mlx、qwen3_asr（同一文件内定义 `qwen3-asr` 与 `qwen3-asr-mlx` 两个 Provider）、macos_say、mock |
+| `crates/ai-daemon` | `aiworkd` 本体。`main.rs` HTTP endpoints；`runtime.rs` 模型与 Provider 生命周期（lease）；`scheduler.rs` 内存预算（`min(ram*0.75, ram-8GB)`，`AIWORKD_MEMORY_BUDGET` 可覆盖）、LRU 与 keep-alive reaper；`registry.rs` SQLite 注册表（内存 HashMap 为唯一读路径）；`tasks.rs` 有界任务历史（终态保留最近 100 条）；`pull.rs` Hugging Face 下载（断点续传）；`audio.rs` STT 音频归一化；`providers/` 含 llama_cpp、mlx_lm、whisper_cpp、kokoro_mlx、qwen3_asr、qwen3_tts、sherpa_onnx、macos_say、mock |
 | `crates/ai-cli` | `macai` CLI（clap，单文件 `main.rs`），只调 daemon |
 | `apps/MacAIConsole` | SwiftUI 控制台。`DaemonAPI.swift`（HTTP 客户端）、`DaemonController.swift`（daemon 探测与启停：`AIWORKD_PATH` → `target/release` → `target/debug`）、`PythonEnvironment.swift`（一键装 venv 到 `.build/`）、`AppSettings.swift`、`AppRouter.swift`；视图在 `Views/` |
-| `scripts/` | `build-llama-server.sh` / `build-whisper-cli.sh` / `download-whisper-model.sh`（固定经过验证的 revision）；Python worker：`kokoro_worker.py`、`qwen3_asr_worker.py`、`qwen3_asr_mlx_worker.py`；`tests/` 为 pytest |
+| `scripts/` | `build-llama-server.sh` / `build-whisper-cli.sh` / `download-whisper-model.sh`（固定经过验证的 revision）；Python worker：`kokoro_worker.py`、`mlx_lm_worker.py`、`qwen3_asr_mlx_worker.py`、`qwen3_tts_worker.py`、`sherpa_onnx_worker.py`；`tests/` 为 pytest |
 | `samples/` | Hermes TTS/STT 命令型 Provider 适配器与一键配置脚本 |
 
 ## 构建与验证
@@ -86,4 +88,4 @@ python3.12 -m pytest scripts/tests -v
 - **本地产物不入库**：`target/`（Rust）、`.build/`（第三方引擎、Python venv）与模型权重都不在仓库；运行时数据在 `~/Library/Application Support/MacAIConsole/`（models.db、模型、日志）。
 - **`.wt-qa/` 是 QA 用的 git worktree 副本**，已 gitignore，不属于本仓库：不要在其中工作，不要把它的变更算进本仓库。
 - **常用环境变量**：`AIWORKD_PATH`（daemon 二进制）、`AIWORK_LLAMA_SERVER`、`AIWORK_WHISPER_CLI`、`AIWORK_KOKORO_PYTHON`、`AIWORK_QWEN3_ASR_MLX_PYTHON`、`AIWORK_QWEN3_ASR_DEVICE=mps|cpu|auto`、`AIWORKD_MEMORY_BUDGET`（字节）。
-- **文档同步**：改动对外行为（endpoint、CLI 命令、环境变量、目录布局）时同步 `README.md`；落地架构级决策时在 `handoff.md` 追加决策记录（参照 §70–§72 的结构）。
+- **文档同步**：改动对外行为（endpoint、CLI 命令、环境变量、目录布局）时同步 `README.md`；非机械改动在 `docs/decisions/` 创建或更新唯一 owner，并同步它引用的 `docs/specs/`。不要向 `handoff.md` 追加当前决策。
