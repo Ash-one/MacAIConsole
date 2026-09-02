@@ -415,7 +415,9 @@ async fn pull_model(
         if let Err(error) =
             pull::download_file(&endpoint, &request.repo, &filename, &destination).await
         {
-            return api_error(AIError::Internal, error);
+            // 下载/TLS/UA 拒绝是传输层故障：映射 DownloadFailed（502）并保留底层
+            // connect/response 错误链，供 UI 与日志诊断（不再伪装成内部 500）。
+            return api_error(AIError::DownloadFailed, error);
         }
     }
     finish_pull(state, request, model_path).await

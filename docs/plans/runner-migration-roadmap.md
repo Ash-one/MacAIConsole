@@ -78,6 +78,6 @@ Legacy 语义已核对：
 4. ⏳ 接线证据：env-gated real model（ModelScope 4bit 下载后）。
 5. ⏳ 默认切换 + 删 legacy。
 
-阻塞（已确认→已解除）：原记录 `Models/stt/` 为空；用户已给 ModelScope 源
-`aufklarer/Qwen3-ASR-0.6B-MLX-4bit`（模型下载走 ModelScope 端点，见 pull
-b727a0e）。真实验证待模型落盘后执行。
+阻塞（已解除）：模型源与 immutable revision 已核（ModelScope
+`aufklarer/Qwen3-ASR-0.6B-MLX-4bit` @ 3478f17…），下载链路缺陷（TLS/UA/502
+映射）修复见 `2026-09-02-download-link-fixes.md`。真实验证待模型落盘后执行。

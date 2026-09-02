@@ -9,13 +9,21 @@ format = "directory"
 [source]
 type = "huggingface"
 repo = "aufklarer/Qwen3-ASR-0.6B-MLX-4bit"
-# ModelScope 下载：GUI 自定义下载源填 https://modelscope.cn/models（resolve/master）。
-# revision 待首次拉取后按 sha256/目录清单核对补录。
+# 2026-09-02 git ls-remote master HEAD（immutable 40-hex）
+revision = "3478f178e267548f04a6b616ff10beeb1e644e54"
 
 [artifacts]
 # artifacts.directory 是相对 Models root 的子目录名（safe relative path，不允许 "."）
 directory = "Qwen3-ASR-0.6B-MLX-4bit"
-files = ["config.json"]
+files = [
+    "config.json",
+    "configuration.json",
+    "merges.txt",
+    "model.safetensors",
+    "model.safetensors.index.json",
+    "tokenizer_config.json",
+    "vocab.json",
+]
 
 [defaults]
 keep_alive = "always"
