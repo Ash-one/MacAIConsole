@@ -56,3 +56,31 @@ Status: accepted（用户拍板：目标是把所有合适 provider 切换到 Ru
 3. sherpa-onnx
 4. 收尾：删 mock/macos-say、删 GUI PythonEnvironmentManager（.build 一键安装 legacy 路径）、
    清理 scripts/legacy worker 与 `.build` 引用、更新 README/AGENTS。
+
+## qwen3-asr-mlx 迁移子任务（2026-09-02 recon）
+
+Legacy 语义已核对：
+- worker：`scripts/qwen3_asr_mlx_worker.py`（JSONL stdin/stdout；ready 帧后逐行
+  `{id,audio,language}` → `{id,ok,text,language,device}`；load 用
+  `mlx_audio.stt.utils.load_model(model_dir, lazy=False)`，generate
+  `max_tokens=8192,batch_size=1,temperature=0.0,language=…`；PCM WAV 校验前置；
+  `--model/--device(auto|metal)`；设备 env `AIWORK_QWEN3_ASR_MLX_DEVICE`）。
+- provider：`providers/qwen3_asr.rs`（python `.build/qwen3-asr-mlx-venv/bin/python`；
+  安装提示 mlx-audio==0.5.0——**需与 kokoro 已锁 0.5.1 对齐并真实验证**；
+  validate_mlx_8bit_model_dir 校验模型目录）。
+
+子任务与依赖：
+1. **daemon 侧 RunnerProvider 支持 SpeechToText**（现仅 TextToSpeech）：descriptor
+   能力来自 manifest（stt.v1）；load_model 已按 model_id 绑定解析；需新增
+   transcribe 分支映射 instance.infer：请求携带音频文件路径（
+   `/v1/audio/transcriptions` 已解码为 PCM WAV 在 daemon 侧）+ 语言；结果帧解析
+   text/language/device → TranscriptionResponse。
+2. runner 包：`runners/qwen3-asr/`（manifest org.macai.qwen3-asr + profile
+   artifacts `Models/stt/Qwen3-ASR-0.6B-MLX-8bit` + pyproject 锁 mlx-audio 与
+   numpy，uv.lock 用 kokoro 同款流程）。
+3. adapter：`macai_qwen3_asr_runner` 协议入口 + engine（worker 语义迁移）。
+4. 接线证据：env-gated real model。
+5. 默认切换 + 删 legacy。
+
+阻塞（已确认）：本机 `Models/stt/` 为空——需先确认/下载 Qwen3-ASR-0.6B-MLX-8bit
+（HF 模型源 id 待核），真实验证依赖它。
