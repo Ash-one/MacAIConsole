@@ -8,6 +8,9 @@ MacAI 是一个跑在你 Mac 上的本地 AI Runtime。它的核心只有一个�
 
 > 项目还在活跃开发中。现在适合本地开发、实验和个人工作流——发布安装、API 稳定性和向后兼容都还没承诺。
 
+当前行为以本 README、代码和测试为准。工作提案、决策与契约草案位于
+[`docs/decisions/`](docs/decisions/README.md)；历史 `handoff.md` 不再作为当前设计权威。
+
 ## 架构
 
 ```text
@@ -658,7 +661,7 @@ scripts/build-app.sh release
 ```text
 crates/
 ├── ai-core/       # 共享模型、Provider、请求与响应类型
-├── ai-daemon/     # aiworkd、Provider、调度与管理 API
+├── ai-daemon/     # aiworkd、Provider、调度与管理 API；runners/ 为 Runner 插件 foundation（Phase 1，未接入既有 Provider 路径）
 └── ai-cli/        # macai 命令行客户端
 
 apps/
@@ -666,19 +669,15 @@ apps/
 
 scripts/           # llama.cpp、whisper.cpp 与 Kokoro worker 工具
 samples/           # 第三方集成示例（含 Hermes TTS/STT 适配器）
-handoff.md         # 目标架构与长期路线
+docs/              # 当前工作提案、决策、契约草案与实施计划
 ```
 
 ## 路线图
 
-handoff 里排队中的主要工作：
+当前优先方向：
 
-- MLX-native ASR（mlx-whisper / parakeet-mlx）
-- LLM / STT / TTS benchmark 框架（MLX vs llama.cpp 对比实验）
-- per-device 请求队列、独立 queue/execution deadline、持久任务和事件回放
-- GUI Chat、Speech 和 Hugging Face 下载界面
-- VAD、streaming STT 和 streaming TTS
+- [Runner 插件架构提案](docs/decisions/2026-09-02-runner-plugin-architecture.md)：把新模型接入从 daemon/GUI 硬编码迁到可发现 Runner 与数据化 Model Profile。
+- [uv Python 环境提案](docs/decisions/2026-09-02-uv-python-environments.md)：所有 Python Runner 使用可复现、可探测的 `uv` 环境。
+- [Kokoro 首个完整 Runner 计划](docs/plans/kokoro-runner-reference.md)：验证插件发现、环境安装、常驻 worker、TTS、故障隔离和真实模型路径。
 - readiness / deep-health、启动进度与完整可观测性
 - Homebrew、正式签名、公证与安装包
-
-完整目标设计见 [`handoff.md`](handoff.md)。它描述的是长期架构，当前实现状态以本 README 和代码为准。
