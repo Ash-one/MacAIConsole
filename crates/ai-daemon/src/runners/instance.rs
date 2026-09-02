@@ -181,6 +181,11 @@ impl RunnerInstanceManager {
         package_root: &Path,
     ) -> Result<super::EnvironmentStatus, RunnerInstanceError> {
         let environment_id = manifest.runtime.id.clone();
+        tracing::info!(
+            environment = %environment_id,
+            package = %package_root.display(),
+            "runner environment ensure started (install or verify)"
+        );
         let lock = self
             .environment_locks
             .lock()
@@ -189,16 +194,37 @@ impl RunnerInstanceManager {
             .or_default()
             .clone();
         let _guard = lock.lock().await;
-        let status = self
+        let status = match self
             .environments
             .ensure_environment(manifest, package_root, Duration::from_secs(600))
-            .await?;
+            .await
+        {
+            Ok(status) => status,
+            Err(error) => {
+                tracing::warn!(
+                    environment = %environment_id,
+                    %error,
+                    "runner environment ensure failed"
+                );
+                return Err(RunnerInstanceError::Environment(error));
+            }
+        };
         if status.phase != super::EnvironmentPhase::Ready {
+            tracing::warn!(
+                environment = %environment_id,
+                phase = status.phase.as_str(),
+                "runner environment not ready"
+            );
             return Err(RunnerInstanceError::EnvironmentNotReady {
                 environment_id,
                 phase: status.phase.as_str().to_string(),
             });
         }
+        tracing::info!(
+            environment = %environment_id,
+            python = ?status.runtime_python(),
+            "runner environment ready"
+        );
         Ok(status)
     }
 
