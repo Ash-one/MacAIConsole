@@ -273,11 +273,12 @@ commit `cadfa31` 收敛了已发现的启动、契约与信任边界：
 - discovery 时解析 Model Profile snapshot，启动前复核 package digest，并只执行
   daemon-owned staging 副本。
 
-本提案保持 `proposed`：这些修订只完成 Phase 1A isolated foundation；Phase 1B
-daemon-owned uv environment manager 已作为第二个 isolated foundation 完成（见 uv
-提案的 Implementation status）。当前下一步依次是 Phase 1C Runtime/scheduler Runner
-Instance 组合、Kokoro 迁移基线、uv-lock Kokoro Runner 和最终产品 cutover。详细阶段
-门槛由 [`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md) 拥有。
+本提案保持 `proposed`：Phase 1A isolated foundation、Phase 1B daemon-owned uv
+environment manager 与 Phase 1C Runtime/scheduler Runner Instance 组合均已完成
+（分别见 uv 提案与 [`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md)
+的 Implementation status）。当前下一步依次是 Kokoro 迁移基线（Phase 0 completion）、
+uv-lock Kokoro Runner（Phase 2）、adapter 迁移（Phase 3）和最终产品 cutover
+（Phase 4+5），以及 Model Profile 持久 snapshot 与 HTTP 管理面接入。
 
 下表是提案完成后的直接证据要求。`Result` 在实施前保持 `not run`。
 

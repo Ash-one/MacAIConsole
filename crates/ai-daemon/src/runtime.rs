@@ -29,6 +29,7 @@ use crate::providers::{
 use crate::registry::RegistryStore;
 use crate::scheduler;
 use crate::tasks::{TaskHandle, TaskRegistry};
+use ai_daemon::runners::RunnerInstanceManager;
 
 /// 内存版模型注册表条目：模型规格 + 当前状态 + 使用时间。
 #[derive(Debug, Clone)]
@@ -52,6 +53,8 @@ pub struct Runtime {
     handles: RwLock<HashMap<String, ModelHandle>>,
     model_leases: StdMutex<HashMap<String, u64>>,
     lifecycle_lock: Mutex<()>,
+    /// Runner-backed 模型的进程/协议通道（Phase 1C）。None = 未配置 Runner。
+    runner_instances: Option<Arc<RunnerInstanceManager>>,
     started_at: Instant,
     tasks: TaskRegistry,
     request_counter: AtomicU64,
@@ -171,10 +174,21 @@ impl Runtime {
             handles: RwLock::new(HashMap::new()),
             model_leases: StdMutex::new(HashMap::new()),
             lifecycle_lock: Mutex::new(()),
+            runner_instances: None,
             started_at: Instant::now(),
             tasks: TaskRegistry::new(),
             request_counter: AtomicU64::new(0),
         }
+    }
+
+    /// 配置 Runner 通道（Phase 1C）。`main` 在构造 Runtime 后调用一次；
+    /// RunnerProvider 由调用方装配并注册进 providers 表。
+    pub fn set_runner_instances(&mut self, instances: Arc<RunnerInstanceManager>) {
+        self.runner_instances = Some(instances);
+    }
+
+    pub fn runner_instances(&self) -> Option<Arc<RunnerInstanceManager>> {
+        self.runner_instances.clone()
     }
 
     /// 注册一个模型。注册不等于常驻；初始状态始终为 unloaded。
@@ -860,6 +874,7 @@ impl Runtime {
 
     /// 优雅关闭：卸载所有仍在驻留的模型（终止对应 worker 进程），
     /// daemon 收到 SIGTERM/SIGINT 时调用，避免 worker 成为孤儿。
+    /// Runner instance 的 shutdown 也在此收口。
     pub async fn shutdown_all(&self) {
         let loaded_ids: Vec<String> = self.handles.read().await.keys().cloned().collect();
         for id in loaded_ids {
@@ -867,6 +882,9 @@ impl Runtime {
                 Ok(()) => tracing::info!(model = %id, "shutdown: unloaded model"),
                 Err(error) => tracing::warn!(model = %id, %error, "shutdown: unload failed"),
             }
+        }
+        if let Some(instances) = &self.runner_instances {
+            ai_daemon::runners::shutdown_all_instances(instances).await;
         }
         tracing::info!("shutdown complete");
     }

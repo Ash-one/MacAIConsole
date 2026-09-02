@@ -86,7 +86,7 @@ crates/ai-daemon/src/runners/
 | --- | --- | --- |
 | Phase 1A：contract、registry、trust、supervisor | completed as isolated foundation | Runner lib 12 tests；composition 5 tests；启动失败清理、SemVer 选择和 digest-bound staging 已覆盖 |
 | Phase 1B：daemon-owned uv environment | completed as isolated foundation | `tests/runner_environment_manager.rs` 8 tests（真实 uv：cold/exact sync、stale lock、probe failure/timeout、cancel、promotion、重启恢复）；manifest `runtime.probe` parser + 拒绝路径；CI 固定 uv 0.9.21。未接入 Runtime/scheduler/HTTP |
-| Phase 1C：Runtime/scheduler Runner Instance | not implemented | `main.rs`、Runtime、scheduler 不引用 Runner foundation |
+| Phase 1C：Runtime/scheduler Runner Instance | completed as isolated composition | `tests/runner_runtime_composition.rs` 6 tests：fake Runner 经 RunnerProvider bridge 完成 load/infer(tts.v1 WAV)/unload、shutdown 后无孤儿进程、输出目录清理、status 反映 environment phase；`runners/instance.rs` 拥有进程/协议组合与错误映射；Runtime 增加可选 Runner 通道与 shutdown 收口。Model Profile 持久 snapshot 与 HTTP 管理面接入未实现 |
 | Phase 0：旧 Kokoro 基线 | partially checked | Rust Kokoro tests passed；Python pytest 环境和真实 WAV/性能基线未完成 |
 | Phase 2–5：Kokoro package、adapter、product composition、cutover | not implemented | 没有 `runners/kokoro/`，产品仍使用 `KokoroMlxProvider` 与 `.build/kokoro-venv` |
 
@@ -144,16 +144,24 @@ project，覆盖 cold/exact sync、stale lock、probe failure（非零退出与�
 原子提升和重启恢复（`tests/runner_environment_manager.rs`，8 tests）。CI 固定
 uv 0.9.21 + Python 3.12。环境 manager 尚未接入 Runtime/scheduler/HTTP 管理面。
 
-### Phase 1C: Runtime and scheduler composition
+### Phase 1C: Runtime and scheduler composition（completed as isolated composition）
 
-补齐与 Kokoro 无关的真实 daemon 组合能力：
+已落地的组合能力：
 
-- 持久化注册 Model Profile snapshot/digest，并保持用户 override；
-- 建立 Runner Instance manager 与 `tts.v1` capability bridge；
-- Runtime 与 scheduler 的 Runner Instance adapter；
-- 结构化映射 unavailable、load failure、protocol violation、backend crash、cancel 和 timeout；
-- status/PID/RSS snapshot 不等待活动 inference I/O；
-- 所有退出路径清理 worker、package staging 和 request output。
+- `runners/instance.rs`：RunnerInstanceManager 拥有 resolve → ensure_environment →
+  spawn（digest 复核 + staging 副本）→ initialize → load → infer（事件分发
+  accepted/progress/delta/metrics/result/error/cancelled）→ unload → shutdown
+  的完整生命周期，及 SupervisorError/Runner error 到结构化错误的映射；
+- `runners/provider.rs`：RunnerProvider 把 instance manager 桥接为 ai-core
+  `Provider` + `TTSProvider`，Runtime 以普通 Provider 身份调度 Runner-backed
+  模型（lease、busy guard、LRU、keep-alive 继续由既有 Runtime/scheduler 裁决）；
+- per-request 输出目录由 daemon 创建、校验路径越界并读取后清理；
+- Runtime 增加可选 `runner_instances` 通道，`shutdown_all` 收口 Runner instance；
+- 直接证据：`tests/runner_runtime_composition.rs` 6 tests。
+
+尚未实现（转入 Kokoro 迁移基线/Phase 2）：Model Profile 持久 snapshot/digest 的
+SQLite 注册路径、`main.rs` HTTP 管理面接入、真实 GUI 状态路径。生产代码无 fake
+或 Kokoro 专属分支。
 
 Phase 1 完成条件是在 isolated foundation 已通过的基础上，fake Runner 从已注册 Model
 Profile 经 environment manager、Runtime 和 scheduler 完成 infer/unload；lease/busy guard、

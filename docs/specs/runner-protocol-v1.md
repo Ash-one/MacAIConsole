@@ -8,8 +8,11 @@ Decision owner: [`2026-09-02-runner-plugin-architecture.md`](../decisions/2026-0
 
 本文件定义 aiworkd 与受管 Runner 子进程之间的 wire contract。daemon 的
 `ai-daemon::runners::protocol` 已实现 frame codec（长度前缀、上限与校验），
-`supervisor` 已实现受监督子进程与 fake Runner 的全链路集成测试；既有
-Provider/worker 不实现该协议，真实 Runner 迁移通过后才能把它改写为已实现协议。
+`supervisor` 已实现受监督子进程，`instance` 已在 Phase 1C 实现 handshake /
+load / infer / unload / shutdown 的组合语义与结构化错误映射（含 `tts.v1`
+输出路径校验与清理）；fake Runner 全链路组合测试见
+`tests/runner_runtime_composition.rs`。既有 Provider/worker 不实现该协议，
+真实 Runner 迁移通过后才能把本文件改写为已实现协议。
 
 ## Goals
 
