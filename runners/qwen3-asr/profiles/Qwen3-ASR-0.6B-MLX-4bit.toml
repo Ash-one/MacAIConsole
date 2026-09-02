@@ -1,0 +1,27 @@
+schema = "macai.model.v1"
+id = "Qwen3-ASR-0.6B-MLX-4bit"
+name = "Qwen3-ASR 0.6B MLX 4bit"
+capabilities = ["stt.v1"]
+runner = "org.macai.qwen3-asr"
+adapter = "qwen3-asr-mlx"
+format = "directory"
+
+[source]
+type = "huggingface"
+repo = "aufklarer/Qwen3-ASR-0.6B-MLX-4bit"
+# ModelScope 下载：GUI 自定义下载源填 https://modelscope.cn/models（resolve/master）。
+# revision 待首次拉取后按 sha256/目录清单核对补录。
+
+[artifacts]
+# artifacts.directory 是相对 Models root 的子目录名（safe relative path，不允许 "."）
+directory = "Qwen3-ASR-0.6B-MLX-4bit"
+files = ["config.json"]
+
+[defaults]
+keep_alive = "always"
+
+[resources]
+memory_estimate_bytes = 800000000
+
+[compatibility]
+runner = ">=0.1,<0.2"
