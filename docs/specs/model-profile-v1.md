@@ -139,6 +139,20 @@ daemon 自行猜测默认值。
 - Runner 返回的 runtime limit 可以拒绝超出能力的 override；
 - capability contract 拥有字段语义，Profile 不创建私有同义字段。
 
+## Registration snapshot（Phase 1C contract）
+
+模型注册时，daemon 持久化经过校验的完整 Profile snapshot 及其 digest，并把用户
+override 作为独立状态保存。后续 Runner package 更新、移除或重新发现不能静默改写
+已注册模型的 artifact、默认值或 Runner compatibility；load 时以已注册 snapshot
+重新解析当前可信 Runner，并记录 requested、selected 和 reason。
+
+旧 `ModelSpec.provider` 记录在 Kokoro cutover 前继续工作。Runner-backed 模型通过一个
+通用注册路径引用 Profile identity/snapshot，不把 Runner ID 填入新的 provider 白名单，
+也不为每个 Runner 增加新的持久化字段。具体 SQLite 表形可以在 Phase 1C 实施中选择，
+但必须支持启动恢复、Profile 升级不覆盖用户 override，以及旧记录的显式迁移。
+
+该持久化与 load 路径尚未实现；当前代码只在 discovery 时持有内存 Profile snapshot。
+
 ## Local profiles
 
 用户可以导入本地 Model Profile 或由 daemon 为已存在 artifact 生成草稿。生成只基于
@@ -151,5 +165,6 @@ daemon 自行猜测默认值。
 - Runner 缺失、版本不匹配和未信任错误；
 - no-silent-fallback；
 - 用户 override 在 Profile 升级后保持；
+- daemon 重启后恢复同一 Profile snapshot/digest，Runner package 变化不会静默改写注册模型；
 - 一个未编入 daemon/GUI 的测试 Profile 完成注册和 fake inference；
 - Kokoro profile 经推荐下载、注册、真实 TTS 路径验证。

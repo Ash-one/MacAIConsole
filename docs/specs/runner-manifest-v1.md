@@ -6,11 +6,14 @@ Contract owner: this file
 
 Decision owner: [`2026-09-02-runner-plugin-architecture.md`](../decisions/2026-09-02-runner-plugin-architecture.md)
 
-本文件定义 `runner.toml` 的 schema。daemon 的 `ai-daemon::runners::manifest`
-模块已实现该格式的解析与校验（含 `macai.runner.v1` schema、SemVer、协议版本、
-路径/entrypoint 约束与字段拒绝）；isolated fake Runner 测试还覆盖 discovery、信任、
-digest-bound staging、Profile snapshot 和启动握手。它尚未接入 `aiworkd` 的 Runtime、scheduler 或 HTTP
-管理面；当前 Provider/worker 不经 manifest 运行。
+本文件定义 `runner.toml` 的目标 schema。daemon 的 `ai-daemon::runners::manifest`
+模块已实现基础字段的解析与校验（含 `macai.runner.v1` schema、SemVer、协议版本、
+路径/entrypoint 约束与字段拒绝），并在 Phase 1B 中实现了 `runtime.probe`
+（`python-uv` 必填、与 entrypoint 相同的 argv 安全校验和模板解析）。isolated
+fake Runner 测试覆盖 discovery、信任、digest-bound staging、Profile snapshot 和启动
+握手；真实 uv 的环境行为由 `tests/runner_environment_manager.rs` 覆盖。它尚未接入
+`aiworkd` 的 Runtime、scheduler 或 HTTP 管理面；当前 Provider/worker 不经 manifest
+运行。
 
 ## Location
 
@@ -47,6 +50,7 @@ id = "org.macai.kokoro-python"
 project = "."
 lock = "uv.lock"
 python = ">=3.12,<3.13"
+probe = ["{environment.python}", "-m", "macai_kokoro_runner", "--probe"]
 
 [capacity]
 max_instances = 1
@@ -121,6 +125,7 @@ id = "org.macai.kokoro-python"
 project = "."
 lock = "uv.lock"
 python = ">=3.12,<3.13"
+probe = ["{environment.python}", "-m", "macai_kokoro_runner", "--probe"]
 ```
 
 `id` 标识可独立复用的 environment project；两个 Runner 只有 ID、project/lock
@@ -128,6 +133,25 @@ digest、Python ABI 和平台产生的完整 fingerprint 一致时才能共享�
 
 `project = "."` 表示 package 根目录，必须在 canonicalize 后仍位于 package root 内
 且解析为目录；`lock` 必须解析为 package 内普通文件。
+
+### Environment probe（Phase 1B contract）
+
+`python-uv` runtime 必须声明 `probe` argv。它使用与 `entrypoint.command` 相同的模板、
+首 argv 和无 shell 规则，并在已锁定环境同步完成后由 daemon 执行：
+
+```toml
+probe = ["{environment.python}", "-m", "macai_kokoro_runner", "--probe"]
+```
+
+probe 只验证受管解释器、Runner package import 和运行依赖，不加载模型 artifact，也不
+创建常驻 worker。v1 使用 `timeouts.boot_seconds` 作为 probe deadline；退出码 0 表示
+成功，非零、超时或 signal exit 均使环境进入 `failed`。daemon 使用清空后的环境变量
+和 manifest allowlist 启动 probe，`network_during_runtime = false` 时必须保持离线。
+stdout/stderr 只作为有界诊断输出处理，不进入 Runner Protocol。
+
+该字段已由本 draft 确定，`RunnerRuntime` 解析器已实现（Phase 1B）：`python-uv`
+缺少 probe、probe 首个 argv 非法或包含 shell 元字符时 manifest 拒绝解析；probe
+超时、非零退出或 spawn 失败时环境进入 `failed`，不产生 ready 目录。
 
 `python-uv` 的安装、fingerprint、staging 和升级语义由
 [`2026-09-02-uv-python-environments.md`](../decisions/2026-09-02-uv-python-environments.md)
@@ -207,6 +231,7 @@ descriptor 是 GUI/CLI 的状态 owner；客户端不自行重新解析 `runner.
 - 未知 capability/runtime 拒绝；
 - 同 ID 多版本选择及 no-silent-fallback；
 - `project = "."`、Kokoro Profile 的 defaults/resources、SemVer compatibility 解析；
+- `python-uv` 缺少 probe、probe 使用绝对 executable、probe 超时或非零退出时拒绝 ready；
 - discovery 后 package 被修改时，启动从 digest 相同的 daemon-owned staging 副本执行；
 - discovery 后修改 bundled Profile 不改变已解析的选择结果，且 package digest 阻止其启动；
 - boot timeout、identity 或 protocol error 后不存在遗留 Runner PID；
