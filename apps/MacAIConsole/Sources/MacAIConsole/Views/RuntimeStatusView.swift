@@ -607,7 +607,7 @@ struct ProviderRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(entry.descriptor.id)
+            Text(displayTitle)
                 .font(.body.weight(.medium))
                 .lineLimit(1)
             engineTag
@@ -628,11 +628,25 @@ struct ProviderRow: View {
         .padding(.horizontal, 2)
     }
 
-    /// 引擎 tag：MLX 与 CPP 两种后端用颜色区分，其余引擎（mock、macos-say）不标。
+    /// Runner 装配的 provider id 是反向域名（org.macai.kokoro 等），行内展示
+    /// 缩短名（最后一段 + Runner 标记），完整 id 放帮助提示，避免一排长域名。
+    private var displayTitle: String {
+        let id = entry.descriptor.id
+        if id.hasPrefix("org.macai.") {
+            let short = id.replacingOccurrences(of: "org.macai.", with: "")
+            return short.isEmpty ? id : short
+        }
+        return id
+    }
+
+    /// 引擎 tag：MLX 与 CPP 两种后端用颜色区分；Runner（org.macai.*，daemon
+    /// 动态装配）标 RUNNER；mock/macos-say 不标。
     @ViewBuilder
     private var engineTag: some View {
         let id = entry.descriptor.id.lowercased()
-        if id.contains("mlx") {
+        if id.hasPrefix("org.macai.") {
+            Chip(text: "RUNNER", color: Theme.info)
+        } else if id.contains("mlx") {
             Chip(text: "MLX", color: Theme.warning)
         } else if id.contains(".cpp") {
             Chip(text: "CPP", color: Theme.info)
