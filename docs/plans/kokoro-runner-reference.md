@@ -277,6 +277,16 @@ cancel 帧的**双向通路在全栈缺失**：worker 单线程事件循环在�
 
 ## Phase 4: real composition
 
+Phase 4 切片进度（2026-09-02，首块已落地）：
+
+- **Model Profile 持久 snapshot/digest**：`ModelProfile::canonical_json`/`digest`
+  （sha256 of canonical JSON，与 package digest 分离）；`RegistryStore` 新增
+  `model_profiles` 表（models.db，重启自动建表）与 `upsert_profile`/
+  `get_profile`/`load_profiles`（同 id 新 digest 覆盖内容、installed_at 保留首
+  次注册值）。直接证据：`cargo test -p ai-daemon registry:: profile::`（registry
+  6 tests 含 profile roundtrip/重开恢复；profile 3 tests 含 digest 确定性）。
+  尚未接入 main.rs 装配路径（下一 slice）。
+
 真实用户路径：
 
 ```text
