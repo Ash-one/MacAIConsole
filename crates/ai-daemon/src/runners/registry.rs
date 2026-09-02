@@ -479,6 +479,18 @@ fn manifest_paths(root: &Path, remaining_depth: usize) -> Vec<PathBuf> {
     paths
 }
 
+/// 开发产物目录不进 package digest/副本：digest 只覆盖可执行 package 内容
+/// （源码、manifest、lock、profiles）。仓库随附 Runner 的 `.venv`（Phase 2
+/// 起由 uv sync 在包内生成）包含大量 symlink，若不排除会让 builtin discovery
+/// 在 live repo 上失败。
+const PACKAGE_EXCLUDED_DIRS: [&str; 4] = [".venv", ".git", ".pytest_cache", "__pycache__"];
+
+fn is_excluded_dir(name: &std::ffi::OsStr) -> bool {
+    PACKAGE_EXCLUDED_DIRS
+        .iter()
+        .any(|excluded| name == std::ffi::OsStr::new(excluded))
+}
+
 fn package_digest(root: &Path) -> Result<String, String> {
     let mut files = Vec::new();
     collect_package_files(root, &mut files)?;
@@ -505,6 +517,9 @@ fn collect_package_files(current: &Path, files: &mut Vec<PathBuf>) -> Result<(),
     {
         let entry =
             entry.map_err(|error| format!("cannot read package directory entry: {error}"))?;
+        if is_excluded_dir(&entry.file_name()) {
+            continue;
+        }
         let path = entry.path();
         let metadata = std::fs::symlink_metadata(&path)
             .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
@@ -559,6 +574,9 @@ fn copy_package_contents(source: &Path, destination: &Path) -> Result<(), String
     {
         let entry =
             entry.map_err(|error| format!("cannot read package directory entry: {error}"))?;
+        if is_excluded_dir(&entry.file_name()) {
+            continue;
+        }
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
         let metadata = std::fs::symlink_metadata(&source_path)

@@ -1143,6 +1143,28 @@ async fn bootstrap_runners(runtime: &mut Runtime) {
     }
 
     let registry = RunnerRegistry::discover(&[runner_root.clone()], &[], &HashSet::new());
+    // 诊断：打印非可用/非 trusted 条目及其原因，便于定位 manifest/校验拒绝点。
+    for entry in registry.entries() {
+        let id = entry
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.id.as_str())
+            .unwrap_or("<no manifest>");
+        let state = match entry.state {
+            ai_daemon::runners::RunnerState::Trusted => "trusted",
+            ai_daemon::runners::RunnerState::Untrusted => "untrusted",
+            _ => "unavailable",
+        };
+        if state != "trusted" {
+            tracing::warn!(
+                runner = %id,
+                path = %entry.root.display(),
+                state,
+                reason = ?entry.reason,
+                "runner discovery rejected"
+            );
+        }
+    }
     let entries: Vec<_> = registry
         .entries()
         .iter()
@@ -1500,6 +1522,37 @@ mod tests {
             install_runner_environment(State(state), AxumPath("org.missing.runner".to_string()))
                 .await;
         assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn repo_builtin_runner_stays_trusted_with_dev_venv_present() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runners");
+        let registry = ai_daemon::runners::RunnerRegistry::discover(
+            &[root.clone()],
+            &[],
+            &std::collections::HashSet::new(),
+        );
+        // 回归：live repo 里包内 `.venv`（Phase 2 起 uv sync 生成，含 symlink）
+        // 必须被排除在 package digest 之外，builtin discovery 保持 Trusted。
+        let kokoro = registry
+            .entries()
+            .iter()
+            .find(|entry| {
+                entry
+                    .manifest
+                    .as_ref()
+                    .is_some_and(|manifest| manifest.id == "org.macai.kokoro")
+            })
+            .expect("repo built-in kokoro runner must be discovered");
+        assert_eq!(kokoro.state, ai_daemon::runners::RunnerState::Trusted);
+        assert_eq!(kokoro.reason, None);
+        assert_eq!(
+            kokoro
+                .manifest
+                .as_ref()
+                .map(|m| m.runtime.runtime_type.as_str()),
+            Some("python-uv")
+        );
     }
 
     #[tokio::test]
