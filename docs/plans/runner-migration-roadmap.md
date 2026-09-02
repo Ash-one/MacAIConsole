@@ -70,17 +70,14 @@ Legacy 语义已核对：
   validate_mlx_8bit_model_dir 校验模型目录）。
 
 子任务与依赖：
-1. **daemon 侧 RunnerProvider 支持 SpeechToText**（现仅 TextToSpeech）：descriptor
-   能力来自 manifest（stt.v1）；load_model 已按 model_id 绑定解析；需新增
-   transcribe 分支映射 instance.infer：请求携带音频文件路径（
-   `/v1/audio/transcriptions` 已解码为 PCM WAV 在 daemon 侧）+ 语言；结果帧解析
-   text/language/device → TranscriptionResponse。
-2. runner 包：`runners/qwen3-asr/`（manifest org.macai.qwen3-asr + profile
-   artifacts `Models/stt/Qwen3-ASR-0.6B-MLX-8bit` + pyproject 锁 mlx-audio 与
-   numpy，uv.lock 用 kokoro 同款流程）。
-3. adapter：`macai_qwen3_asr_runner` 协议入口 + engine（worker 语义迁移）。
-4. 接线证据：env-gated real model。
-5. 默认切换 + 删 legacy。
+1. ✅ **daemon 侧 RunnerProvider 支持 SpeechToText**（144b3c2）。
+2. ✅ runner 包：`runners/qwen3-asr/`（e0de16c：manifest org.macai.qwen3-asr +
+   profile Qwen3-ASR-0.6B-MLX-4bit、pyproject+uv.lock 40 包、probe 导入通过）。
+3. ✅ adapter：`macai_qwen3_asr_runner`（协议入口 + engine 语义迁移；engine
+   校验单测 4 passed）。
+4. ⏳ 接线证据：env-gated real model（ModelScope 4bit 下载后）。
+5. ⏳ 默认切换 + 删 legacy。
 
-阻塞（已确认）：本机 `Models/stt/` 为空——需先确认/下载 Qwen3-ASR-0.6B-MLX-8bit
-（HF 模型源 id 待核），真实验证依赖它。
+阻塞（已确认→已解除）：原记录 `Models/stt/` 为空；用户已给 ModelScope 源
+`aufklarer/Qwen3-ASR-0.6B-MLX-4bit`（模型下载走 ModelScope 端点，见 pull
+b727a0e）。真实验证待模型落盘后执行。
