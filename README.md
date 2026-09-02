@@ -661,7 +661,7 @@ scripts/build-app.sh release
 ```text
 crates/
 ├── ai-core/       # 共享模型、Provider、请求与响应类型
-├── ai-daemon/     # aiworkd、Provider、调度与管理 API；runners/ 为 Runner 插件 foundation（Phase 1，未接入既有 Provider 路径）
+├── ai-daemon/     # aiworkd、Provider、调度与管理 API；runners/ 为实验性 Runner 骨架（未接入既有 Provider、Runtime 或 scheduler 路径）
 └── ai-cli/        # macai 命令行客户端
 
 apps/

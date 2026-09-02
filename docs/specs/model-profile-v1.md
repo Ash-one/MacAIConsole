@@ -8,9 +8,9 @@ Decision owner: [`2026-09-02-runner-plugin-architecture.md`](../decisions/2026-0
 
 Model Profile 是纯数据模型说明。它允许兼容现有 Runner 的新权重在不修改 daemon、
 CLI 或 GUI 源码的情况下被识别、下载、注册和加载。daemon 的
-`ai-daemon::runners::profile` 模块已实现该格式的解析与校验（`macai.model.v1`，
-含 immutable commit revision 约束），但模型注册与 `/api/models/load` 尚未接入
-该格式，当前 `ModelSpec` 与推荐模型清单仍按旧路径工作。
+`ai-daemon::runners::profile` 模块已实现该格式的解析与校验（`macai.model.v1`、
+immutable commit revision、typed defaults/resources 与 SemVer compatibility），但模型
+注册与 `/api/models/load` 尚未接入该格式，当前 `ModelSpec` 与推荐模型清单仍按旧路径工作。
 
 ## Example: Kokoro-82M-zh-MLX
 
@@ -87,7 +87,22 @@ daemon 拥有：
 | `format` | artifact 布局 |
 | `source` | 来源和 immutable revision |
 | `artifacts` | 完整下载与校验集合 |
+| `defaults` | 可选的模型级默认值，字段见下表 |
+| `resources` | 可选的模型级资源估算，字段见下表 |
 | `compatibility.runner` | 可接受 Runner version range |
+
+## Defaults and resources schema
+
+`[defaults]` 与 `[resources]` 都是可选 section；出现的字段必须使用下面的类型，空字符串
+和 `memory_estimate_bytes = 0` 被拒绝。未出现的字段表示 Profile 没有该建议值，而不是
+daemon 自行猜测默认值。
+
+| Section / field | Type | Meaning |
+| --- | --- | --- |
+| `defaults.keep_alive` | string | 首次注册的 keep-alive 建议 |
+| `defaults.voice` | string | capability contract 定义的默认音色 |
+| `defaults.format` | string | capability contract 定义的首选输出格式 |
+| `resources.memory_estimate_bytes` | positive integer | scheduler 输入的模型内存估算 |
 
 ## Resolution
 
@@ -100,6 +115,9 @@ daemon 拥有：
 
 `runner = "auto"` 不进入 v1。未来如需自动选择，要有独立的可解释路由决策和稳定
 优先级，不能通过扫描顺序实现。
+
+`compatibility.runner` 使用 SemVer range。解析失败、没有可信匹配版本或多个可信版本
+同时匹配均为结构化失败；range 不能授权按目录或发现顺序选择版本。
 
 ## Artifact integrity
 
@@ -128,7 +146,7 @@ daemon 拥有：
 
 ## Required evidence before implementation status
 
-- parse、required fields、version range 和 path safety 单测；
+- parse、required fields、defaults/resources、version range 和 path safety 单测；
 - 完整 artifact list 与 digest 校验；
 - Runner 缺失、版本不匹配和未信任错误；
 - no-silent-fallback；

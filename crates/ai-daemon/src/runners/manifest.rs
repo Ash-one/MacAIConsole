@@ -1,6 +1,7 @@
 use std::fmt;
 use std::path::{Component, Path};
 
+use semver::Version;
 use serde::Deserialize;
 
 use super::RUNNER_PROTOCOL_V1;
@@ -111,9 +112,9 @@ impl RunnerManifest {
                 "runner id must use lowercase ASCII letters, digits, '.' or '-'".to_string(),
             ));
         }
-        if self.version.trim().is_empty() {
+        if Version::parse(&self.version).is_err() {
             return Err(ManifestError(
-                "runner version must not be empty".to_string(),
+                "runner version must be valid SemVer".to_string(),
             ));
         }
         if !self
@@ -148,15 +149,15 @@ impl RunnerManifest {
                 "entrypoint working_directory must be 'package' or 'runtime'".to_string(),
             ));
         }
-        for argument in &self.entrypoint.command {
-            validate_command_argument(argument)?;
+        for (index, argument) in self.entrypoint.command.iter().enumerate() {
+            validate_command_argument(argument, index == 0)?;
         }
         if self.runtime.id.trim().is_empty() || self.runtime.runtime_type.trim().is_empty() {
             return Err(ManifestError(
                 "runtime type and id must not be empty".to_string(),
             ));
         }
-        validate_relative_path("runtime.project", &self.runtime.project)?;
+        validate_runtime_project(&self.runtime.project)?;
         validate_relative_path("runtime.lock", &self.runtime.lock)?;
         if self.runtime.runtime_type == "python-uv"
             && self
@@ -213,16 +214,23 @@ impl RunnerManifest {
                 package_root.display()
             ))
         })?;
-        for relative in [&self.runtime.project, &self.runtime.lock]
-            .into_iter()
-            .chain(self.models.iter().map(|model| &model.profile))
-        {
-            let candidate = root.join(relative).canonicalize().map_err(|error| {
-                ManifestError(format!("cannot resolve package path '{relative}': {error}"))
-            })?;
-            if !candidate.starts_with(&root) {
+        let project = resolve_package_path(&root, &self.runtime.project)?;
+        if !project.is_dir() {
+            return Err(ManifestError(
+                "runtime.project must resolve to a directory".to_string(),
+            ));
+        }
+        let lock = resolve_package_path(&root, &self.runtime.lock)?;
+        if !lock.is_file() {
+            return Err(ManifestError(
+                "runtime.lock must resolve to a file".to_string(),
+            ));
+        }
+        for relative in self.models.iter().map(|model| &model.profile) {
+            let profile = resolve_package_path(&root, relative)?;
+            if !profile.is_file() {
                 return Err(ManifestError(format!(
-                    "package path '{relative}' escapes its root"
+                    "models.profile '{relative}' must resolve to a file"
                 )));
             }
         }
@@ -276,15 +284,22 @@ fn resolve_argument(
     Ok(resolved.to_string_lossy().into_owned())
 }
 
-fn validate_command_argument(argument: &str) -> Result<(), ManifestError> {
+fn validate_command_argument(argument: &str, is_program: bool) -> Result<(), ManifestError> {
     if argument.trim().is_empty()
         || ["|", ";", "&&", "||", "`", "$(", ">", "<"]
             .iter()
             .any(|forbidden| argument.contains(forbidden))
         || matches!(argument, "sh" | "bash" | "zsh" | "fish")
+        || (is_program
+            && !matches!(
+                argument,
+                "{environment.python}" | "{package.root}" | "{runtime.temp_root}"
+            )
+            && !is_safe_relative(argument))
     {
         return Err(ManifestError(
-            "entrypoint command must be argv, not a shell expression".to_string(),
+            "entrypoint command must use an approved executable template or package-relative argv"
+                .to_string(),
         ));
     }
     Ok(())
@@ -297,6 +312,27 @@ fn validate_relative_path(field: &str, value: &str) -> Result<(), ManifestError>
         )));
     }
     Ok(())
+}
+
+fn validate_runtime_project(value: &str) -> Result<(), ManifestError> {
+    if value != "." && !is_safe_relative(value) {
+        return Err(ManifestError(
+            "runtime.project must be '.' or a safe relative package directory".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_package_path(root: &Path, relative: &str) -> Result<std::path::PathBuf, ManifestError> {
+    let candidate = root.join(relative).canonicalize().map_err(|error| {
+        ManifestError(format!("cannot resolve package path '{relative}': {error}"))
+    })?;
+    if !candidate.starts_with(root) {
+        return Err(ManifestError(format!(
+            "package path '{relative}' escapes its root"
+        )));
+    }
+    Ok(candidate)
 }
 
 fn is_safe_relative(value: &str) -> bool {
@@ -317,7 +353,7 @@ fn valid_id(value: &str) -> bool {
 
 fn valid_capability(value: &str) -> bool {
     let mut parts = value.rsplitn(2, '.');
-    matches!(parts.next(), Some(version) if version.starts_with('v') && version[1..].chars().all(|c| c.is_ascii_digit()))
+    matches!(parts.next(), Some(version) if version.len() > 1 && version.starts_with('v') && version[1..].chars().all(|c| c.is_ascii_digit()))
         && matches!(parts.next(), Some(name) if !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'-'))
 }
 
@@ -340,7 +376,7 @@ working_directory = "package"
 [runtime]
 type = "python-uv"
 id = "org.example.fake-python"
-project = "pyproject.toml"
+project = "."
 lock = "uv.lock"
 python = ">=3.12,<3.13"
 
@@ -370,6 +406,14 @@ inherit_environment = ["HTTPS_PROXY"]
     #[test]
     fn rejects_shell_and_path_escape() {
         assert!(RunnerManifest::parse(&manifest().replace("fake-runner", "sh")).is_err());
+        assert!(RunnerManifest::parse(&manifest().replace("fake-runner", "/bin/sh")).is_err());
         assert!(RunnerManifest::parse(&manifest().replace("uv.lock", "../uv.lock")).is_err());
+        assert!(RunnerManifest::parse(&manifest().replace("tts.v1", "tts.v")).is_err());
+    }
+
+    #[test]
+    fn accepts_package_root_as_the_runtime_project() {
+        let manifest = RunnerManifest::parse(manifest()).unwrap();
+        assert_eq!(manifest.runtime.project, ".");
     }
 }

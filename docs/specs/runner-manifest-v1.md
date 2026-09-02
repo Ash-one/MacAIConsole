@@ -7,9 +7,10 @@ Contract owner: this file
 Decision owner: [`2026-09-02-runner-plugin-architecture.md`](../decisions/2026-09-02-runner-plugin-architecture.md)
 
 本文件定义 `runner.toml` 的 schema。daemon 的 `ai-daemon::runners::manifest`
-模块已实现该格式的解析与校验（含 `macai.runner.v1` schema、协议版本、路径约束
-与字段拒绝），但插件目录发现、信任记录与真实 Runner 启动仍待后续切片接入；
-当前 Provider/worker 不经 manifest 运行。
+模块已实现该格式的解析与校验（含 `macai.runner.v1` schema、SemVer、协议版本、
+路径/entrypoint 约束与字段拒绝）；isolated fake Runner 测试还覆盖 discovery、信任、
+digest-bound staging、Profile snapshot 和启动握手。它尚未接入 `aiworkd` 的 Runtime、scheduler 或 HTTP
+管理面；当前 Provider/worker 不经 manifest 运行。
 
 ## Location
 
@@ -89,6 +90,7 @@ adapter = "kokoro-mlx"
 ## ID and version
 
 - ID 只允许 ASCII 小写字母、数字、点和连字符；
+- `version` 必须是合法 SemVer；
 - 用户安装的 Runner 不得使用保留前缀 `org.macai.builtin.`；
 - 同一 ID 可以安装多个版本，daemon 根据 Model Profile、信任和兼容策略选择一个；
 - 选择结果必须记录 requested、selected 和 reason，不允许静默换 Runner。
@@ -101,8 +103,9 @@ adapter = "kokoro-mlx"
 - `{package.root}`；
 - `{runtime.temp_root}`。
 
-每个变量占据完整 argv 或在 v1 发布前定义明确转义；首版实现建议只允许完整 argv
-替换。manifest 不得嵌入 shell pipeline、重定向或 command substitution。
+每个变量占据完整 argv。首个 argv 只能是批准模板变量或 package 内的普通相对路径；
+绝对可执行路径（包括 `/bin/sh`）被拒绝。manifest 不得嵌入 shell pipeline、重定向或
+command substitution。
 
 `working_directory` 可为 `package` 或 daemon 创建的 `runtime` 目录。Runner 不依赖
 MacAI 仓库 cwd。
@@ -122,6 +125,9 @@ python = ">=3.12,<3.13"
 
 `id` 标识可独立复用的 environment project；两个 Runner 只有 ID、project/lock
 digest、Python ABI 和平台产生的完整 fingerprint 一致时才能共享。
+
+`project = "."` 表示 package 根目录，必须在 canonicalize 后仍位于 package root 内
+且解析为目录；`lock` 必须解析为 package 内普通文件。
 
 `python-uv` 的安装、fingerprint、staging 和升级语义由
 [`2026-09-02-uv-python-environments.md`](../decisions/2026-09-02-uv-python-environments.md)
@@ -184,7 +190,7 @@ descriptor 是 GUI/CLI 的状态 owner；客户端不自行重新解析 `runner.
 以下情况拒绝 Runner，且不启动任何进程：
 
 - schema、ID、version 或 protocol 无效；
-- capability 未知；
+- capability 未知、空 version（例如 `tts.v`）或 entrypoint 绝对路径；
 - 路径逃逸、symlink 越界或 entrypoint 需要 shell；
 - Python project/lock 缺失或 digest 不匹配；
 - 未实现 runtime type；
@@ -200,5 +206,9 @@ descriptor 是 GUI/CLI 的状态 owner；客户端不自行重新解析 `runner.
 - path traversal、symlink escape 和 shell entrypoint 拒绝；
 - 未知 capability/runtime 拒绝；
 - 同 ID 多版本选择及 no-silent-fallback；
+- `project = "."`、Kokoro Profile 的 defaults/resources、SemVer compatibility 解析；
+- discovery 后 package 被修改时，启动从 digest 相同的 daemon-owned staging 副本执行；
+- discovery 后修改 bundled Profile 不改变已解析的选择结果，且 package digest 阻止其启动；
+- boot timeout、identity 或 protocol error 后不存在遗留 Runner PID；
 - 单个坏 manifest 不影响其他 Runner；
 - descriptor 经 daemon API 被 Swift 客户端正确解码。

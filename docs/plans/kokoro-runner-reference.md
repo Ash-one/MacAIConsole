@@ -104,8 +104,12 @@ crates/ai-daemon/src/runners/
 - fake Runner fixture；
 - Runtime 与 scheduler 的 Runner Instance adapter。
 
-完成条件是 fake Runner 从发现到 infer/unload 的 composition test 通过，且生产代码
-没有 Kokoro 分支。仅有 parser unit tests 不足以进入下一阶段。
+完成条件包括：fake Runner 从发现到 infer/unload 的 composition test；boot deadline、
+hello identity 与协议错误均 kill/wait 子进程且清理 stderr task；执行前把已验证 digest
+复制到 daemon 私有 staging 并从该副本启动；Profile 的 SemVer compatibility 实际参与
+选择且多版本没有扫描顺序 fallback；以及 daemon-owned uv environment 和 Runtime/
+scheduler Runner Instance adapter 的组合证据。仅有 parser unit tests 或 isolated fake
+Runner happy path 都不足以进入下一阶段。
 
 ## Phase 2: uv-lock Kokoro
 
