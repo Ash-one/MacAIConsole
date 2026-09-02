@@ -29,8 +29,10 @@ SwiftUI 环境清单、worker、测试和文档。
 | 架构权威 | README、代码及历史设计材料混合 | 本提案拥有未落地架构方向；代码与 README 继续拥有当前行为 | replace |
 | 当前 Provider 行为 | 已上线且被客户端使用 | 迁移期间保留，完成后由 Runner 路径接管 | retain then revise |
 | 安全边界 | daemon 管理隔离 worker | 保留并扩展到外部 Runner，禁止模型目录自动执行代码 | keep |
+| Phase 1 completion | fake Runner 组合测试曾被当作 generic foundation 完成证据 | 该测试只证明实验性骨架；完成必须包含启动失败清理、执行时信任绑定、显式版本解析，以及 environment 和 Runtime/scheduler adapter | replace |
 
-本次文档变更只建立工作态权威，不改变运行行为、API 或模型注册数据。
+本次 bounded change 修订 isolated Runner skeleton 的信任与启动行为；它不改变既有
+Provider 运行行为、API 或模型注册数据。
 
 ## Proposal
 
@@ -204,6 +206,12 @@ workaround、常驻 worker、RSS、故障隔离和 GUI 安装状态。它比只�
 - 实现 manifest/Profile 解析和 Runner registry；
 - 实现 Runner Protocol codec、process supervisor 和 instance state；
 - 建立 fake Runner composition test；
+- 启动失败必须 kill/wait 子进程并回收 stderr capture；Runner 执行的 package 必须从
+  已验证 digest 的私有 staging 副本启动；
+- Model Profile 必须以 SemVer 范围显式选择可信 Runner；多版本命中或不匹配必须失败，
+  不得按发现顺序选择；
+- 建立 daemon-owned uv environment 和 Runtime/scheduler 的 Runner Instance adapter，
+  使上述基础走入真实的 lifecycle/lease/内存裁决路径。
 - 保留当前 Provider 路径，避免在通用基础尚未自证时同时迁移全部模型。
 
 ### Phase 2: Kokoro
@@ -245,27 +253,34 @@ Runtime Authority；以后可单独设计 unmanaged endpoint bridge。
 
 ## Implementation status
 
-2026-09-02：Phase 1 通用 foundation 已落地（分支
+2026-09-02：merge `232f010` 引入了实验性 Runner 骨架（分支
 `kanban/t_c7c07867`，commit `f0bc102`）：
 
 - `crates/ai-daemon/src/runners/`：manifest、profile、protocol、registry、
   supervisor、environment 六模块与 `lib.rs` 导出；
 - `crates/ai-daemon/src/bin/fake-runner.rs`：协议参考实现；
 - `tests/runner_plugin_composition.rs`：发现 → 信任 → 握手 → load → infer →
-  unload 全链路集成测试；
-- 验证：`cargo fmt --all -- --check` 通过；`cargo test -p ai-daemon --lib
-  --tests` 全部通过（88 lib + fake-runner + 1 composition）。
+  unload 的 isolated fake Runner 测试。
 
-既有 Provider/GUI/HTTP 行为零改动；Kokoro 真实迁移（Phase 2/3）、daemon HTTP
-管理面与 Runner Instance 接线、runtime 网络隔离强制执行仍属未完成切片。下表
-`Result` 列中，仅 fake Runner 组合测试对应行更新为通过，其余在实施前保持
-`not run`。
+它没有接入 `main.rs`、Runtime 或 scheduler，也没有 uv sync/probe/environment staging、
+真实 Kokoro Runner 或 GUI 状态路径。本次安全与契约修订已使实验性骨架：
+
+- 在 boot deadline、hello identity 和 malformed protocol 三类启动失败后 kill/wait
+  子进程并 abort/await stderr capture；
+- 接受 `project = "."`，为 Profile defaults/resources 建立类型和校验，并以 SemVer
+  range 显式解析 Runner 版本；
+- 对同 ID 的多个可信匹配版本返回结构化 ambiguity，不再使用发现顺序；
+- discovery 时解析 Model Profile snapshot，启动前复核 package digest，并只执行
+  daemon-owned staging 副本。
+
+本提案保持 `proposed`：这些修订只收敛实验性骨架，不能把 Phase 1、Kokoro 迁移或
+对外插件契约标记为完成。
 
 下表是提案完成后的直接证据要求。`Result` 在实施前保持 `not run`。
 
 | Acceptance | Failure surface | Direct evidence | Result |
 | --- | --- | --- | --- |
-| 安装一个未编入 daemon/GUI 的 fake Runner 后，daemon 能发现、信任、加载、调用和卸载 | manifest、discovery、composition | `cargo test -p ai-daemon runner_plugin_composition` | passed (Phase 1, commit f0bc102) |
+| 已验证 package 的 fake Runner 可在 isolated test 中完成发现、信任、加载、调用和卸载；启动失败不留下进程，源码 package 修改后不可执行 | manifest、trust、supervision、composition | `cargo test -p ai-daemon --test runner_plugin_composition` | passed in this revision |
 | 新 Model Profile 可选择 Runner，且不需要修改 `main.rs` provider 白名单 | profile resolution、registration | `cargo test -p ai-daemon model_profile_runner_resolution`；负向搜索旧白名单 | not run |
 | Worker 崩溃返回 `backend_crashed`，aiworkd 仍可通过 health/status 访问 | process supervision、error mapping | `cargo test -p ai-daemon runner_crash_isolated` | not run |
 | lease、busy guard、LRU 和 keep-alive 对 Runner Instance 生效 | lifecycle composition | `cargo test -p ai-daemon runner_lifecycle` | not run |

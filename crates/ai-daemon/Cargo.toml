@@ -26,3 +26,4 @@ sysinfo = "0.39.6"
 symphonia = { version = "0.5.4", features = ["aac", "adpcm", "alac", "flac", "isomp4", "mp3", "ogg", "pcm", "vorbis", "wav"] }
 toml = "0.8"
 sha2 = "0.10"
+semver = "1"

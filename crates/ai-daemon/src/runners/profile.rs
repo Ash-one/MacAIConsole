@@ -1,6 +1,7 @@
 use std::fmt;
 use std::path::Path;
 
+use semver::VersionReq;
 use serde::Deserialize;
 
 pub const MODEL_PROFILE_SCHEMA_V1: &str = "macai.model.v1";
@@ -17,6 +18,10 @@ pub struct ModelProfile {
     pub format: String,
     pub source: ProfileSource,
     pub artifacts: ProfileArtifacts,
+    #[serde(default)]
+    pub defaults: ProfileDefaults,
+    #[serde(default)]
+    pub resources: ProfileResources,
     pub compatibility: ProfileCompatibility,
 }
 
@@ -40,6 +45,20 @@ pub struct ProfileArtifacts {
 #[serde(deny_unknown_fields)]
 pub struct ProfileCompatibility {
     pub runner: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileDefaults {
+    pub keep_alive: Option<String>,
+    pub voice: Option<String>,
+    pub format: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileResources {
+    pub memory_estimate_bytes: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -88,6 +107,11 @@ impl ModelProfile {
                 return Err(ProfileError(format!("{name} must not be empty")));
             }
         }
+        VersionReq::parse(&self.compatibility.runner).map_err(|error| {
+            ProfileError(format!(
+                "compatibility.runner must be a SemVer range: {error}"
+            ))
+        })?;
         if self.source.source_type != "huggingface" {
             return Err(ProfileError(
                 "only huggingface profile sources are supported in v1".to_string(),
@@ -119,6 +143,23 @@ impl ModelProfile {
                     .to_string(),
             ));
         }
+        for (name, value) in [
+            ("defaults.keep_alive", &self.defaults.keep_alive),
+            ("defaults.voice", &self.defaults.voice),
+            ("defaults.format", &self.defaults.format),
+        ] {
+            if value
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
+            {
+                return Err(ProfileError(format!("{name} must not be empty")));
+            }
+        }
+        if self.resources.memory_estimate_bytes == Some(0) {
+            return Err(ProfileError(
+                "resources.memory_estimate_bytes must be positive".to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -134,7 +175,7 @@ fn safe_relative(value: &str) -> bool {
 
 fn valid_capability(value: &str) -> bool {
     let mut parts = value.rsplitn(2, '.');
-    matches!(parts.next(), Some(version) if version.starts_with('v') && version[1..].chars().all(|c| c.is_ascii_digit()))
+    matches!(parts.next(), Some(version) if version.len() > 1 && version.starts_with('v') && version[1..].chars().all(|c| c.is_ascii_digit()))
         && matches!(parts.next(), Some(name) if !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'-'))
 }
 
@@ -167,5 +208,37 @@ files = ["model.bin"]
 runner = ">=0.1"
 "#;
         assert!(ModelProfile::parse(profile).is_err());
+    }
+
+    #[test]
+    fn parses_typed_defaults_and_resources() {
+        let profile = r#"
+schema = "macai.model.v1"
+id = "fake"
+name = "Fake"
+capabilities = ["tts.v1"]
+runner = "org.example.fake"
+adapter = "fake"
+format = "directory"
+[source]
+type = "huggingface"
+repo = "org/fake"
+revision = "0123456789abcdef0123456789abcdef01234567"
+[artifacts]
+directory = "fake"
+files = ["model.bin"]
+[defaults]
+keep_alive = "always"
+voice = "zf_001"
+format = "wav"
+[resources]
+memory_estimate_bytes = 400000000
+[compatibility]
+runner = ">=0.1,<0.2"
+"#;
+        assert!(ModelProfile::parse(&profile.replace(">=0.1,<0.2", "not-a-range")).is_err());
+        let profile = ModelProfile::parse(profile).unwrap();
+        assert_eq!(profile.defaults.voice.as_deref(), Some("zf_001"));
+        assert_eq!(profile.resources.memory_estimate_bytes, Some(400_000_000));
     }
 }
