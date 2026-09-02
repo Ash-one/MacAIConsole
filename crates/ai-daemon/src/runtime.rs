@@ -561,6 +561,11 @@ impl Runtime {
                     format!("model '{model_id}' not found"),
                 )
             })?;
+            tracing::info!(
+                model = %model_id,
+                provider = %spec.provider,
+                "audio request routed to provider (from model spec)"
+            );
             task.set_provider(Some(spec.provider.clone()));
             self.load_model(&model_id).await?;
             let provider = self
@@ -607,6 +612,11 @@ impl Runtime {
                     format!("model '{model_id}' not found"),
                 )
             })?;
+            tracing::info!(
+                model = %model_id,
+                provider = %spec.provider,
+                "audio request routed to provider (from model spec)"
+            );
             task.set_provider(Some(spec.provider.clone()));
             self.load_model(&model_id).await?;
             if request.voice.is_none() {
