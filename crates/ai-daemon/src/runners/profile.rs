@@ -2,11 +2,11 @@ use std::fmt;
 use std::path::Path;
 
 use semver::VersionReq;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub const MODEL_PROFILE_SCHEMA_V1: &str = "macai.model.v1";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelProfile {
     pub schema: String,
@@ -25,7 +25,7 @@ pub struct ModelProfile {
     pub compatibility: ProfileCompatibility,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileSource {
     #[serde(rename = "type")]
@@ -34,20 +34,20 @@ pub struct ProfileSource {
     pub revision: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileArtifacts {
     pub directory: String,
     pub files: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileCompatibility {
     pub runner: String,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileDefaults {
     pub keep_alive: Option<String>,
@@ -55,7 +55,7 @@ pub struct ProfileDefaults {
     pub format: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileResources {
     pub memory_estimate_bytes: Option<u64>,
@@ -162,6 +162,21 @@ impl ModelProfile {
         }
         Ok(())
     }
+
+    /// 规范 JSON 快照（结构字段顺序稳定，序列化确定）。Model Profile 的
+    /// 持久 snapshot 与 digest 以它为准；变更探测经 digest 判定。
+    pub fn canonical_json(&self) -> Result<Vec<u8>, ProfileError> {
+        serde_json::to_vec(self)
+            .map_err(|error| ProfileError(format!("cannot serialize profile snapshot: {error}")))
+    }
+
+    /// sha256(digest of canonical JSON)。与 package digest（Runner 包全量内容）
+    /// 分离：profile digest 只指纹 Model Profile 内容本身。
+    pub fn digest(&self) -> Result<String, ProfileError> {
+        use sha2::{Digest, Sha256};
+        let bytes = self.canonical_json()?;
+        Ok(format!("{:x}", Sha256::digest(&bytes)))
+    }
 }
 
 fn safe_relative(value: &str) -> bool {
@@ -186,6 +201,48 @@ fn is_immutable_commit(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn digest_is_deterministic_and_tracks_content_changes() {
+        let base = r#"
+schema = "macai.model.v1"
+id = "kokoro-82m-zh"
+name = "Kokoro 82M zh"
+capabilities = ["tts.v1"]
+runner = "org.macai.kokoro"
+adapter = "kokoro-mlx"
+format = "directory"
+[source]
+type = "huggingface"
+repo = "1038lab/Kokoro-82M-zh-MLX"
+revision = "4bd6c9644da381fee105f37fcd8cb63d038ba7e8"
+[artifacts]
+directory = "kokoro-82m-zh"
+files = ["config.json", "model.safetensors"]
+[defaults]
+keep_alive = "always"
+voice = "zf_001"
+format = "wav"
+[resources]
+memory_estimate_bytes = 400000000
+[compatibility]
+runner = ">=0.1,<0.2"
+"#;
+        let profile = ModelProfile::parse(base).unwrap();
+        let first = profile.digest().unwrap();
+        assert_eq!(first.len(), 64);
+        assert_eq!(
+            profile.digest().unwrap(),
+            first,
+            "digest must be deterministic"
+        );
+        let changed = ModelProfile::parse(&base.replace("zf_001", "af_heart")).unwrap();
+        assert_ne!(
+            changed.digest().unwrap(),
+            first,
+            "digest must track content"
+        );
+    }
 
     #[test]
     fn rejects_a_mutable_or_escaping_profile() {

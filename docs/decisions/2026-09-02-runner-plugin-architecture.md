@@ -280,6 +280,11 @@ environment manager 与 Phase 1C Runtime/scheduler Runner Instance 组合均已�
 uv-lock Kokoro Runner（Phase 2）、adapter 迁移（Phase 3）和最终产品 cutover
 （Phase 4+5），以及 Model Profile 持久 snapshot 与 HTTP 管理面接入。
 
+Model Profile 持久 snapshot/digest 已先行落地（2026-09-02，Phase 4 首块）：
+`ModelProfile::canonical_json`/`digest` + `RegistryStore::model_profiles` 表与
+upsert/get/load；main.rs 装配与 HTTP 管理面仍未接入（见
+[`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md) Phase 4）。
+
 下表是提案完成后的直接证据要求。`Result` 在实施前保持 `not run`。
 
 | Acceptance | Failure surface | Direct evidence | Result |

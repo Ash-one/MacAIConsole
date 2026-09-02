@@ -34,7 +34,29 @@ CREATE TABLE IF NOT EXISTS models (
     installed_at INTEGER NOT NULL,
     last_used_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS model_profiles (
+    profile_id TEXT PRIMARY KEY,
+    runner TEXT NOT NULL,
+    compatibility TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    snapshot TEXT NOT NULL,
+    installed_at INTEGER NOT NULL
+);
 ";
+
+/// 持久化的 Runner Model Profile snapshot。`digest` 是 profile 规范 JSON 的
+/// sha256（`ModelProfile::digest`）；`snapshot` 是规范 JSON 本身，重启后可恢复
+/// 解析，不与任何单个模型实例绑定。
+#[allow(dead_code)] // Phase 4 main.rs 注册/装配路径接入后移除
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredProfile {
+    pub profile_id: String,
+    pub runner: String,
+    pub compatibility: String,
+    pub digest: String,
+    pub snapshot: String,
+    pub installed_at: u64,
+}
 
 impl RegistryStore {
     pub fn open(db_path: &Path) -> Result<Self, String> {
@@ -179,6 +201,89 @@ impl RegistryStore {
                 "UPDATE models SET last_used_at = ?2 WHERE id = ?1",
                 rusqlite::params![id, ts as i64],
             );
+        }
+    }
+
+    /// 持久化一个 Model Profile snapshot。同 profile_id 的新 digest 覆盖旧
+    /// snapshot（profile 内容升级路径）；installed_at 属于首次注册时间，upsert
+    /// 不覆盖。调用方负责先 `ModelProfile::validate`。
+    #[allow(dead_code)] // Phase 4 main.rs 注册/装配路径接入后移除
+    pub fn upsert_profile(
+        &self,
+        profile_id: &str,
+        runner: &str,
+        compatibility: &str,
+        digest: &str,
+        snapshot: &str,
+        installed_at: u64,
+    ) {
+        let Ok(conn) = self.conn.lock() else {
+            return;
+        };
+        let _ = conn.execute(
+            "INSERT INTO model_profiles (profile_id, runner, compatibility, digest,
+                                         snapshot, installed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(profile_id) DO UPDATE SET
+                runner = ?2, compatibility = ?3, digest = ?4, snapshot = ?5",
+            rusqlite::params![
+                profile_id,
+                runner,
+                compatibility,
+                digest,
+                snapshot,
+                installed_at as i64
+            ],
+        );
+    }
+
+    #[allow(dead_code)] // Phase 4 main.rs 注册/装配路径接入后移除
+    pub fn get_profile(&self, profile_id: &str) -> Option<StoredProfile> {
+        let conn = self.conn.lock().ok()?;
+        conn.query_row(
+            "SELECT profile_id, runner, compatibility, digest, snapshot, installed_at
+             FROM model_profiles WHERE profile_id = ?1",
+            [profile_id],
+            |row| {
+                Ok(StoredProfile {
+                    profile_id: row.get(0)?,
+                    runner: row.get(1)?,
+                    compatibility: row.get(2)?,
+                    digest: row.get(3)?,
+                    snapshot: row.get(4)?,
+                    installed_at: row.get::<_, i64>(5)?.max(0) as u64,
+                })
+            },
+        )
+        .ok()
+    }
+
+    /// 启动时全量加载持久化 profiles（重启恢复路径）。
+    #[allow(dead_code)] // Phase 4 main.rs 注册/装配路径接入后移除
+    pub fn load_profiles(&self) -> Vec<StoredProfile> {
+        let Ok(conn) = self.conn.lock() else {
+            return vec![];
+        };
+        let mut stmt = match conn.prepare(
+            "SELECT profile_id, runner, compatibility, digest, snapshot, installed_at
+             FROM model_profiles ORDER BY profile_id",
+        ) {
+            Ok(stmt) => stmt,
+            Err(_) => return vec![],
+        };
+        let rows = stmt.query_map([], |row| {
+            Ok(StoredProfile {
+                profile_id: row.get(0)?,
+                runner: row.get(1)?,
+                compatibility: row.get(2)?,
+                digest: row.get(3)?,
+                snapshot: row.get(4)?,
+                installed_at: row.get::<_, i64>(5)?.max(0) as u64,
+            })
+        });
+        match rows {
+            Ok(rows) => rows.flatten().collect(),
+            Err(_) => vec![],
         }
     }
 }
@@ -342,6 +447,70 @@ mod tests {
             .collect();
         assert_eq!(ids, vec!["b".to_string()]);
         drop(store);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn profile_snapshot_roundtrips_and_digest_conflict_updates() {
+        let path = temp_db("profiles");
+        let store = RegistryStore::open(&path).unwrap();
+        store.upsert_profile(
+            "kokoro-82m-zh",
+            "org.macai.kokoro",
+            ">=0.1,<0.2",
+            "digest-a",
+            r#"{"schema":"macai.model.v1"}"#,
+            111,
+        );
+        let loaded = store.get_profile("kokoro-82m-zh").expect("profile stored");
+        assert_eq!(loaded.runner, "org.macai.kokoro");
+        assert_eq!(loaded.compatibility, ">=0.1,<0.2");
+        assert_eq!(loaded.digest, "digest-a");
+        assert_eq!(loaded.installed_at, 111);
+
+        // 同 id 新 digest 覆盖内容，但 installed_at 保持首次注册值。
+        store.upsert_profile(
+            "kokoro-82m-zh",
+            "org.macai.kokoro",
+            ">=0.1,<0.3",
+            "digest-b",
+            r#"{"schema":"macai.model.v1","v":2}"#,
+            999,
+        );
+        let updated = store.get_profile("kokoro-82m-zh").unwrap();
+        assert_eq!(updated.digest, "digest-b");
+        assert_eq!(updated.compatibility, ">=0.1,<0.3");
+        assert_eq!(
+            updated.installed_at, 111,
+            "installed_at must be first-registration"
+        );
+
+        assert!(store.get_profile("missing").is_none());
+        drop(store);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn profiles_survive_store_reopen() {
+        let path = temp_db("profiles-reopen");
+        {
+            let store = RegistryStore::open(&path).unwrap();
+            store.upsert_profile(
+                "fake-tts",
+                "org.example.fake",
+                ">=0.1,<0.2",
+                "digest-1",
+                r#"{"id":"fake-tts"}"#,
+                5,
+            );
+        }
+        let reopened = RegistryStore::open(&path).unwrap();
+        let profiles = reopened.load_profiles();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].profile_id, "fake-tts");
+        assert_eq!(profiles[0].digest, "digest-1");
+        assert_eq!(profiles[0].installed_at, 5);
+        drop(reopened);
         cleanup(&path);
     }
 }
