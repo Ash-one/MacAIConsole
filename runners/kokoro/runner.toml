@@ -14,7 +14,8 @@ id = "org.macai.kokoro-python"
 project = "."
 lock = "uv.lock"
 python = ">=3.12,<3.13"
-probe = ["{environment.python}", "-c", "import mlx_audio, misaki, phonemizer, espeakng_loader; print('kokoro env ok')"]
+# probe argv 与 entrypoint 同受 shell 元字符校验（禁 `;`），用纯 import 表达式。
+probe = ["{environment.python}", "-c", "import mlx_audio, misaki, phonemizer, espeakng_loader"]
 
 [capacity]
 max_instances = 1

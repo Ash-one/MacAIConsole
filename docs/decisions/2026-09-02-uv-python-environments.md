@@ -214,6 +214,15 @@ bounded change 实现，完成面与本节第 1–8 项一一对应：
 该 slice 的直接证据和后续 Runtime/scheduler 接线顺序由
 [`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md) 追踪。
 
+**已知缺陷（2026-09-02 Phase 2 收尾时由真实 Kokoro Runner 接线暴露）**：
+`run_probe` 与 entrypoint 的 `{environment.python}` 解析为受管基础解释器，
+而 `uv sync` 经 `UV_PROJECT_ENVIRONMENT` 把依赖写入 staging `.venv`——真实
+probe 因此报 `ModuleNotFoundError`。fake fixture 的 no-op probe 掩盖了该语义
+分裂。修复方向：probe 与 entrypoint 解析为 `<fingerprint>/.venv/bin/python`，
+基础解释器只作为 `uv sync --python` 输入；`status.python` 语义随修复澄清。
+该修复属于本 decision 的 environment manager owner 职权，证据追踪见
+[`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md) Phase 2 节。
+
 ## Migration
 
 1. 引入 daemon-owned uv probe、环境 identity 和状态模型；

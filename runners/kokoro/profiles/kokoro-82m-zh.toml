@@ -9,11 +9,12 @@ format = "directory"
 [source]
 type = "huggingface"
 repo = "1038lab/Kokoro-82M-zh-MLX"
-# immutable revision 待模型目录核对后由 Phase 2 完成时确认填入
-revision = "0123456789abcdef0123456789abcdef01234567"
+# Phase 2 核对：本地 model.safetensors sha256 与该 revision 的 HF LFS oid 一致
+revision = "4bd6c9644da381fee105f37fcd8cb63d038ba7e8"
 
 [artifacts]
-directory = "."
+# artifacts.directory 是相对 Models root 的子目录名（safe relative path，不允许 "."）
+directory = "kokoro-82m-zh"
 files = ["config.json", "model.safetensors"]
 
 [defaults]
