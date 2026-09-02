@@ -3,6 +3,8 @@ import SwiftUI
 
 /// AppKit 的文本系统负责日志的双轴滚动和选区；SwiftUI 仍持有日志条目这一唯一数据源。
 struct LogConsoleView: NSViewRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
+
     let entries: [LogEntry]
 
     func makeCoordinator() -> Coordinator {
@@ -47,11 +49,16 @@ struct LogConsoleView: NSViewRepresentable {
         let oldOrigin = scrollView.contentView.bounds.origin
         let shouldFollowTail = coordinator.isAtBottom
         let entriesChanged = coordinator.entries != entries
+        let appearanceChanged = coordinator.colorScheme != colorScheme
 
         coordinator.isUpdating = true
-        if entriesChanged {
-            textView.textStorage?.setAttributedString(Self.render(entries))
+        if entriesChanged || appearanceChanged {
+            textView.textStorage?.setAttributedString(Self.render(
+                entries,
+                appearance: textView.effectiveAppearance
+            ))
             coordinator.entries = entries
+            coordinator.colorScheme = colorScheme
         }
         Self.resizeDocument(textView, in: scrollView)
 
@@ -64,7 +71,7 @@ struct LogConsoleView: NSViewRepresentable {
         coordinator.updateBottomState()
     }
 
-    private static func render(_ entries: [LogEntry]) -> NSAttributedString {
+    static func render(_ entries: [LogEntry], appearance: NSAppearance) -> NSAttributedString {
         let result = NSMutableAttributedString()
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.paragraphSpacing = 2
@@ -75,7 +82,7 @@ struct LogConsoleView: NSViewRepresentable {
                 string: entry.text + suffix,
                 attributes: [
                     .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
-                    .foregroundColor: color(for: entry.level),
+                    .foregroundColor: color(for: entry.level, appearance: appearance),
                     .paragraphStyle: paragraphStyle,
                 ]
             ))
@@ -83,13 +90,20 @@ struct LogConsoleView: NSViewRepresentable {
         return result
     }
 
-    private static func color(for level: LogLevel) -> NSColor {
+    private static func color(for level: LogLevel, appearance: NSAppearance) -> NSColor {
+        let color: NSColor
+        let opacity: Double
         switch level {
-        case .debug: NSColor.labelColor.withAlphaComponent(0.35)
-        case .info: NSColor.labelColor.withAlphaComponent(0.85)
-        case .warning: .systemOrange
-        case .error: .systemRed
+        case .debug: (color, opacity) = (.labelColor, 0.35)
+        case .info: (color, opacity) = (.labelColor, 0.85)
+        case .warning: (color, opacity) = (.systemOrange, 1)
+        case .error: (color, opacity) = (.systemRed, 1)
         }
+        var resolvedColor = color
+        appearance.performAsCurrentDrawingAppearance {
+            resolvedColor = color.usingColorSpace(.deviceRGB) ?? color
+        }
+        return resolvedColor.withAlphaComponent(opacity)
     }
 
     private static func resizeDocument(_ textView: NSTextView, in scrollView: NSScrollView) {
@@ -126,6 +140,7 @@ struct LogConsoleView: NSViewRepresentable {
 
     final class Coordinator: NSObject {
         fileprivate var entries: [LogEntry] = []
+        fileprivate var colorScheme: ColorScheme?
         fileprivate var isAtBottom = true
         fileprivate var isUpdating = false
         private weak var scrollView: NSScrollView?
