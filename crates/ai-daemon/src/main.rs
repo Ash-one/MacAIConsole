@@ -1093,6 +1093,33 @@ fn api_error(error: AIError, message: impl Into<String>) -> Response {
 /// 找不到 Runner 目录、无 python-uv Runner 或模型目录缺失时静默跳过，保留纯
 /// 内置 Provider 路径；模型目录缺失表示用户尚未下载 artifact，不假装 ready。
 /// Plugins 目录与显式信任留到安装 slice。
+/// 定位 built-in Runner 目录：`MACAI_RUNNERS_DIR` → cwd `runners`/`../runners`
+/// → daemon 可执行文件祖先中的仓库 `runners/`。最后一条让 Finder/launchd
+/// 启动（cwd 不可靠）也能发现仓库随附 Runner。
+fn builtin_runners_root() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("MACAI_RUNNERS_DIR") {
+        let path = PathBuf::from(dir);
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        for candidate in [cwd.join("runners"), cwd.join("../runners")] {
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
+        }
+    }
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    for ancestor in exe_dir.ancestors().take(6) {
+        let candidate = ancestor.join("runners");
+        if candidate.join("kokoro").join("runner.toml").is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 async fn bootstrap_runners(runtime: &mut Runtime) {
     use std::collections::HashMap;
     use std::collections::HashSet;
@@ -1106,16 +1133,7 @@ async fn bootstrap_runners(runtime: &mut Runtime) {
         return;
     };
     let app_support = PathBuf::from(&home).join("Library/Application Support/MacAIConsole");
-    let runner_root = match std::env::var_os("MACAI_RUNNERS_DIR") {
-        Some(dir) => Some(PathBuf::from(dir)),
-        None => match std::env::current_dir() {
-            Ok(cwd) => [cwd.join("runners"), cwd.join("../runners")]
-                .into_iter()
-                .find(|candidate| candidate.is_dir()),
-            Err(_) => None,
-        },
-    };
-    let Some(runner_root) = runner_root else {
+    let Some(runner_root) = builtin_runners_root() else {
         tracing::info!("no built-in runners dir; Runner assembly skipped");
         return;
     };
