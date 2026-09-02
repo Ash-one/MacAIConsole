@@ -403,12 +403,23 @@ impl Runtime {
     }
 
     /// 注册并加载一个模型。生命周期串行化，避免两个模型同时争抢同一 Provider。
+    /// 新注册若加载失败会回滚注册（runner 绑定校验等失败不留脏条目）；
+    /// 已存在模型的修复路径（加载失败重试）保留注册以便 GUI 重试。
     pub async fn register_and_load(&self, spec: ModelSpec) -> Result<ModelHandle, ProviderError> {
         if self.handles.read().await.contains_key(&spec.id) {
             self.unload_model(&spec.id).await?;
         }
+        let existed_before = self.get_model(&spec.id).await.is_some();
         self.register(spec.clone()).await;
-        self.load_model(&spec.id).await
+        match self.load_model(&spec.id).await {
+            Ok(handle) => Ok(handle),
+            Err(error) => {
+                if !existed_before {
+                    let _ = self.unregister_model(&spec.id).await;
+                }
+                Err(error)
+            }
+        }
     }
 
     pub async fn load_model(&self, id: &str) -> Result<ModelHandle, ProviderError> {
