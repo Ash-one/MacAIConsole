@@ -191,6 +191,58 @@ impl Runtime {
         self.runner_instances.clone()
     }
 
+    /// Runner-backed Provider 装配（Phase 4）。main 构造 Runtime 后、Arc 包装前
+    /// 调用：按 descriptor 注册进 providers 与 capability 表，并挂上 instance
+    /// manager 供 `shutdown_all` 收口。一个 Runner 一个 RunnerProvider。
+    pub fn attach_runner(
+        &mut self,
+        provider: Arc<ai_daemon::runners::RunnerProvider>,
+        instances: Arc<ai_daemon::runners::RunnerInstanceManager>,
+    ) {
+        let descriptor = provider.descriptor();
+        let id = descriptor.id.clone();
+        self.providers.insert(id.clone(), provider.clone());
+        if descriptor
+            .capabilities
+            .contains(&ai_core::provider::Capability::TextToSpeech)
+        {
+            self.tts_providers.insert(id, provider);
+        }
+        self.runner_instances = Some(instances);
+    }
+
+    /// 持久化 Model Profile snapshot 到 models.db `model_profiles` 表
+    /// （Phase 4 注册路径）。返回内容 digest；内存模式（无 store）返回 Ok(None)。
+    pub fn register_runner_profile(
+        &self,
+        profile: &ai_daemon::runners::ModelProfile,
+    ) -> Result<Option<String>, String> {
+        let digest = profile
+            .digest()
+            .map_err(|error| format!("profile digest failed: {error}"))?;
+        let snapshot = profile
+            .canonical_json()
+            .map_err(|error| format!("profile snapshot failed: {error}"))?;
+        let snapshot =
+            String::from_utf8(snapshot).map_err(|_| "profile snapshot is not utf-8".to_string())?;
+        let installed_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        let Some(store) = self.store.as_ref() else {
+            return Ok(None);
+        };
+        store.upsert_profile(
+            &profile.id,
+            &profile.runner,
+            &profile.compatibility.runner,
+            &digest,
+            &snapshot,
+            installed_at,
+        );
+        Ok(Some(digest))
+    }
+
     /// 注册一个模型。注册不等于常驻；初始状态始终为 unloaded。
     /// 已存在时更新规格（保留状态与使用时间）。
     pub async fn register(&self, spec: ModelSpec) {
@@ -1060,5 +1112,105 @@ mod tests {
                 "whisper.cpp"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn attach_runner_registers_provider_and_shutdown_handle() {
+        use std::collections::HashSet;
+
+        use ai_daemon::runners::{
+            EnvironmentManager, EnvironmentManagerConfig, RunnerInstanceManager, RunnerProvider,
+            RunnerRegistry,
+        };
+
+        let root = std::env::temp_dir().join(format!(
+            "macai-runtime-attach-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+        let environments = EnvironmentManager::new(EnvironmentManagerConfig {
+            runtime_root: root.join("Runtimes/python"),
+        });
+        let instances = Arc::new(RunnerInstanceManager::new(
+            registry,
+            environments,
+            root.join("temp"),
+        ));
+        let provider = Arc::new(RunnerProvider::new(
+            "org.example.runner".to_string(),
+            instances.clone(),
+            root.join("temp"),
+        ));
+
+        let mut runtime = Runtime::new();
+        runtime.attach_runner(provider, instances.clone());
+        assert!(
+            runtime.providers.contains_key("org.example.runner"),
+            "runner provider must be registered in the providers table"
+        );
+        assert!(
+            runtime.tts_providers.contains_key("org.example.runner"),
+            "runner provider must be registered as a TTS provider"
+        );
+        assert!(runtime.runner_instances.is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn register_runner_profile_persists_snapshot_to_store() {
+        let path = std::env::temp_dir().join(format!(
+            "macai-runtime-profile-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let profile_toml = r#"
+schema = "macai.model.v1"
+id = "kokoro-82m-zh"
+name = "Kokoro 82M zh"
+capabilities = ["tts.v1"]
+runner = "org.macai.kokoro"
+adapter = "kokoro-mlx"
+format = "directory"
+[source]
+type = "huggingface"
+repo = "1038lab/Kokoro-82M-zh-MLX"
+revision = "4bd6c9644da381fee105f37fcd8cb63d038ba7e8"
+[artifacts]
+directory = "kokoro-82m-zh"
+files = ["config.json", "model.safetensors"]
+[defaults]
+keep_alive = "always"
+voice = "zf_001"
+format = "wav"
+[resources]
+memory_estimate_bytes = 400000000
+[compatibility]
+runner = ">=0.1,<0.2"
+"#;
+        let profile = ai_daemon::runners::ModelProfile::parse(profile_toml).unwrap();
+        let runtime = Runtime::with_store(&path);
+        let digest = runtime
+            .register_runner_profile(&profile)
+            .expect("register must succeed")
+            .expect("store-backed runtime must persist");
+        assert_eq!(digest.len(), 64);
+
+        let store = crate::registry::RegistryStore::open(&path).unwrap();
+        let profiles = store.load_profiles();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].profile_id, "kokoro-82m-zh");
+        assert_eq!(profiles[0].runner, "org.macai.kokoro");
+        assert_eq!(profiles[0].digest, digest);
+        drop(store);
+        let _ = std::fs::remove_file(&path);
     }
 }

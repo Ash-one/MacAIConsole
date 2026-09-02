@@ -282,7 +282,10 @@ uv-lock Kokoro Runner（Phase 2）、adapter 迁移（Phase 3）和最终产品 
 
 Model Profile 持久 snapshot/digest 已先行落地（2026-09-02，Phase 4 首块）：
 `ModelProfile::canonical_json`/`digest` + `RegistryStore::model_profiles` 表与
-upsert/get/load；main.rs 装配与 HTTP 管理面仍未接入（见
+upsert/get/load。daemon 装配第二块同日本地：`Runtime::attach_runner`/
+`register_runner_profile` + main.rs `bootstrap_runners`（built-in Runner
+discovery → profile 持久化 → artifact 存在才 bind/attach）。HTTP 管理面端点、
+Plugins 目录与显式信任仍未接入（见
 [`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md) Phase 4）。
 
 下表是提案完成后的直接证据要求。`Result` 在实施前保持 `not run`。
