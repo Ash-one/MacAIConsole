@@ -299,7 +299,12 @@ Phase 4 切片进度（2026-09-02）：
   `POST /api/runners/{runner}/install`（显式触发环境安装的唯一个人入口，幂等，
   daemon 拥有 uv；未知 runner 404）。证据：`cargo test -p ai-daemon --bin aiworkd`
   93 tests 绿（含 handler 空装配/404 测试）。README 端点表已同步。
-- 尚未接入：Plugins 目录与显式信任、GUI 消费端、cancel 双向通路。
+- **GUI 消费端**：设置页新增「Runner 引擎（实验）」区块——行状态来自 daemon
+  `/api/runners`（id/phase/models），ready→已就绪绿点、missing→安装按钮、
+  failed→重试；安装 POST `/api/runners/{id}/install`（busy 转圈，失败行内报错）。
+  DaemonAPI 新增 `runners()`/`installRunner(_:)` 与 RunnerEntry/InstallResponse
+  模型。证据：`swift build -c debug` 零错误（视觉验收由用户进行）。
+- 尚未接入：Plugins 目录与显式信任、cancel 双向通路。
 
 真实用户路径：
 

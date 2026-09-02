@@ -133,6 +133,37 @@ struct ProviderEntry: Decodable, Identifiable {
     var id: String { descriptor.id }
 }
 
+// MARK: Runner 管理面模型（Phase 4，实验性）
+
+struct RunnerModel: Decodable, Hashable {
+    var profile: String
+}
+
+struct RunnerEntry: Decodable, Identifiable, Hashable {
+    var id: String
+    var root: String
+    var state: String
+    var environmentId: String
+    var phase: String
+    var models: [RunnerModel]
+
+    enum CodingKeys: String, CodingKey {
+        case id, root, state, models
+        case environmentId = "environment_id"
+        case phase
+    }
+}
+
+struct RunnerInstallResponse: Decodable {
+    var environmentId: String
+    var phase: String
+
+    enum CodingKeys: String, CodingKey {
+        case phase
+        case environmentId = "environment_id"
+    }
+}
+
 struct InferenceTaskMessage: Decodable, Hashable {
     var role: String
     var content: String
@@ -418,6 +449,22 @@ struct DaemonAPI {
     func providers() async throws -> [ProviderEntry] {
         struct Wrapper: Decodable { var data: [ProviderEntry] }
         return try JSONDecoder().decode(Wrapper.self, from: try await get("api/providers")).data
+    }
+
+    // MARK: Runner 管理面（Phase 4，实验性）
+
+    /// GET /api/runners —— 已发现/受信任 Runner + python 环境 phase。
+    func runners() async throws -> [RunnerEntry] {
+        struct Wrapper: Decodable { var data: [RunnerEntry] }
+        return try JSONDecoder().decode(Wrapper.self, from: try await get("api/runners", timeout: 4)).data
+    }
+
+    /// POST /api/runners/{id}/install —— 显式安装 python 环境（uv sync 可达约 10 分钟）。
+    func installRunner(_ id: String) async throws -> RunnerInstallResponse {
+        try JSONDecoder().decode(
+            RunnerInstallResponse.self,
+            from: try await postJSON("api/runners/\(id)/install", body: [:], timeout: 660)
+        )
     }
 
     /// POST /api/logging —— 运行时切换 daemon 的 Info / Debug 过滤级别。

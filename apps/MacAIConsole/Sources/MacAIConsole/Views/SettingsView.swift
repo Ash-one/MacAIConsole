@@ -56,6 +56,15 @@ struct SettingsView: View {
                 }
             }
 
+            Section {
+                RunnerEnvironmentsSection()
+            } header: {
+                HStack(spacing: 6) {
+                    Text("Runner 引擎（实验）")
+                    InfoTip(text: runnerEnvironmentsDescription, maxWidth: 320)
+                }
+            }
+
             Section("网络代理") {
                 HStack(spacing: 8) {
                     HStack(spacing: 6) {
@@ -157,6 +166,10 @@ struct SettingsView: View {
 
     private var runtimeEnvironmentDescription: String {
         "各 Provider worker 依赖仓库 .build/ 下的运行环境：Python worker 使用 Python 3.12 venv，llama.cpp 由脚本克隆源码并编译（需要 Xcode 或 Command Line Tools 与 cmake）。安装需联网下载数百 MB 至数 GB 依赖。已用 AIWORK_* 变量指向自定义环境的无需安装。安装完成后重启 aiworkd 生效。"
+    }
+
+    private var runnerEnvironmentsDescription: String {
+        "Runner 是实验性的 daemon 原生引擎骨架（尚未进入既有模型列表）。状态来自 daemon /api/runners；安装 = daemon 用 uv 同步受管 Python 环境（首次需联网下载依赖，已由 daemon 热缓存后较快）。安装完成后刷新状态即可。"
     }
 
     private var settingsAreValid: Bool {
@@ -290,5 +303,121 @@ struct PythonEnvironmentRow: View {
             .reversed()
             .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             .map(String.init) ?? ""
+    }
+}
+
+/// 「Runner 引擎（实验）」区块：状态来自 daemon /api/runners，安装动作
+/// POST /api/runners/{id}/install（显式、幂等）。UI 只消费 daemon 数据。
+struct RunnerEnvironmentsSection: View {
+    @Environment(DaemonController.self) private var controller
+    @State private var runners: [RunnerEntry] = []
+    @State private var message: String?
+    @State private var busyRunner: String?
+    @State private var loadedOnce = false
+
+    var body: some View {
+        Group {
+            if let message {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(Theme.danger)
+            } else if runners.isEmpty {
+                Text(loadedOnce ? "未发现 Runner（daemon 需以仓库路径启动才会装配 built-in Runner）" : "探测 Runner…")
+                    .font(.caption)
+                    .foregroundStyle(Color.secondary)
+            } else {
+                ForEach(runners) { entry in
+                    RunnerEnvironmentRow(entry: entry, busy: busyRunner == entry.id) {
+                        await install(entry)
+                    }
+                }
+            }
+        }
+        .task { await reload() }
+    }
+
+    private func reload() async {
+        do {
+            runners = try await controller.api.runners()
+            loadedOnce = true
+            message = nil
+        } catch {
+            message = "Runner 状态不可用：\(error.localizedDescription)"
+        }
+    }
+
+    private func install(_ entry: RunnerEntry) async {
+        busyRunner = entry.id
+        defer { busyRunner = nil }
+        do {
+            _ = try await controller.api.installRunner(entry.id)
+            message = nil
+            await reload()
+        } catch {
+            message = "\(entry.id) 安装失败：\(error.localizedDescription)"
+        }
+    }
+}
+
+/// Runner 单行：短名 + 环境 phase（missing→未安装 / ready→已就绪 / failed→失败）
+/// + 安装/重试按钮；镜像「运行环境」行的视觉层级。
+struct RunnerEnvironmentRow: View {
+    let entry: RunnerEntry
+    let busy: Bool
+    let install: () async -> Void
+
+    private var shortName: String {
+        entry.id.components(separatedBy: ".").last ?? entry.id
+    }
+
+    private var phaseText: (text: String, color: Color)? {
+        switch entry.phase {
+        case "ready": return ("已就绪", Theme.success)
+        case "missing": return nil
+        case "failed": return ("环境失败", Theme.danger)
+        default: return (entry.phase, Color.secondary)
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(shortName)
+                        .font(.body.weight(.medium))
+                    if entry.state == "trusted" {
+                        Text("trusted")
+                            .font(.caption2.weight(.medium))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.14), in: Capsule())
+                            .foregroundStyle(Color.secondary)
+                    }
+                }
+                Text(entry.id)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 12)
+            if busy {
+                ProgressView().controlSize(.small)
+            } else if let phaseText {
+                HStack(spacing: 5) {
+                    StatusDot(color: phaseText.color, size: 6, glow: true)
+                    Text(phaseText.text)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(phaseText.color)
+                }
+            } else {
+                Button(entry.phase == "failed" ? "重试" : "安装") {
+                    Task { await install() }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
