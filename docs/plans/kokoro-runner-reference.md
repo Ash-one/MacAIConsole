@@ -194,13 +194,29 @@ parser unit tests 或直接调用 `RunnerProcess` 的 isolated test 不足以进
 | Rust Kokoro Provider tests 基线（Phase 0） | `cargo test -p ai-daemon kokoro` | passed（4 tests） |
 | 旧环境真实合成基线（Phase 0） | `.build/kokoro-venv`：`ok=true`，3.83s @ 24000Hz | passed |
 | adapter 逻辑单测 | `uv run --with pytest --with-editable . python -m pytest tests/test_adapter.py` | passed（10 tests） |
+| immutable HF revision 核对 | HF commit `4bd6c964…8ba7e8` 的 `model.safetensors` LFS sha256 与本地文件一致（config.json size 3380 一致）；revision 已填入 `profiles/kokoro-82m-zh.toml` | passed |
+| 第二次 sync exact/no-op 与离线 sync | `uv sync --locked --no-dev` 二次运行为纯 audit；`--offline` sync 与离线 `--probe` 通过 | passed |
+| 真实模型经 Runner Protocol 端到端 | `MACAI_KOKORO_SMOKE_MODEL=… scripts/tests/kokoro_runner_smoke.sh`（自带独立 frame codec）：短中文 4.45s、混合中英 5.0s、长中文 116 字 22.9s 无截断 @ 24000Hz，unload/shutdown 无残留 | passed |
+| daemon 侧 RunnerProvider 真实接线 | `MACAI_KOKORO_WIRING_MODEL=… cargo test -p ai-daemon --test runner_kokoro_real_wiring`（env-gated） | blocked：environment manager 解释器接线缺陷，见下 |
 
-Phase 2 完成前仍需：
+Phase 2 收尾（2026-09-02 第二轮 bounded change）已完成 revision 核对、exact/no-op
+与离线 sync、真实模型端到端 smoke（上表）。该轮暴露并处理：
 
-1. 核对 Model Profile 的 immutable HF revision 并填入 `profiles/kokoro-82m-zh.toml`；
-2. 真实模型经 Runner Protocol（而非旧 worker 协议）的端到端 load/infer smoke；
-3. 第二次 `uv sync --locked` 的 exact/no-op 验证与离线 sync 验证；
-4. 中英文混合、长文本与 daemon 侧 RunnerProvider 接线验证。
+- manifest probe 的 `-c` 脚本含 `;`，被 entrypoint 同源的 shell 元字符校验拒绝；
+  probe 已改为纯 import 表达式（`runner.toml`）。
+- profile `artifacts.directory = "."` 被 `safe_relative` 拒绝；已按
+  [`model-profile-v1`](../specs/model-profile-v1.md) 示例改为 `kokoro-82m-zh`。
+
+**未修缺陷（转下一 bounded change，owner：`ai-daemon::runners::environment`）**：
+`run_sync` 经 `UV_PROJECT_ENVIRONMENT` 把依赖装进 staging `.venv`，而 `run_probe`
+与 `instance.rs` entrypoint 的 `{environment.python}` 都解析为受管**基础解释器**，
+真实 probe 报 `ModuleNotFoundError: mlx_audio`。fake fixture 的 probe 只 `print`，
+掩盖了该缺陷。修复方向：probe 与 entrypoint 解析为
+`<fingerprint>/.venv/bin/python`，基础解释器只作为 uv `--python` 输入；
+`status.python` 语义随修复澄清。真实接线测试在修复前保持 env-gated 跳过。
+
+Phase 2 完成条件在接线测试通过后判定：中英文混合、长文本已由 smoke 覆盖；
+daemon 侧真实接线等待上述缺陷修复后复跑。
 
 ## Phase 3: Runner adapter
 
