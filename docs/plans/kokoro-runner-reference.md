@@ -304,6 +304,13 @@ Phase 4 切片进度（2026-09-02）：
   failed→重试；安装 POST `/api/runners/{id}/install`（busy 转圈，失败行内报错）。
   DaemonAPI 新增 `runners()`/`installRunner(_:)` 与 RunnerEntry/InstallResponse
   模型。证据：`swift build -c debug` 零错误（视觉验收由用户进行）。
+- **真实用户路径验证**：`POST /api/models/load`（provider=org.macai.kokoro，
+  tts，路径=模型目录）→ ready（RunnerProvider 拉起真实 worker）；随后
+  `POST /v1/audio/speech`（model=kokoro-82m-zh，voice=zf_001，中文短句）→
+  172,844B WAV（RIFF PCM 16bit mono 24kHz）——HTTP → Runtime → RunnerProvider
+  → uv 受管环境 → supervised worker → 真实 MLX 合成全链路打通。注意：Runner
+  模型身份 = Model Profile id（= 模型目录名），HTTP 注册 id 需与之一致。
+  动态 provider 注册校验在 6494f78 落地。
 - 尚未接入：Plugins 目录与显式信任、cancel 双向通路。
 
 真实用户路径：
