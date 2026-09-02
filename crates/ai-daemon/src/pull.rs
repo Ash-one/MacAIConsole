@@ -246,6 +246,8 @@ fn build_client() -> Result<reqwest::Client, String> {
         // decoding error. Keep this transfer path on HTTP/1.1, then retry from
         // the durable .part offset if the body still ends unexpectedly.
         .http1_only()
+        // 稳定 UA：ModelScope LFS CDN 拒绝空 UA（denied by UA ACL = blacklist）。
+        .user_agent("MacAI/0.1 aiworkd")
         .connect_timeout(std::time::Duration::from_secs(30))
         .timeout(std::time::Duration::from_secs(120))
         .pool_idle_timeout(std::time::Duration::from_secs(90))
