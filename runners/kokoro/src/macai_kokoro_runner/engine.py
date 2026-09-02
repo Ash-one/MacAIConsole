@@ -139,6 +139,19 @@ def _patch_misaki_zh_version() -> None:
         log(f"[kokoro-runner] misaki zh patch failed: {error}")
 
 
+def _contains_cjk(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
+def _resolve_voice_path(model_root: str, voice: str) -> str:
+    """voice 解析：模型 voices 目录里的 `{voice}.safetensors` 优先（本地部署绕过
+    HF 缓存），否则把 voice 原样交给引擎（兼容远程/内置音色名）。"""
+    voice_ref = os.path.join(model_root, "voices", f"{voice}.safetensors")
+    if os.path.isfile(voice_ref):
+        return voice_ref
+    return voice
+
+
 class KokoroEngine:
     """单实例模型引擎：load 一次，常驻服务所有 infer。"""
 
@@ -160,12 +173,10 @@ class KokoroEngine:
         output_wav: str,
     ) -> dict:
         start = time.time()
-        voice_ref = os.path.join(self.model_root, "voices", f"{voice}.safetensors")
-        if not os.path.isfile(voice_ref):
-            voice_ref = voice
+        voice_ref = _resolve_voice_path(self.model_root, voice)
 
         kwargs = {"text": text, "voice": voice_ref, "speed": speed}
-        if any("\u4e00" <= ch <= "\u9fff" for ch in text):
+        if _contains_cjk(text):
             kwargs["lang_code"] = "z"
             text = _split_long_text_for_kokoro(text, max_chars=150)
             kwargs["text"] = text

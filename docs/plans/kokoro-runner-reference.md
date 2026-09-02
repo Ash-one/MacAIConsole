@@ -170,38 +170,44 @@ parser unit tests 或直接调用 `RunnerProcess` 的 isolated test 不足以进
 
 ## Phase 2: uv-lock Kokoro
 
-当前状态（2026-09-02，Phase 2 环境与 adapter 基线完成）：
+当前状态（2026-09-02，Phase 2 完成 + Phase 3 完成，见各节）：
 
 - `runners/kokoro/` 已建立：`runner.toml`（python-uv、probe、capacity 1/1）、
   `pyproject.toml`（mlx-audio 0.5.1、misaki[zh]/[en] 0.9.4、numpy>=2<3、
-  phonemizer-fork 3.3.2、espeakng-loader 0.2.4；dev group: pytest）、
-  `uv.lock`（124 packages，misaki 中文依赖链 jieba/spacy 显式锁定）；
+  phonemizer-fork 3.3.2、espeakng-loader 0.2.4、en-core-web-sm direct URL；
+  dev group: pytest）、`uv.lock`（125 packages；hatchling
+  `allow-direct-references` 放行 direct URL 依赖）；
 - `src/macai_kokoro_runner/`：Runner Protocol v1 adapter（frame codec 与
   daemon 对称、engine 迁移 G2P v1.1 patch / 长文本切分 / 多段拼接）、
-  `--probe` 离线探针；
-- `tests/test_adapter.py` 10 tests（切分不丢字符、wire format 对齐、
-  EOF 语义）；
+  `--probe` 离线探针；voice 路径解析与 CJK 判定为纯函数（单测覆盖）；
+- `tests/test_adapter.py` 15 tests（切分不丢字符、wire format 对齐、
+  EOF 语义、voice 解析、CJK 判定）；
 - 解释器接线修复：`status.python` 只描述 uv `--python` 输入的基础解释器；
   probe 与 entrypoint 的 `{environment.python}` 解析为运行解释器
-  `status.runtime_python()`（`<env_root>/.venv/bin/python`）。
+  `status.runtime_python()`（`<env_root>/.venv/bin/python`）；
+- espeak-ng data 路径长度修复（engine 短路径副本，见下）；
+- uv 环境安装使用默认共享 cache（不强制私有 UV_CACHE_DIR），受管 Python
+  下载镜像经 `MACAI_UV_PYTHON_INSTALL_MIRROR` 透传（默认关闭）。
 
 直接证据：
 
 | Claim | Evidence | Result |
 | --- | --- | --- |
-| 提交的 lock 可在无旧 venv 的隔离位置冷安装 | `uv sync --project runners/kokoro --locked --no-dev` → `/tmp/kokoro-cold-venv`（124 packages） | passed |
+| 提交的 lock 可在无旧 venv 的隔离位置冷安装 | `uv sync --project runners/kokoro --locked --no-dev` → 隔离 venv（125 packages，含 en-core-web-sm） | passed |
 | 冷安装环境 import 全部运行依赖 | `import mlx_audio, misaki, phonemizer, espeakng_loader, jieba` | passed |
 | manifest probe 在冷安装环境离线通过 | `python -m macai_kokoro_runner --probe` | passed |
 | 冷安装环境真实合成有效 WAV | kokoro_worker.py 驱动：`ok=true`，4.15s @ 24000Hz | passed |
 | 旧 Python worker tests 基线（Phase 0） | `uv run --with pytest python -m pytest scripts/tests -v` | passed（34 tests） |
 | Rust Kokoro Provider tests 基线（Phase 0） | `cargo test -p ai-daemon kokoro` | passed（4 tests） |
 | 旧环境真实合成基线（Phase 0） | `.build/kokoro-venv`：`ok=true`，3.83s @ 24000Hz | passed |
-| adapter 逻辑单测 | `uv run --with pytest --with-editable . python -m pytest tests/test_adapter.py` | passed（10 tests） |
+| adapter 逻辑单测 | `uv run --with pytest --with-editable . python -m pytest tests/test_adapter.py` | passed（15 tests：切分/编解码/EOF/voice/CJK） |
 | immutable HF revision 核对 | HF commit `4bd6c964…8ba7e8` 的 `model.safetensors` LFS sha256 与本地文件一致（config.json size 3380 一致）；revision 已填入 `profiles/kokoro-82m-zh.toml` | passed |
 | 第二次 sync exact/no-op 与离线 sync | `uv sync --locked --no-dev` 二次运行为纯 audit；`--offline` sync 与离线 `--probe` 通过 | passed |
 | 真实模型经 Runner Protocol 端到端 | `MACAI_KOKORO_SMOKE_MODEL=… scripts/tests/kokoro_runner_smoke.sh`（自带独立 frame codec）：短中文 4.45s、混合中英 5.0s、长中文 116 字 22.9s 无截断 @ 24000Hz，unload/shutdown 无残留 | passed |
 | probe/entrypoint 解析到 synced venv 解释器（接线缺陷回归） | `cargo test -p ai-daemon --test runner_environment_manager probe_runs_under_the_synced_venv_interpreter` | passed（runner_environment_manager 9 tests 全绿） |
-| daemon 侧 RunnerProvider 真实接线 | `MACAI_KOKORO_WIRING_MODEL=… cargo test -p ai-daemon --test runner_kokoro_real_wiring`（env-gated） | 修复后复跑结果见下节 |
+| daemon 侧 RunnerProvider 真实接线 | `MACAI_KOKORO_WIRING_MODEL=… cargo test -p ai-daemon --test runner_kokoro_real_wiring`（env-gated，commit `adb9a37`） | passed：zh 222,044B / mixed 162,044B @24kHz，unload/shutdown 无残留 |
+| espeak-ng 数据路径长度（~255 字符截断 → exit(1)） | 真实接线 zh/mixed（engine `_ensure_short_espeak_data` 短路径副本）；direct ctypes 长短路径对照复现 | passed |
+| spaCy en_core_web_sm 离线自包含 | `uv sync --locked`（125 packages）；zh pipeline 不再触发运行时下载 | passed |
 
 Phase 2 收尾（2026-09-02 第二轮 bounded change）已完成 revision 核对、exact/no-op
 与离线 sync、真实模型端到端 smoke（上表）。该轮暴露并处理：
@@ -222,23 +228,52 @@ Phase 2 收尾（2026-09-02 第二轮 bounded change）已完成 revision 核对
 runner-manifest-v1 spec 中澄清为「uv 输入基础解释器的 provenance」。回归测试见下表
 `probe_runs_under_the_synced_venv_interpreter`。
 
-Phase 2 完成条件在接线测试通过后判定：中英文混合、长文本已由 smoke 覆盖；
-daemon 侧真实接线修复后复跑结果见下表。
+**真实接线修复（2026-09-02 第四轮 bounded change，commit `adb9a37`）**：
+daemon 侧真实接线从 blocked 转 passed，暴露并修复三个此前被掩盖的问题：
+- **espeak-ng 数据路径固定缓冲截断**：受管环境位于 `/var/folders/<…>` +
+  64-hex fingerprint 深路径时 espeak-ng-data 绝对路径超过 ~255 字符限制，
+  `espeak_Initialize` 回退编译期默认（CI 构建机路径）并 `exit(1)` 杀死 worker
+  （daemon 侧表现为 infer 期 early eof）。修复：engine 在 load 时复制 data 到
+  `/tmp/macai-espeak-<hash>/` 短路径并让 phonemizer 指向副本（路径够短零开销
+  跳过；先 import misaki 触发其模块级 set_data_path 再覆盖）。
+- **spaCy `en_core_web_sm` 缺失**：misaki en G2P（trf=False）在 en/zh pipeline
+  构造时自动下载模型，env_clear/离线 worker 无 pip/uv 即失败。修复：锁定为
+  direct URL 依赖（uv.lock 125 packages；hatchling `allow-direct-references`）。
+- **uv cache 策略**：daemon 原强制私有 `UV_CACHE_DIR`，与 uv 提案「默认使用 uv
+  自身 cache」不符且每次冷装 1.2GB+；改为默认共享 cache。受管 Python 下载镜像
+  `MACAI_UV_PYTHON_INSTALL_MIRROR` 透传（默认关；TUNA/SJTU/华为公共镜像实测
+  未托管 python-build-standalone 资产）。
+
+**Phase 2 完成（2026-09-02）**：接线测试通过后判定——中英文混合、长文本已由
+smoke 覆盖；daemon 侧真实接线修复后 passed（上表）。遗留说明：`runner_environment_manager`
+本地全套在代理对 GitHub 大文件断流时无法重跑（纯网络问题，CI 不受影响）。
 
 ## Phase 3: Runner adapter
 
-迁移现有 worker 的模型语义到 `macai_kokoro_runner`：
+Status: completed（2026-09-02）
 
-- 保留 G2P、英文 fallback、长文本切分和音频拼接；
-- 实现 Runner Protocol v1 handshake/load/infer/cancel/unload/shutdown；
-- stdout 改为 framed protocol，所有库日志留在 stderr；
-- 输出写入 daemon 授权的 per-request directory；
-- 返回 WAV metadata，daemon 验证路径、RIFF/WAVE 和清理；
-- health/status 不获取活动 inference I/O 锁；
-- 单请求失败不杀死 worker；protocol violation 和进程退出由 supervisor 处理。
+旧 worker 模型语义已迁移到 `macai_kokoro_runner`，逐项证据：
 
-Kokoro adapter unit tests 只覆盖可独立判定的文本、voice 和错误逻辑；worker lifecycle
-和协议通过真实子进程集成测试覆盖。
+| Phase 3 项 | 落点 | 直接证据 |
+| --- | --- | --- |
+| 保留 G2P、英文 fallback、长文本切分、音频拼接 | `engine.py`（`_patch_misaki_zh_version` / `_split_long_text_for_kokoro` / 多段 `np.concatenate`） | adapter 15 tests + smoke 短中文/混合中英/长中文 |
+| Runner Protocol v1 handshake/load/infer/unload/shutdown | `__main__.py`（hello/initialize/load/infer/unload/shutdown/health） | smoke（hello→…→shutdown 无残留）+ 真实接线 passed |
+| stdout 只承载 framed protocol，库日志留 stderr | `__main__`/`engine`（`redirect_stdout`） | smoke 独立 codec 第三方复核 |
+| 输出写入 daemon 授权 per-request directory | `__main__.py` infer（output.directory + `output.wav`） | wiring per-request 目录读取后清理断言 |
+| 返回 WAV metadata，daemon 验证路径/RIFF 并清理 | `engine.synthesize` 返回 + `provider.rs` canonical 校验 | wiring（RIFF/WAVE、canonical 越界拒绝、无残留） |
+| health/status 不获取活动 inference I/O 锁 | daemon `RunnerProvider::status` 只读 environment phase；worker health 帧独立 | runner_runtime_composition status 测试 |
+| 单请求失败不杀 worker | `__main__.py` infer try/except → error frame | adapter/integration 路径 |
+| adapter 单测覆盖文本/voice/错误逻辑 | `tests/test_adapter.py` 15 tests | 切分/编解码/EOF/voice 解析/CJK 判定 |
+
+**Requirement delta（cancel 消费方后移）**：Phase 3 原列表含 `cancel`。核查显示
+cancel 帧的**双向通路在全栈缺失**：worker 单线程事件循环在同步 `generate()` 期间
+无法读帧；fake-runner 与 daemon 发送侧（instance/manager/provider）均未实现；
+唯一真实消费方是 Phase 4 的 HTTP 任务取消。按
+[`runner-protocol-v1`](../specs/runner-protocol-v1.md) cancel 契约（「底层引擎无法
+中止时，Runner 立即停止发布外部结果，并在计算退出后完成内部清理」），在同步引擎
+上合规落地需要 worker 线程化接收 + daemon 发送侧 + HTTP abort 接线，属于 Phase 4
+真实组合范围。本 delta 已获用户授权方向（Phase 4 推进时一并实现），此处不提前
+造无消费者的并发半成品。
 
 ## Phase 4: real composition
 
@@ -264,7 +299,10 @@ MacAIConsole / macai
 - Model Profile 注册并显式选择 Runner，无静默 fallback；
 - 首次 load、重复请求、默认 voice 更新和 unload；
 - 合成期间 `/api/runtime`、Runner/environment status 和 RSS 查询；
-- 取消、timeout、worker crash、daemon restart；
+- 取消、timeout、worker crash、daemon restart；取消项在 Phase 4 开头先落地
+  cancel 双向通路：worker 线程化接收 `cancel` 帧（停止发布结果、计算退出后回
+  `cancelled`）、fake-runner 同步实现、daemon instance/provider 发送侧与
+  HTTP abort 接线（见 Phase 3 requirement delta）；
 - 输出文件和 worker process cleanup。
 
 ## Phase 5: cutover and removal

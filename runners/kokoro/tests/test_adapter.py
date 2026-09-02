@@ -10,7 +10,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from macai_kokoro_runner import protocol
-from macai_kokoro_runner.engine import _split_long_text_for_kokoro  # noqa: E402
+from macai_kokoro_runner.engine import (  # noqa: E402
+    _contains_cjk,
+    _resolve_voice_path,
+    _split_long_text_for_kokoro,
+)
 
 
 class TestTextSplitting:
@@ -39,6 +43,32 @@ class TestTextSplitting:
         text = "Hello world，你好世界。Kokoro TTS 是本地语音合成。" * 10
         split = _split_long_text_for_kokoro(text, max_chars=150)
         assert split.replace("\n", "") == text
+
+
+class TestVoiceResolution:
+    def test_voice_file_in_model_root_wins(self, tmp_path):
+        voices = tmp_path / "voices"
+        voices.mkdir()
+        (voices / "zf_001.safetensors").write_bytes(b"voice")
+        resolved = _resolve_voice_path(str(tmp_path), "zf_001")
+        assert resolved == str(voices / "zf_001.safetensors")
+
+    def test_missing_voice_file_falls_back_to_literal_name(self, tmp_path):
+        # 本地 voices 目录无该音色时原样透传，由引擎决定（远程/内置音色）。
+        assert _resolve_voice_path(str(tmp_path), "zf_002") == "zf_002"
+
+    def test_missing_voices_directory_falls_back_to_literal_name(self, tmp_path):
+        assert _resolve_voice_path(str(tmp_path), "af_heart") == "af_heart"
+
+
+class TestLanguageDetection:
+    def test_cjk_text_is_detected(self):
+        assert _contains_cjk("你好，世界")
+        assert _contains_cjk("Kokoro 你好 mixed")
+
+    def test_plain_latin_text_is_not_cjk(self):
+        assert not _contains_cjk("hello world")
+        assert not _contains_cjk("")
 
 
 class TestProtocolCodec:
