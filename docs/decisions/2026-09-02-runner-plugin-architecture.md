@@ -1,6 +1,6 @@
-# Proposal: Runner 插件架构
+# Decision: Runner 插件架构
 
-Status: proposed
+Status: implemented
 
 Class: architecture
 
@@ -26,13 +26,15 @@ SwiftUI 环境清单、worker、测试和文档。
 | 扩展目标 | 新后端进入 daemon 内部 Provider 集合 | 新权重优先数据化，新后端可由独立 Runner 扩展 | replace |
 | Python 环境 | 各 Provider 自行寻找或安装 venv | 由独立环境管理层统一拥有，详见 uv 提案 | replace |
 | 首个迁移对象 | 未指定 | Kokoro 是首个完整 Runner 与真实验收样板 | add |
-| 架构权威 | README、代码及历史设计材料混合 | 本提案拥有未落地架构方向；代码与 README 继续拥有当前行为 | replace |
+| 架构权威 | README、代码及历史设计材料混合 | 本决策拥有架构方向与理由；代码与 README 继续拥有当前行为 | replace |
 | 当前 Provider 行为 | 已上线且被客户端使用 | 迁移期间保留，完成后由 Runner 路径接管 | retain then revise |
 | 安全边界 | daemon 管理隔离 worker | 保留并扩展到外部 Runner，禁止模型目录自动执行代码 | keep |
 | Phase 1 completion | fake Runner 组合测试曾被当作 generic foundation 完成证据 | 该测试只证明实验性骨架；完成必须包含启动失败清理、执行时信任绑定、显式版本解析，以及 environment 和 Runtime/scheduler adapter | replace |
+| 2026-09-03 架构复核 | 已把 built-in TTS/STT 切片与 isolated tests 视为完整开放架构 | 首次下载必须无需重启即可加载；注册模型必须绑定 immutable Profile snapshot；status 必须来自真实 Worker Instance；未实现的并发/cancel/capacity 不能宣称 current | replace |
+| Runner 权限模型 | manifest 的 network/filesystem 字段曾被描述为运行时沙箱 | v1 显式信任 Runner 等同授予 daemon 用户权限；MacAI 只强制身份、环境变量、模型/输出路径契约和进程监督。OS 级沙箱需独立安全决策 | replace |
 
-本次 bounded change 修订 isolated Runner skeleton 的信任与启动行为；它不改变既有
-Provider 运行行为、API 或模型注册数据。
+架构概念自 Phase 1A 起逐步落地；本决策以现在时描述当前已运行的架构，尚未落地的
+部分在 Migration 与 Implementation status 中显式标注，保持单一事实来源。
 
 ## Proposal
 
@@ -69,7 +71,7 @@ Capability Contract 定义 daemon 和客户端理解的稳定语义，如 `chat.
 Model Profile 是数据型模型说明，声明模型 artifact、来源、能力、Runner、adapter、
 资源估算和默认参数。兼容现有 Runner 的新权重只需新增或导入 Model Profile。
 
-精确草案由 [`model-profile-v1.md`](../specs/model-profile-v1.md) 拥有。
+精确契约由 [`model-profile-v1.md`](../specs/model-profile-v1.md) 拥有。
 
 ### Runner Plugin
 
@@ -85,7 +87,7 @@ Runner Plugin 是可独立分发的推理引擎适配器。它实现版本化 Ru
 模型家族确实需要特殊调用代码时，该 adapter 位于 Runner 插件内。MacAI 核心只
 理解 Capability Contract 和 Runner Protocol。
 
-Runner 包的精确元数据草案由
+Runner 包的精确元数据契约由
 [`runner-manifest-v1.md`](../specs/runner-manifest-v1.md) 拥有。
 
 ### Runtime Environment
@@ -99,19 +101,20 @@ Runner 和环境是多对一或一对多关系。只有环境身份完全相同�
 
 ### Worker Instance
 
-Worker Instance 是加载某个模型后的实际进程和运行状态。Runner descriptor/factory
-不持有单一全局模型状态；daemon 根据 Runner 声明的容量创建或复用实例。
+Worker Instance 是加载某个模型后的实际进程和运行状态。daemon 保存独立于协议 I/O
+锁的 instance snapshot；environment ready 不能代替 worker alive 或 model resident。
 
 每个实例至少暴露：
 
 - runner、model 和 instance ID；
 - PID、状态、effective device 和 resident RSS；
-- 最大并发及当前活跃请求；
+- 当前活跃请求；
 - load/inference timeout；
-- cancellation 和 graceful shutdown 能力。
+- graceful shutdown 与 crash/reload 状态。
 
-一个 Runner 只允许一个 resident model 时，由 manifest 声明 `max_instances = 1`
-或等价容量约束，scheduler 据此执行，而不是把限制固化进 Provider 单例结构。
+当前 v1 只接受 `max_instances = 1`、`max_concurrency_per_instance = 1`，并在解析期
+拒绝更高容量。多实例/多并发需要进程 actor、request dispatcher 与 instance pool，
+通过后续协议决策引入，不能由 manifest 提前宣称。
 
 ## Ownership boundaries
 
@@ -130,7 +133,7 @@ Worker Instance 是加载某个模型后的实际进程和运行状态。Runner 
 - 特定引擎或模型 API 的加载与调用；
 - capability 请求到引擎调用的转换；
 - tokenizer、G2P、prompt template 或模型家族 workaround；
-- 引擎内流式输出与取消的实现；
+- 引擎内流式输出；主动取消在后续协议决策中与 daemon 消费路径共同定义；
 - 引擎特有健康检查和设备报告。
 
 ### GUI and CLI consume
@@ -142,10 +145,13 @@ Worker Instance 是加载某个模型后的实际进程和运行状态。Runner 
 
 ## Discovery and trust
 
-Runner discovery 首版只读取两个来源：
+Runner discovery 当前实现只读取一个来源：
 
-1. 应用或仓库随附的 built-in Runner；
-2. `~/Library/Application Support/MacAIConsole/Plugins/<runner-id>/<version>/` 下由用户显式安装的 Runner。
+1. 应用或仓库随附的 built-in Runner（`runners/` 目录，由 daemon 启动时的
+   `bootstrap_runners` 发现、持久化 Model Profile 并装配）。
+
+`~/Library/Application Support/MacAIConsole/Plugins/<runner-id>/<version>/` 下由用户
+显式安装的第三方 Runner 属于设计边界，尚未实现（见 Migration）。
 
 发现不等于信任或执行。daemon 在启动 Runner 前验证：
 
@@ -159,6 +165,11 @@ Runner discovery 首版只读取两个来源：
 或等价机制让 daemon 自动执行任意代码。需要代码的模型必须通过显式安装的 Runner
 交付。
 
+v1 的 Runner 信任是本地代码信任：built-in 或用户显式信任的 Runner 以 aiworkd
+用户权限运行。daemon 强制 digest、无 shell argv、环境变量 allowlist、受管输入输出
+路径和越界结果拒绝；这些机制不构成 OS 级文件系统或网络沙箱。若产品要求不可信插件
+隔离，需另立安全决策并以真实逃逸测试验收。
+
 ## Protocol
 
 Runner Protocol v1 使用 daemon 监督的本地子进程。stdout 只承载 length-prefixed
@@ -166,12 +177,16 @@ UTF-8 JSON frame，stderr 只承载日志。协议包含：
 
 - `hello` / `initialize`；
 - `load` / `unload` / `shutdown`；
-- `infer` / `cancel`；
+- `infer`；
 - `health`；
 - `accepted` / `progress` / `delta` / `result` / `metrics` / `error`。
 
 精确 frame、状态机和错误映射由
 [`runner-protocol-v1.md`](../specs/runner-protocol-v1.md) 拥有。
+
+Runner 可返回 `cancelled` 终态；daemon→Runner 主动 cancel 不属于 current v1。
+客户端断开只终止 daemon 任务记录，不宣称底层计算已中止。主动取消必须与多路 I/O
+dispatcher 和真实 HTTP/task abort 消费方一起设计。
 
 ## Management surface
 
@@ -183,56 +198,61 @@ UTF-8 JSON frame，stderr 只承载日志。协议包含：
 - Model Profile 选择的 Runner 和 adapter；
 - requested / selected / effective device / reason。
 
-具体 endpoint 名称在实现切片中确定。迁移期可保留 `/api/providers` 组合视图，直到
-GUI、CLI 和文档完成切换。兼容期限要在实现提案中明确，不能留下无限期双 owner。
+当前实现：`GET /api/runners`（Runner、环境与 Worker Instance snapshot）与
+`POST /api/runners/{runner}/install`（显式环境安装，幂等）。`/api/providers` 组合视图
+继续服务 GUI/CLI，Runner-backed provider 以 `org.macai.*` 出现在同一视图与
+`/v1/models` 的 `owned_by` 中；Provider 全量迁移完成后按
+[`runner-migration-roadmap.md`](../plans/runner-migration-roadmap.md) 收尾，不留下
+无限期双 owner。
 
 ## Kokoro reference slice
 
-Kokoro 作为第一个完整 Runner，覆盖 Python 环境、TTS、临时 WAV、长请求、模型家族
-workaround、常驻 worker、RSS、故障隔离和 GUI 安装状态。它比只做 mock Runner 更能
-暴露真实组合问题。
+Kokoro 已作为第一个完整 Runner 落地（2026-09-02/03），覆盖 Python 环境、TTS、临时
+WAV、长请求、模型家族 workaround、常驻 worker、RSS、故障隔离和 GUI 安装状态；
+第二个切片 qwen3-asr（STT）复用同一边界并已删除 legacy。实施证据由
+[`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md)（Kokoro）与
+[`runner-migration-roadmap.md`](../plans/runner-migration-roadmap.md)（迁移）拥有。
 
-实施步骤和证据矩阵由
-[`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md) 拥有。
-
-本提案不预先认定 Kokoro 与其他 `mlx-audio` 模型必须共享同一个 Runner 或环境。
-首个切片先验证通用边界；后续只有在上游 API、依赖锁和 capability 行为确实一致时
-才合并。
+本决策不预先认定 Kokoro 与其他 `mlx-audio` 模型必须共享同一个 Runner 或环境。
+后续只有在上游 API、依赖锁和 capability 行为确实一致时才合并。
 
 ## Migration
 
-### Phase 1: generic foundation
+已落地的 Phase 与剩余工作的边界：
 
-- 实现 manifest/Profile 解析和 Runner registry；
-- 实现 Runner Protocol codec、process supervisor 和 instance state；
-- 建立 fake Runner composition test；
-- 启动失败必须 kill/wait 子进程并回收 stderr capture；Runner 执行的 package 必须从
-  已验证 digest 的私有 staging 副本启动；
-- Model Profile 必须以 SemVer 范围显式选择可信 Runner；多版本命中或不匹配必须失败，
-  不得按发现顺序选择；
-- 建立 daemon-owned uv environment 和 Runtime/scheduler 的 Runner Instance adapter，
-  使上述基础走入真实的 lifecycle/lease/内存裁决路径。
-- 保留当前 Provider 路径，避免在通用基础尚未自证时同时迁移全部模型。
+### Phase 1: generic foundation ✅（2026-09-02）
 
-### Phase 2: Kokoro
+- manifest/Profile 解析、Runner registry、Protocol codec、supervisor、instance state；
+- fake Runner composition test；启动失败 kill/wait 并从 digest-bound staging 副本启动；
+- SemVer 显式版本解析，多版本命中返回结构化 ambiguity；
+- daemon-owned uv environment manager（`resolve_uv`、单飞安装锁、staging sync、
+  probe、原子提升、重启恢复，`tests/runner_environment_manager.rs` 8 tests）；
+- Runtime/scheduler Runner Instance adapter（`runners/instance.rs` +
+  `RunnerProvider`，lease/busy guard/LRU/keep-alive 由既有 Runtime 裁决）；
+- Model Profile catalog 与 per-model immutable snapshot（SQLite `model_profiles` +
+  `registered_model_profiles`）。
 
-- 建立自包含 `runners/kokoro/` Runner project；
-- 用 `uv` lock 和受管环境替代 Kokoro 手工 venv；
-- 迁移现有 Kokoro worker 行为及测试；
-- 由 Model Profile 注册并通过 Runner registry 加载；
-- GUI 从 daemon 读取环境状态和安装动作。
+### Phase 2–3: Kokoro ✅（2026-09-02，legacy 删除 2026-09-03）
 
-### Phase 3: remove the parallel Kokoro path
+`runners/kokoro/` + adapter 迁移 + daemon 装配 + HTTP 管理面 + GUI 安装状态 +
+真实接线验收（zh/mixed/长文本 WAV），随后删除 `KokoroMlxProvider` 全消费面。
+证据由 [`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md) 拥有。
 
-真实模型路径通过后，删除旧 `KokoroMlxProvider` 装配、Kokoro 专属环境枚举和
-provider 白名单分支。删除必须覆盖源代码、注册、GUI、测试、文档和持久数据迁移，
-不能仅留下不可达旧代码。
+### Phase 3+（qwen3-asr 扩展切片）✅（2026-09-02/03）
 
-### Phase 4: next Runner
+`runners/qwen3-asr/`（STT capability）复用同一边界；推荐模型、注册路径与
+`ModelRepository.directoryProvider` 均指向 Runner，legacy 已删除。证据由
+[`runner-migration-roadmap.md`](../plans/runner-migration-roadmap.md) 拥有。
 
-第二个 Runner 应选择与 Kokoro 不同的 failure surface。推荐 MLX-LM，用来验证
-token streaming、finish reason、usage 和长上下文；完成后再判断是否迁移其余
-Python Provider。
+### 剩余 working 范围
+
+- **逐引擎迁移**：qwen3-tts → sherpa-onnx →（可选）mlx-lm；每迁一个删一个
+  legacy Provider 与 GUI `PythonEnvironmentSpec` 条目（roadmap owner）；
+- **未来主动取消/并发**：作为新的协议决策实现 worker 线程化、进程 actor、request
+  dispatcher、容量调度与 HTTP abort；current v1 保持 single-flight；
+- **Plugins 目录与显式信任**：第三方 Runner 的用户显式安装来源；
+- **收尾**：删除 `mock` / `macos-say` 测试 Provider 与 GUI
+  `PythonEnvironmentManager`（待最后一个 legacy 消费者迁移后）。
 
 ## Alternatives considered
 
@@ -262,47 +282,35 @@ commit `cadfa31` 收敛了已发现的启动、契约与信任边界：
 - `tests/runner_plugin_composition.rs`：发现 → 信任 → 握手 → load → infer →
   unload 的 isolated fake Runner 测试。
 
-它没有接入 `main.rs`、Runtime 或 scheduler，也没有 uv sync/probe/environment staging、
-真实 Kokoro Runner 或 GUI 状态路径。本次安全与契约修订已使实验性骨架：
+后续落地（2026-09-02/03，全部带直接证据）：
 
-- 在 boot deadline、hello identity 和 malformed protocol 三类启动失败后 kill/wait
-  子进程并 abort/await stderr capture；
-- 接受 `project = "."`，为 Profile defaults/resources 建立类型和校验，并以 SemVer
-  range 显式解析 Runner 版本；
-- 对同 ID 的多个可信匹配版本返回结构化 ambiguity，不再使用发现顺序；
-- discovery 时解析 Model Profile snapshot，启动前复核 package digest，并只执行
-  daemon-owned staging 副本。
+- Phase 1B uv environment manager 与 Phase 1C Runtime/scheduler 组合（证据见
+  [`uv-python-environments.md`](2026-09-02-uv-python-environments.md) 与
+  [`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md)）；
+- Model Profile 持久 authority：catalog 写入 `model_profiles`，首次注册复制到
+  `registered_model_profiles`；重启优先恢复 per-model snapshot；
+- daemon 装配：`Runtime::attach_runner` / `register_runner_profile` +
+  main.rs `bootstrap_runners`（built-in discovery → profile 持久化 → 无论 artifact
+  是否存在都先 bind/attach，首次下载无需重启）；
+- HTTP 管理面：`GET /api/runners` 与 `POST /api/runners/{runner}/install`；
+- GUI 消费端：设置页「Runner 引擎（实验）」区块（`runners()`/`installRunner`）；
+- Kokoro 真实接线验收（zh/mixed/长文本）与 legacy 删除；qwen3-asr（STT）
+  Runner 落地与 legacy 删除。
 
-本提案保持 `proposed`：Phase 1A isolated foundation、Phase 1B daemon-owned uv
-environment manager 与 Phase 1C Runtime/scheduler Runner Instance 组合均已完成
-（分别见 uv 提案与 [`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md)
-的 Implementation status）。当前下一步依次是 Kokoro 迁移基线（Phase 0 completion）、
-uv-lock Kokoro Runner（Phase 2）、adapter 迁移（Phase 3）和最终产品 cutover
-（Phase 4+5），以及 Model Profile 持久 snapshot 与 HTTP 管理面接入。
-
-Model Profile 持久 snapshot/digest 已先行落地（2026-09-02，Phase 4 首块）：
-`ModelProfile::canonical_json`/`digest` + `RegistryStore::model_profiles` 表与
-upsert/get/load。daemon 装配第二块同日本地：`Runtime::attach_runner`/
-`register_runner_profile` + main.rs `bootstrap_runners`（built-in Runner
-discovery → profile 持久化 → artifact 存在才 bind/attach）；HTTP 管理面第三块
-同日接入：`GET /api/runners`（状态）与 `POST /api/runners/{runner}/install`
-（显式环境安装）。Plugins 目录与显式信任、GUI 消费端、cancel 双向通路仍未接入
-（见
-[`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md) Phase 4）。
-
-下表是提案完成后的直接证据要求。`Result` 在实施前保持 `not run`。
+下方验收表记录本决策的核心证据义务；`Result` 为空表示尚未执行的承诺。
 
 | Acceptance | Failure surface | Direct evidence | Result |
 | --- | --- | --- | --- |
 | 已验证 package 的 fake Runner 可在 isolated test 中完成发现、信任、加载、调用和卸载；启动失败不留下进程，源码 package 修改后不可执行 | manifest、trust、supervision、composition | `cargo test -p ai-daemon --test runner_plugin_composition` | passed at `cadfa31`（5 tests） |
-| 新 Model Profile 可选择 Runner，且不需要修改 `main.rs` provider 白名单 | profile resolution、registration | `cargo test -p ai-daemon model_profile_runner_resolution`；负向搜索旧白名单 | not run |
-| Worker 崩溃返回 `backend_crashed`，aiworkd 仍可通过 health/status 访问 | process supervision、error mapping | `cargo test -p ai-daemon runner_crash_isolated` | not run |
-| lease、busy guard、LRU 和 keep-alive 对 Runner Instance 生效 | lifecycle composition | `cargo test -p ai-daemon runner_lifecycle` | not run |
-| 推理进行时 status/RSS 查询不等待 Runner I/O 锁 | observability concurrency | 确定性并发测试；Kokoro 长合成期间轮询 `/api/runtime` | not run |
-| 未信任 Runner 和模型目录代码不会被执行 | trust boundary | manifest/discovery 单测和拒绝路径集成测试 | not run |
-| GUI 仅根据 daemon descriptor 展示 Runner 与环境状态 | real client composition | MacAIConsole API decoding/request tests，加运行应用检查 | not run |
-| Kokoro 经新路径产生有效 WAV，并保持当前中文、英文、长文本、voice 和 speed 契约 | real model behavior | `docs/plans/kokoro-runner-reference.md` 的 unit、integration、real smoke matrix | not run |
-| 旧 Kokoro 路径在迁移完成后完全不可达 | source、registration、GUI、docs、tests | 负向搜索加全套测试 | not run |
+| 新 Model Profile 可选择 Runner，且首次下载前 Runner 已装配 | profile resolution、registration | `builtin_runner_attaches_before_its_model_artifact_exists`；动态 provider 按 descriptor 能力判定 | passed（2026-09-03） |
+| 已注册模型恢复注册时 Profile，catalog 更新不改写它 | persistence、restart | registry binding roundtrip + `registered_runner_model_restores_its_immutable_profile_snapshot` | passed（2026-09-03） |
+| Worker 崩溃返回 `backend_crashed`、清空 resident，并可重新 load | process supervision、status、recovery | `crashed_worker_clears_residency_and_can_be_reloaded` | passed（2026-09-03） |
+| lease、busy guard、LRU 和 keep-alive 对动态 Provider 走同一 Runtime owner | lifecycle composition | `active_model_lease_blocks_unload` + `attach_runner_registers_provider_and_shutdown_handle`；直接 Runner+Runtime 生命周期测试仍应补充 | partial |
+| status snapshot 不等待 Runner I/O 锁，停止后无 resident | observability concurrency | `status_reflects_environment_phase_without_resident_worker` + crash/reload composition | passed（2026-09-03） |
+| 未信任 Runner 不执行；已信任 Runner 以 daemon 用户权限执行 | trust boundary | discovery/trust 单测 + digest-bound staging；OS 权限边界由文档明确，不宣称沙箱 | passed for declared v1 boundary |
+| GUI 仅根据 daemon descriptor 展示 Runner 与环境状态 | real client composition | MacAIConsole `DaemonAPI` decoding/request tests + swift test 40 passed | passed（2026-09-03） |
+| Kokoro 经新路径产生有效 WAV，并保持当前中文、英文、长文本、voice 和 speed 契约 | real model behavior | `MACAI_KOKORO_SMOKE_MODEL=… scripts/tests/kokoro_runner_smoke.sh` + `MACAI_KOKORO_WIRING_MODEL=… cargo test --test runner_kokoro_real_wiring` | passed（2026-09-02，见 kokoro-runner-reference 证据表） |
+| 旧 Kokoro 路径在迁移完成后完全不可达 | source、registration、GUI、docs、tests | 负向搜索（零残留）+ 全套测试绿（legacy 删除 bounded change，2026-09-03） | passed |
 
 完整变更还必须运行：
 
@@ -319,10 +327,11 @@ Python 与真实 Kokoro 命令由 uv 决策和 Kokoro 计划拥有。
 
 - 通用协议可能演变成透传任意 JSON 的弱类型接口。v1 只接受已版本化 capability
   contract，模型特有参数必须命名空间化且不能改变核心语义。
-- 插件发现扩大本地代码执行面。显式信任、digest、环境变量 allowlist、路径约束和
-  进程隔离属于首版验收，不作为后续加固项。
+- 插件发现扩大本地代码执行面。v1 把显式信任定义为完整本地代码权限；digest、环境
+  变量 allowlist、路径契约和进程监督不提供 OS 沙箱。开放第三方安装前 UI 必须明确
+  展示这一授权边界；更弱权限模型需要独立安全设计。
 - 两套运行路径并存会产生状态和错误语义漂移。每个迁移切片都要有明确删除阶段。
 - Kokoro 的成功只能证明 TTS/Python Runner 路径，不能证明 token streaming、视觉
   输入或实时双向音频。
-- 插件协议一旦供第三方使用会形成兼容负担。v1 发布前必须先经过 fake Runner 和
-  Kokoro 两种实现验证；在此之前保持 draft。
+- 插件协议一旦供第三方使用会形成兼容负担。v1 已经过 fake Runner 与 Kokoro 两种
+  实现验证；在 Plugins 第三方安装路径落地前，对第三方作者的稳定性承诺保持克制。

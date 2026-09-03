@@ -22,7 +22,7 @@ Status: accepted（用户拍板：目标是把所有合适 provider 切换到 Ru
 | GUI Provider 行识别 Runner | ✓（e7b0a71 RUNNER tag） |
 | Runner 模型 voices 端点 | ✓（本就按 `spec.path/voices/*.safetensors` 扫描，116 voices 已实测；default_voice 缺省由引擎兜底 zf_001） |
 | 注册加载失败回滚 | ✓（ac3d640） |
-| cancel 双向通路（worker 线程化 + HTTP abort） | 未做（每引擎迁移时可后置；长请求目前不可中途取消，与 legacy 同级） |
+| 主动取消/多并发 | 不属于 current v1；需独立协议决策与进程 actor/HTTP abort 全链路 |
 | Plugins 目录 + 显式信任 | 未做（内置 Runner 先行；第三方插件后续） |
 | GUI 本地导入 provider 选择 | 暂缓（用户不选下拉；改用「默认注册目标集中由 daemon 决定」） |
 
@@ -51,11 +51,32 @@ Status: accepted（用户拍板：目标是把所有合适 provider 切换到 Ru
 
 ## 执行顺序
 
-1. 迁移 qwen3-asr-mlx（复用 MLX uv 环境套路，最接近 Kokoro）
+1. 迁移 qwen3-asr-mlx（复用 MLX uv 环境套路，最接近 Kokoro）✓（2026-09-02）
 2. qwen3-tts
 3. sherpa-onnx
 4. 收尾：删 mock/macos-say、删 GUI PythonEnvironmentManager（.build 一键安装 legacy 路径）、
    清理 scripts/legacy worker 与 `.build` 引用、更新 README/AGENTS。
+
+## Phase：kokoro / qwen3-asr legacy 删除（2026-09-03 落地）
+
+Cutover 验收满足后（真实 STT/TTS 闭环、推荐模型已指向 Runner、默认注册目标
+集中），删除了两个 legacy 引擎的完整消费面：
+
+- daemon：`providers/kokoro_mlx.rs`、`providers/qwen3_asr.rs` 与全部静态装配；
+  `/api/models/load` 的 `stt→qwen3-asr-mlx`、`tts→kokoro-mlx` 显式映射与
+  目录校验分支；`/v1/audio/speech` 空模型默认从「写死 kokoro-mlx」改为
+  「取第一个已注册 TTS 模型，无则 404」。`/api/models/pull` 对 `org.macai.*`
+  provider 的注册走 descriptor 能力判定（此前已有）。
+- GUI：`PythonEnvironmentSpec` 移除 `qwen3ASRMlx` / `kokoroMlx`；
+  `ModelRepository.directoryProvider` 的 TTS 目录与 Qwen3-ASR 目录检测改为
+  指向 `org.macai.kokoro` / `org.macai.qwen3-asr`（后者按 config.json
+  `model_type == "qwen3_asr"` 判别，4bit/8bit 兼容）；
+  `RuntimeStatusView` 的 provider→类型 fallback 更新。
+- scripts：删除 `kokoro_worker.py`、`qwen3_asr_mlx_worker.py` 及其 worker 测试
+  （Runner smoke 与 engine 单测已覆盖同语义）。
+- 兼容性代价：模型目录手动重注册同一目录的旧入口消失（双轨纪律本就要求
+  显式 `/api/models/load` provider 覆盖，无需兼容读取）；`AIWORK_KOKORO_PYTHON` /
+  `AIWORK_QWEN3_ASR_MLX_PYTHON` 覆盖变量不再有消费者。
 
 ## qwen3-asr-mlx 迁移子任务（2026-09-02 recon）
 
@@ -78,7 +99,7 @@ Legacy 语义已核对：
 4. ✅ 接线证据（真实）：Kokoro 生成 WAV → Qwen3-ASR Runner 转写逐字还原
    （"你好，这是Runner接线后的声音。"）。模型源补 preprocessor_config.json
    （mlx-audio feature extractor 必需，ModelScope 仓库未带；取原 8bit HF 同款）。
-5. ⏳ 默认切换 + 删 legacy。
+5. ✅ 默认切换 + 删 legacy（2026-09-03，见上方 Phase 记录）。
 
 阻塞（已解除）：模型源与 immutable revision 已核（ModelScope
 `aufklarer/Qwen3-ASR-0.6B-MLX-4bit` @ 3478f17…），下载链路缺陷（TLS/UA/502

@@ -32,7 +32,13 @@
 
 历史 `handoff.md` 可供追溯，不参与当前权威解析，也不接收新的工作提案或决策。
 
-## 当前工作提案
+## 当前决策记录
 
-- [Runner 插件架构](2026-09-02-runner-plugin-architecture.md)
-- [uv 管理全部 Python 环境](2026-09-02-uv-python-environments.md)
+- [Runner 插件架构](2026-09-02-runner-plugin-architecture.md)——`implemented`
+  （Phase 1–3 与 Kokoro / qwen3-asr 已落地；剩余迁移与 cancel/Plugins 见其 Migration）
+- [uv 管理全部 Python 环境](2026-09-02-uv-python-environments.md)——`implemented`
+  （daemon-owned uv environment manager 已落地；legacy venv 逐引擎退役中）
+- [模型下载链路修复](2026-09-02-download-link-fixes.md)——已落地修复记录
+
+当前实施顺序与迁移状态由
+[`docs/plans/runner-migration-roadmap.md`](../plans/runner-migration-roadmap.md) 追踪。

@@ -19,8 +19,8 @@ MacAIConsole (SwiftUI) ├── HTTP ──> aiworkd ──┬── llama.cpp 
 OpenAI-compatible SDK ┘                      ├── mlx-lm ──────> MLX / Metal
                                              ├── whisper.cpp ─> Core ML / Metal
                                              ├── sherpa-onnx ─> ONNX Runtime / CPU or Core ML
-                                             ├── Kokoro MLX ──> local TTS
-                                             └── Qwen3-TTS MLX ─> local TTS
+                                             ├── qwen3-tts ───> local TTS
+                                             └── Runners (uv Python) ─> Kokoro TTS / Qwen3-ASR STT
 
                                              ├── SQLite model registry
                                              ├── memory budget / LRU / keep-alive
@@ -53,8 +53,14 @@ OpenAI-compatible SDK ┘                      ├── mlx-lm ─────�
 | LLM | mlx-lm | MLX 模型目录（safetensors） | MLX / Metal |
 | STT | whisper.cpp | `.bin` + PCM WAV | Core ML 优先，Metal 回退 |
 | STT | sherpa-onnx | zh-int8-2025 model directory + PCM WAV | CPU（可选 Core ML） |
-| TTS | Kokoro MLX | Kokoro 模型目录 | MLX / Metal GPU |
-| TTS | Qwen3-TTS MLX | Qwen3-TTS CustomVoice 模型目录 | MLX / Metal GPU |
+| STT | org.macai.qwen3-asr（Runner） | Qwen3-ASR MLX 模型目录 + PCM WAV | MLX / Metal GPU |
+| TTS | qwen3-tts | Qwen3-TTS CustomVoice 模型目录 | MLX / Metal GPU |
+| TTS | org.macai.kokoro（Runner） | Kokoro 模型目录 | MLX / Metal GPU |
+
+Python worker 类引擎逐步迁移到 [Runner 架构](docs/decisions/2026-09-02-runner-plugin-architecture.md)：Kokoro 与 Qwen3-ASR 由 daemon 自动发现 `runners/` 下的 Runner 包并预先装配为动态 provider（`org.macai.*`），因此模型下载后无需重启 daemon。Python 环境由 uv 受管，GUI「设置 → Runner 引擎」一键安装；注册模型冻结当时的 Model Profile snapshot，后续 catalog 更新不会静默改写它。
+
+当前 Runner Protocol v1 是单实例、单活动推理。显式信任 Runner 等同信任本地代码以
+aiworkd 用户权限运行；digest、环境变量 allowlist 和输出路径校验不构成 OS 沙箱。
 
 每个 Provider 都是独立进程。这不是设计洁癖，是故障隔离的实际需要：某个推理引擎崩了——llama.cpp 段错误、Python worker OOM——`aiworkd` 本身保持存活，客户端收到的是 `backend_crashed` 这样的结构化错误，其他模型照常服务。另外有一点是刻意的：显式指定 `--provider` 是硬选择，provider 不可用就直接失败，绝不悄悄换一个。静默 fallback 会让「为什么变慢了」这种问题永远查不出原因。
 
@@ -69,13 +75,14 @@ keep-alive  pull        chat        run         transcribe
 speak       voice       logging     serve
 ```
 
-完整命令索引看 `macai --help`，参数和示例看 `macai <命令> --help`。几个容易混淆的：`start`、`unload`、`rename`、`keep-alive`、`remove` 操作的是 daemon 的运行状态或注册表；`remove` 删注册记录，磁盘上的模型文件保留——注册错了删掉重来，模型不用重新下载。
+完整命令索引看 `macai --help`，参数和示例看 `macai <命令> --help`。几个容易混淆的：`start`、`unload`、`rename`、`keep-alive`、`remove` 操作的是 daemon 的运行状态或注册表；`remove` 删注册记录，磁盘上的模型文件保留。Runner-backed 模型 ID 来自稳定 Model Profile，不能 rename。
 
 MacAIConsole 当前提供：
 
 - Runtime 状态和系统内存压力
 - 已加载模型、驻留内存和有效加速设备
 - 模型仓库、注册、加载、卸载、改名和详细设置
+- 模型页一键下载推荐模型（含 Runner 引擎 Kokoro / Qwen3-ASR），Provider 环境未就绪时行内提示安装入口；环境完成后再次点击即可注册启动，无需重启 daemon
 - Chat / STT / TTS 任务记录与详情
 - GUI / daemon 最近日志，支持 Info / Debug 过滤和级别着色
 - 菜单栏状态与 daemon 启停
@@ -88,7 +95,7 @@ MacAIConsole 当前提供：
 - Rust stable toolchain
 - Xcode Command Line Tools
 - CMake
-- Python 3.12（Kokoro TTS 与 sherpa-onnx STT 需要）
+- Python 3.12（sherpa-onnx STT 与 mlx-lm LLM 需要；Runner 的 uv 受管环境同样以 3.12 为基础解释器）
 
 仓库不含模型权重、编译好的第三方推理引擎和 Python 虚拟环境——这些都留在本机，仓库保持干净。
 
@@ -180,34 +187,28 @@ ggml-large-v3-turbo-encoder.mlmodelc/
 
 ### 5. 准备 Qwen3-ASR 0.6B
 
-Qwen3-ASR 通过 MLX 8-bit Provider 提供服务，Apple Silicon 上走 Metal 加速。
-
-Python 环境也可以在 MacAIConsole「设置 → Python 运行环境」里一键安装（需要本机有 Python 3.12，依赖版本与本节一致）。手动装的话：
+Qwen3-ASR 由 daemon 的 Qwen3-ASR Runner（`org.macai.qwen3-asr`）提供服务，Apple Silicon 上走 MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole「设置 → Runner 引擎（实验）」里对 `org.macai.qwen3-asr` 执行安装，或手动：
 
 ```bash
-uv venv --python 3.12 .build/qwen3-asr-mlx-venv
-uv pip install --python .build/qwen3-asr-mlx-venv/bin/python 'mlx-audio==0.5.0'
-
-hf download mlx-community/Qwen3-ASR-0.6B-8bit \
-  --local-dir "$HOME/Library/Application Support/MacAIConsole/Models/stt/Qwen3-ASR-0.6B-MLX-8bit"
+uv sync --project runners/qwen3-asr --locked --no-dev
 ```
 
-注册时选 `qwen3-asr-mlx`。daemon 会校验模型配置确实是 8-bit——选错 provider 会直接报错，这是故意的：
+推荐模型（4-bit，ModelScope: `aufklarer/Qwen3-ASR-0.6B-MLX-4bit`）可以在 MacAIConsole 模型页一键下载；模型目录放进 `~/Library/Application Support/MacAIConsole/Models/stt/`。
+
+注册时显式选择 Runner provider `org.macai.qwen3-asr`，模型 ID 必须与目录名一致：
 
 ```bash
 ./target/release/macai load \
-  "$HOME/Library/Application Support/MacAIConsole/Models/stt/Qwen3-ASR-0.6B-MLX-8bit" \
-  --id qwen3-asr-mlx-8bit \
+  "$HOME/Library/Application Support/MacAIConsole/Models/stt/Qwen3-ASR-0.6B-MLX-4bit" \
+  --id Qwen3-ASR-0.6B-MLX-4bit \
   --type stt \
-  --provider qwen3-asr-mlx \
+  --provider org.macai.qwen3-asr \
   --keep-alive always
 
 ./target/release/macai transcribe meeting.wav \
-  --model qwen3-asr-mlx-8bit \
+  --model Qwen3-ASR-0.6B-MLX-4bit \
   --language zh
 ```
-
-MLX Provider 固定使用 Metal。`AIWORK_QWEN3_ASR_MLX_PYTHON` 可以指向其他隔离环境。
 
 ### 6. 准备 sherpa-onnx zh-int8-2025
 
@@ -267,23 +268,28 @@ export AIWORK_SHERPA_ONNX_DEVICE=coreml
 
 ### 7. 准备 Kokoro TTS
 
+Kokoro 由 daemon 的 Kokoro Runner（`org.macai.kokoro`）提供服务，Python 环境由 uv 受管：在 MacAIConsole「设置 → Runner 引擎（实验）」里对 `org.macai.kokoro` 执行安装，或手动：
+
 ```bash
-python3.12 -m venv .build/kokoro-venv
-.build/kokoro-venv/bin/pip install \
-  mlx-audio \
-  "misaki[zh]" \
-  "misaki[en]" \
-  phonemizer-fork \
-  espeakng-loader
+uv sync --project runners/kokoro --locked --no-dev
 ```
 
-下载 [Kokoro-82M-zh-MLX](https://huggingface.co/1038lab/Kokoro-82M-zh-MLX)，模型目录放进：
+下载 [Kokoro-82M-zh-MLX](https://huggingface.co/1038lab/Kokoro-82M-zh-MLX)（推荐模型可在 MacAIConsole 模型页一键下载），模型目录放进：
 
 ```text
 ~/Library/Application Support/MacAIConsole/Models/tts/
 ```
 
-同样，`AIWORK_KOKORO_PYTHON` 可以指向其他 Python 环境。
+注册时显式选择 Runner provider `org.macai.kokoro`，模型 ID 与目录名一致：
+
+```bash
+./target/release/macai load \
+  "$HOME/Library/Application Support/MacAIConsole/Models/tts/kokoro-82m-zh" \
+  --id kokoro-82m-zh \
+  --type tts \
+  --provider org.macai.kokoro \
+  --keep-alive always
+```
 
 ### 8. 准备 Qwen3-TTS CustomVoice
 
@@ -437,7 +443,7 @@ POST /api/models/{id}/voice
 
 | Hermes 能力 | MacAI endpoint | MacAI Provider |
 | --- | --- | --- |
-| TTS（文字转语音） | `POST /v1/audio/speech` | Kokoro MLX |
+| TTS（文字转语音） | `POST /v1/audio/speech` | Kokoro（org.macai.kokoro Runner） |
 | STT（语音转文字） | `POST /v1/audio/transcriptions` | whisper.cpp |
 
 接入后的数据流：
@@ -663,13 +669,14 @@ scripts/build-app.sh release
 ```text
 crates/
 ├── ai-core/       # 共享模型、Provider、请求与响应类型
-├── ai-daemon/     # aiworkd、Provider、调度与管理 API；runners/ 为实验性 Runner 骨架（未接入既有 Provider、Runtime 或 scheduler 路径）
+├── ai-daemon/     # aiworkd、Provider、调度与管理 API；Runner discovery/environment/instance bridge
 └── ai-cli/        # macai 命令行客户端
 
 apps/
 └── MacAIConsole/  # 原生 SwiftUI 控制台
 
-scripts/           # llama.cpp、whisper.cpp 与 Kokoro worker 工具
+scripts/           # llama.cpp、whisper.cpp 构建脚本与剩余 legacy worker（mlx-lm、qwen3-tts、sherpa-onnx）
+runners/           # daemon 自动发现的 Runner 包（Kokoro TTS、Qwen3-ASR STT）
 samples/           # 第三方集成示例（含 Hermes TTS/STT 适配器）
 docs/              # 当前工作提案、决策、契约草案与实施计划
 ```
@@ -678,8 +685,8 @@ docs/              # 当前工作提案、决策、契约草案与实施计划
 
 当前优先方向：
 
-- [Runner 插件架构提案](docs/decisions/2026-09-02-runner-plugin-architecture.md)：把新模型接入从 daemon/GUI 硬编码迁到可发现 Runner 与数据化 Model Profile。
-- [uv Python 环境提案](docs/decisions/2026-09-02-uv-python-environments.md)：所有 Python Runner 使用可复现、可探测的 `uv` 环境。
+- [Runner 插件架构决策](docs/decisions/2026-09-02-runner-plugin-architecture.md)：把新模型接入从 daemon/GUI 硬编码迁到可发现 Runner 与数据化 Model Profile。
+- [uv Python 环境决策](docs/decisions/2026-09-02-uv-python-environments.md)：所有 Python Runner 使用可复现、可探测的 `uv` 环境。
 - [Kokoro 首个完整 Runner 计划](docs/plans/kokoro-runner-reference.md)：验证插件发现、环境安装、常驻 worker、TTS、故障隔离和真实模型路径。
 - readiness / deep-health、启动进度与完整可观测性
 - Homebrew、正式签名、公证与安装包
