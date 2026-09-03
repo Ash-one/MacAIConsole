@@ -15,7 +15,9 @@ struct AddModelSheet: View {
     @State private var errorMessage: String?
     @State private var idEdited = false
 
-    /// llm → .gguf（llama.cpp），stt → .bin（whisper.cpp）；tts 走系统 macos-say，暂无文件型模型。
+    /// llm → .gguf（llama.cpp），stt → .bin（whisper.cpp）；目录模型（Kokoro /
+    /// Qwen3-ASR / Qwen3-TTS / sherpa-onnx）由 ModelRepository 扫描并绑定
+    /// org.macai.* Runner。mock 与 macos-say 仅测试/CLI 兜底，无 GUI 注册入口。
     private let types: [(id: String, label: String, ext: String)] = [
         ("llm", "对话 · LLM", "gguf"),
         ("stt", "语音识别 · STT", "bin"),

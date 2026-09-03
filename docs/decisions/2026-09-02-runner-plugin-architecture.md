@@ -246,13 +246,15 @@ WAV、长请求、模型家族 workaround、常驻 worker、RSS、故障隔离�
 
 ### 剩余 working 范围
 
-- **逐引擎迁移**：qwen3-tts → sherpa-onnx →（可选）mlx-lm；每迁一个删一个
+- **逐引擎迁移**：qwen3-tts ✓ → sherpa-onnx ✓ → mlx-lm ✓；每迁一个删一个
   legacy Provider 与 GUI `PythonEnvironmentSpec` 条目（roadmap owner）；
 - **未来主动取消/并发**：作为新的协议决策实现 worker 线程化、进程 actor、request
   dispatcher、容量调度与 HTTP abort；current v1 保持 single-flight；
 - **Plugins 目录与显式信任**：第三方 Runner 的用户显式安装来源；
-- **收尾**：删除 `mock` / `macos-say` 测试 Provider 与 GUI
-  `PythonEnvironmentManager`（待最后一个 legacy 消费者迁移后）。
+- **收尾**：mock / macos-say 保留为测试与 CLI 兜底能力（2026-09-03 用户拍板）：
+  生产装配不含它们，GUI 无注册入口；删除 GUI `PythonEnvironmentManager`
+  （.build 一键安装路径，全部 Python worker 已迁移 Runner，仅剩 llama.cpp
+  二进制安装）。
 
 ## Alternatives considered
 

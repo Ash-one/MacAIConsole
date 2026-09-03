@@ -8,7 +8,8 @@ Status: accepted（用户拍板：目标是把所有合适 provider 切换到 Ru
   日常模型注册/默认 provider 指向 Runner 版本；最终删除 legacy Provider 路径。
 - 边界：Runner 的运行时形态是 python-uv 受管环境。因此 **llama.cpp / whisper.cpp
   这类外部原生二进制 provider 保留现有 Provider**（进程隔离已具备），不硬套 Runner；
-  `mock` 直接删除；`macos-say` 若无需要随清理。
+  `mock` / `macos-say` 保留为测试与 CLI 兜底能力（2026-09-03 用户拍板：不删除，
+  生产装配不含，GUI 无注册入口）。
 - 迁移全集（按序）：kokoro（✓ 已完成）→ qwen3-asr-mlx → qwen3-tts（✓ 2026-09-03）
   → sherpa-onnx → mlx-lm LLM（✓ 2026-09-03 完成，含 chat.v1 能力通路）。
 
@@ -53,7 +54,7 @@ Status: accepted（用户拍板：目标是把所有合适 provider 切换到 Ru
 
 1. 迁移 qwen3-asr-mlx（复用 MLX uv 环境套路，最接近 Kokoro）✓（2026-09-02）
 2. qwen3-tts ✓（2026-09-03，见下方 Phase 记录）
-3. sherpa-onnx
+3. sherpa-onnx ✓（2026-09-03，见下方 Phase 记录）
 4. mlx-lm LLM ✓（2026-09-03：chat.v1 能力通路 + `runners/mlx-lm` 包 + legacy 删除，
    见下方 Phase 记录）
 5. 收尾：删 mock/macos-say、删 GUI PythonEnvironmentManager（.build 一键安装 legacy 路径）、
@@ -61,6 +62,37 @@ Status: accepted（用户拍板：目标是把所有合适 provider 切换到 Ru
 6. 注册路径统一（2026-09-03，`1c206cc`）：main.rs provider 白名单只剩
    llm/stt 缺省两行，显式 provider（静态装配或 org.macai.*）统一走 descriptor
    能力判定；目录型校验合并为通用分支。加新引擎不再改 main.rs。
+
+## Phase：sherpa-onnx legacy 删除（2026-09-03 落地）
+
+迁移内容（`3a8e4b0`）：
+
+- `runners/sherpa-onnx/` 包：manifest `org.macai.sherpa-onnx`（capabilities=["stt.v1"]）、
+  uv 受管环境（sherpa-onnx 1.13.7）、Model Profile
+  `sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30`（HF 镜像
+  `csukuangfj/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30` @ `ad658fa0…`
+  immutable revision——GitHub release tar.bz2 无 commit SHA，无法满足 Profile
+  source 契约，选用维护者本人上传的同布局 HF 镜像）。
+- 依赖修复：sherpa-onnx 1.13.6 的 macOS arm64 wheel 缺 `sherpa-onnx-core`
+  （`libonnxruntime.dylib` 随 core 包分发），import 即 dlopen 失败；1.13.7
+  拆包修复。core 依赖 uv 0.9.21 未从 wheel METADATA 继承（真实 probe 暴露，
+  fake probe 会掩盖），pyproject 显式声明 `sherpa-onnx-core==1.13.7`。
+- adapter `macai_sherpa_onnx_runner`：legacy worker 全部语义迁移（PCM16 校验、
+  多声道下混、0.032s 分块流式解码、0.66s 右上下文 flush、仅中文）；
+  engine 校验单测 3 passed。
+- 真实接线证据：模型自带中文 test wav → 流式转写通顺文本 → unload →
+  shutdown_complete 全链路（`tests/real_wiring_manual.py`）。
+- legacy 完整消费面删除：`providers/sherpa_onnx.rs`、`scripts/sherpa_onnx_worker.py`
+  及 pytest、`scripts/setup-sherpa-onnx.sh`、runtime 静态装配
+  （providers/stt_providers 双表）、main.rs 的目录深校验分支与 format 分支、
+  GUI `PythonEnvironmentSpec.sherpaOnnx`。`AIWORK_SHERPA_ONNX_*` 零消费者。
+- GUI 目录识别启发式：sherpa 四文件目录改指 `org.macai.sherpa-onnx`。
+- mock / macos-say 处置（2026-09-03 用户拍板）：保留为测试与 CLI 兜底能力，
+  不删除；生产装配不含（`Runtime::new()` 测试构造注入），GUI 无注册入口。
+
+至此 Python worker 类 provider 全部迁移完成：`scripts/` 无 Python worker，
+生产 provider 只剩 llama.cpp / whisper.cpp 原生二进制 + `org.macai.*` Runner
+（kokoro / qwen3-asr / qwen3-tts / sherpa-onnx / mlx-lm）。
 
 ## Phase：qwen3-tts legacy 删除（2026-09-03 落地）
 

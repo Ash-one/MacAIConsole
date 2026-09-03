@@ -10,7 +10,7 @@ MacAIConsole 是 MacAI 的原生 macOS 控制台。应用只通过本地 HTTP AP
 - 日志：查看 GUI 与 daemon 最近日志，默认显示 Info，可启用 Debug，并按日志级别着色；"在访达中显示"可打开日志目录
 - 设置：应用外观（跟随系统 / 明亮 / 暗黑）、自动拉起守护进程开关、内存预算、运行环境、网络代理和模型下载源
   - 模型下载源可切换 Hugging Face 官方源、`hf-mirror.com` 或自定义 Hugging Face 兼容源；修改后重启 aiworkd 生效
-  - 运行环境：一键安装 llama.cpp（脚本克隆固定 revision 并编译 llama-server）与剩余 legacy Python worker（sherpa-onnx）所需的环境（仓库 `.build/` 下，与 daemon 探测路径一致），支持取消与失败重试；Kokoro、Qwen3-ASR、Qwen3-TTS 与 mlx-lm 已迁移到 Runner（uv 受管环境，见「Runner 引擎」区块）
+  - 运行环境：一键安装 llama.cpp（脚本克隆固定 revision 并编译 llama-server，仅剩的非 Runner 安装项）；Kokoro、Qwen3-ASR、Qwen3-TTS、sherpa-onnx 与 mlx-lm 已全部迁移到 Runner（uv 受管环境，见「Runner 引擎」区块）
 - 模型管理中的推荐模型在 Provider 环境未就绪时，行内会显示 daemon 上报的具体原因，并提供「安装运行环境」入口
 
 运行状态中的模型条目可进入详细设置页，调整 keep-alive、LLM 上下文长度和 TTS 默认音色。
