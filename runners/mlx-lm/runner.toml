@@ -1,0 +1,37 @@
+schema = "macai.runner.v1"
+id = "org.macai.mlx-lm"
+version = "0.1.0"
+protocols = ["macai.runner.v1"]
+capabilities = ["chat.v1"]
+
+[entrypoint]
+command = ["{environment.python}", "-m", "macai_mlx_lm_runner"]
+working_directory = "package"
+
+[runtime]
+type = "python-uv"
+id = "org.macai.mlx-lm-python"
+project = "."
+lock = "uv.lock"
+python = ">=3.12,<3.13"
+# probe argv 与 entrypoint 同受 shell 元字符校验（禁 `;`），用纯 import 表达式。
+probe = ["{environment.python}", "-c", "import mlx_lm, mlx.core"]
+
+[capacity]
+max_instances = 1
+max_concurrency_per_instance = 1
+
+[timeouts]
+boot_seconds = 30
+load_seconds = 300
+inference_seconds = 300
+shutdown_seconds = 10
+
+[security]
+network_during_install = true
+network_during_runtime = false
+inherit_environment = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
+
+[[models]]
+profile = "profiles/SmolLM2-135M-Instruct-8bit.toml"
+adapter = "mlx-lm-chat"

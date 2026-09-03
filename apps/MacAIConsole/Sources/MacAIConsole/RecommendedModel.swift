@@ -95,11 +95,31 @@ struct RecommendedModel: Identifiable, Hashable {
 
     static let builtIns: [RecommendedModel] = [
         RecommendedModel(
-            id: "qwen3-8b-mlx-4bit",
-            title: "Qwen3 8B · MLX 4-bit",
-            summary: "本地对话 LLM，Apple Silicon Metal 加速，使用 mlx-lm",
+            id: "SmolLM2-135M-Instruct-8bit",
+            title: "SmolLM2 135M · Instruct 8-bit (Runner)",
+            summary: "轻量本地对话 LLM，Apple Silicon Metal 加速（daemon Runner 受管环境）",
             modelType: "llm",
-            provider: "mlx-lm",
+            provider: "org.macai.mlx-lm",
+            repository: "mlx-community/SmolLM2-135M-Instruct-8bit",
+            files: [
+                "config.json",
+                "merges.txt",
+                "model.safetensors",
+                "model.safetensors.index.json",
+                "special_tokens_map.json",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "vocab.json",
+            ],
+            directoryName: "SmolLM2-135M-Instruct-8bit",
+            estimatedSizeBytes: 143_559_232
+        ),
+        RecommendedModel(
+            id: "qwen3-8b-mlx-4bit",
+            title: "Qwen3 8B · MLX 4-bit (Runner)",
+            summary: "本地对话 LLM，Apple Silicon Metal 加速（daemon Runner 受管环境）",
+            modelType: "llm",
+            provider: "org.macai.mlx-lm",
             repository: "mlx-community/Qwen3-8B-4bit",
             files: [
                 "added_tokens.json",

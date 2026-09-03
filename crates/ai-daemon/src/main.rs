@@ -496,7 +496,6 @@ async fn register_and_load_model(
     let requested_provider = request.provider.as_deref().map(str::trim);
     let provider: std::borrow::Cow<'_, str> = match (model_type, requested_provider) {
         ("llm", None | Some("llama.cpp")) => "llama.cpp".into(),
-        ("llm", Some("mlx-lm")) => "mlx-lm".into(),
         ("stt", None | Some("whisper.cpp")) => "whisper.cpp".into(),
         ("stt", Some("sherpa-onnx")) => "sherpa-onnx".into(),
         ("tts", Some("qwen3-tts")) => "qwen3-tts".into(),
@@ -552,11 +551,6 @@ async fn register_and_load_model(
                 ),
             );
         }
-        "mlx-lm" => {
-            if let Err(error) = providers::mlx_lm::validate_model_dir(&path) {
-                return provider_error(error);
-            }
-        }
         "sherpa-onnx" => {
             if let Err(error) = providers::sherpa_onnx::validate_model_dir(&path) {
                 return provider_error(error);
@@ -583,8 +577,6 @@ async fn register_and_load_model(
     };
     let (format, keep_alive_default, memory_estimate) = match provider {
         "llama.cpp" => (Some("gguf"), Some("5m"), Some(size_bytes)),
-        // MLX 权重体积即内存占用主体；real RSS 由 worker 上报。
-        "mlx-lm" => (Some("mlx"), Some("5m"), Some(size_bytes)),
         "whisper.cpp" => (Some("bin"), Some("always"), Some(size_bytes)),
         "qwen3-tts" => (Some("qwen3-tts"), Some("always"), Some(size_bytes)),
         "sherpa-onnx" => (
@@ -1687,6 +1679,20 @@ runner = ">=0.1,<0.2"
                 .map(|m| m.runtime.runtime_type.as_str()),
             Some("python-uv")
         );
+
+        // chat.v1 Runner（LLM 迁移）与既有 Runner 同一 discovery 契约。
+        let mlx_lm = registry
+            .entries()
+            .iter()
+            .find(|entry| {
+                entry
+                    .manifest
+                    .as_ref()
+                    .is_some_and(|manifest| manifest.id == "org.macai.mlx-lm")
+            })
+            .expect("repo built-in mlx-lm runner must be discovered");
+        assert_eq!(mlx_lm.state, ai_daemon::runners::RunnerState::Trusted);
+        assert_eq!(mlx_lm.reason, None);
     }
 
     #[tokio::test]
