@@ -42,6 +42,15 @@ CREATE TABLE IF NOT EXISTS model_profiles (
     snapshot TEXT NOT NULL,
     installed_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS registered_model_profiles (
+    model_id TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL,
+    runner TEXT NOT NULL,
+    compatibility TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    snapshot TEXT NOT NULL,
+    registered_at INTEGER NOT NULL
+);
 ";
 
 /// 持久化的 Runner Model Profile snapshot。`digest` 是 profile 规范 JSON 的
@@ -166,6 +175,10 @@ impl RegistryStore {
     pub fn remove(&self, id: &str) {
         if let Ok(conn) = self.conn.lock() {
             let _ = conn.execute("DELETE FROM models WHERE id = ?1", [id]);
+            let _ = conn.execute(
+                "DELETE FROM registered_model_profiles WHERE model_id = ?1",
+                [id],
+            );
         }
     }
 
@@ -284,6 +297,61 @@ impl RegistryStore {
         match rows {
             Ok(rows) => rows.flatten().collect(),
             Err(_) => vec![],
+        }
+    }
+
+    /// 将模型注册绑定到当时经过校验的 immutable Profile snapshot。后续 bundled
+    /// catalog 更新不会覆盖这里的 per-model authority。
+    pub fn bind_model_profile(&self, model_id: &str, profile: &StoredProfile) {
+        let Ok(conn) = self.conn.lock() else {
+            return;
+        };
+        let _ = conn.execute(
+            "INSERT INTO registered_model_profiles
+                (model_id, profile_id, runner, compatibility, digest, snapshot, registered_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(model_id) DO UPDATE SET
+                profile_id = ?2, runner = ?3, compatibility = ?4,
+                digest = ?5, snapshot = ?6",
+            rusqlite::params![
+                model_id,
+                profile.profile_id,
+                profile.runner,
+                profile.compatibility,
+                profile.digest,
+                profile.snapshot,
+                profile.installed_at as i64,
+            ],
+        );
+    }
+
+    pub fn load_model_profile_bindings(&self) -> std::collections::HashMap<String, StoredProfile> {
+        let Ok(conn) = self.conn.lock() else {
+            return std::collections::HashMap::new();
+        };
+        let mut stmt = match conn.prepare(
+            "SELECT model_id, profile_id, runner, compatibility, digest, snapshot, registered_at
+             FROM registered_model_profiles ORDER BY model_id",
+        ) {
+            Ok(stmt) => stmt,
+            Err(_) => return std::collections::HashMap::new(),
+        };
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                StoredProfile {
+                    profile_id: row.get(1)?,
+                    runner: row.get(2)?,
+                    compatibility: row.get(3)?,
+                    digest: row.get(4)?,
+                    snapshot: row.get(5)?,
+                    installed_at: row.get::<_, i64>(6)?.max(0) as u64,
+                },
+            ))
+        });
+        match rows {
+            Ok(rows) => rows.flatten().collect(),
+            Err(_) => std::collections::HashMap::new(),
         }
     }
 }
@@ -468,6 +536,11 @@ mod tests {
         assert_eq!(loaded.digest, "digest-a");
         assert_eq!(loaded.installed_at, 111);
 
+        store.upsert(&spec("runner-model"), 111, None);
+        store.bind_model_profile("runner-model", &loaded);
+        let bindings = store.load_model_profile_bindings();
+        assert_eq!(bindings["runner-model"], loaded);
+
         // 同 id 新 digest 覆盖内容，但 installed_at 保持首次注册值。
         store.upsert_profile(
             "kokoro-82m-zh",
@@ -484,6 +557,14 @@ mod tests {
             updated.installed_at, 111,
             "installed_at must be first-registration"
         );
+        assert_eq!(
+            store.load_model_profile_bindings()["runner-model"].digest,
+            "digest-a",
+            "catalog updates must not rewrite a registered model snapshot"
+        );
+
+        store.remove("runner-model");
+        assert!(store.load_model_profile_bindings().is_empty());
 
         assert!(store.get_profile("missing").is_none());
         drop(store);

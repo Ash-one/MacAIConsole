@@ -190,8 +190,9 @@ struct ModelRow: View {
 
     private var modelType: String {
         if let type = model.modelType, !type.isEmpty { return type }
-        if model.provider == "kokoro-mlx" { return "tts" }
-        if model.provider == "whisper.cpp" || model.provider == "qwen3-asr-mlx" || model.provider == "sherpa-onnx" { return "stt" }
+        if model.provider == "whisper.cpp" || model.provider == "sherpa-onnx" { return "stt" }
+        if model.provider == "org.macai.qwen3-asr" { return "stt" }
+        if model.provider.hasPrefix("org.macai.") { return "tts" }
         return "llm"
     }
 
@@ -338,8 +339,9 @@ struct RunningModelSettingsView: View {
 
     private var modelType: String {
         if let type = model.modelType, !type.isEmpty { return type }
-        if model.provider == "kokoro-mlx" { return "tts" }
-        if model.provider == "whisper.cpp" || model.provider == "qwen3-asr-mlx" || model.provider == "sherpa-onnx" { return "stt" }
+        if model.provider == "whisper.cpp" || model.provider == "sherpa-onnx" { return "stt" }
+        if model.provider == "org.macai.qwen3-asr" { return "stt" }
+        if model.provider.hasPrefix("org.macai.") { return "tts" }
         return "llm"
     }
 

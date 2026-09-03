@@ -20,23 +20,23 @@ final class ModelIdentifierTests: XCTestCase {
         )
         XCTAssertEqual(fileModel.modelID, "whisper.large-v3.q5_0")
 
-        let directory = root.appendingPathComponent("Qwen3-ASR-0.6B-MLX-8bit", isDirectory: true)
+        let directory = root.appendingPathComponent("Qwen3-ASR-0.6B-MLX-4bit", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let directoryModel = RepoModel(
             fileName: directory.lastPathComponent,
             modelType: "stt",
-            provider: "qwen3-asr-mlx",
+            provider: "org.macai.qwen3-asr",
             path: directory.path,
             sizeBytes: 0
         )
-        XCTAssertEqual(directoryModel.modelID, "Qwen3-ASR-0.6B-MLX-8bit")
+        XCTAssertEqual(directoryModel.modelID, "Qwen3-ASR-0.6B-MLX-4bit")
 
         let registered = ModelEntry(
             id: "Qwen3-ASR-0",
-            ownedBy: "aiworkd/qwen3-asr-mlx",
+            ownedBy: "aiworkd/org.macai.qwen3-asr",
             modelType: "stt",
             path: directory.path
         )
-        XCTAssertEqual(registered.originalID, "Qwen3-ASR-0.6B-MLX-8bit")
+        XCTAssertEqual(registered.originalID, "Qwen3-ASR-0.6B-MLX-4bit")
     }
 }
