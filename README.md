@@ -17,8 +17,7 @@ MacAI 是一个跑在你 Mac 上的本地 AI Runtime。它的核心只有一个�
 macai CLI ────────────┐
 MacAIConsole (SwiftUI) ├── HTTP ──> aiworkd ──┬── llama.cpp ──> GGUF / Metal
 OpenAI-compatible SDK ┘                      ├── whisper.cpp ─> Core ML / Metal
-                                             ├── sherpa-onnx ─> ONNX Runtime / CPU or Core ML
-                                             └── Runners (uv Python) ─> Kokoro TTS / Qwen3-ASR STT / Qwen3-TTS / mlx-lm LLM
+                                             └── Runners (uv Python) ─> Kokoro TTS / Qwen3-ASR STT / Qwen3-TTS / sherpa-onnx STT / mlx-lm LLM
 
                                              ├── SQLite model registry
                                              ├── memory budget / LRU / keep-alive
@@ -50,7 +49,7 @@ OpenAI-compatible SDK ┘                      ├── whisper.cpp ─> Core M
 | LLM | llama.cpp | GGUF | Metal / Accelerate |
 | LLM | org.macai.mlx-lm（Runner） | MLX 模型目录（safetensors） | MLX / Metal |
 | STT | whisper.cpp | `.bin` + PCM WAV | Core ML 优先，Metal 回退 |
-| STT | sherpa-onnx | zh-int8-2025 model directory + PCM WAV | CPU（可选 Core ML） |
+| STT | org.macai.sherpa-onnx（Runner） | zh-int8-2025 model directory + PCM WAV | CPU |
 | STT | org.macai.qwen3-asr（Runner） | Qwen3-ASR MLX 模型目录 + PCM WAV | MLX / Metal GPU |
 | TTS | org.macai.qwen3-tts（Runner） | Qwen3-TTS CustomVoice 模型目录 | MLX / Metal GPU |
 | TTS | org.macai.kokoro（Runner） | Kokoro 模型目录 | MLX / Metal GPU |
@@ -93,7 +92,7 @@ MacAIConsole 当前提供：
 - Rust stable toolchain
 - Xcode Command Line Tools
 - CMake
-- Python 3.12（sherpa-onnx STT 需要；Runner 的 uv 受管环境同样以 3.12 为基础解释器）
+- Python 3.12（Runner 的 uv 受管环境以 3.12 为基础解释器）
 
 仓库不含模型权重、编译好的第三方推理引擎和 Python 虚拟环境——这些都留在本机，仓库保持干净。
 
@@ -208,7 +207,15 @@ uv sync --project runners/qwen3-asr --locked --no-dev
   --language zh
 ```
 
-### 6. 准备 sherpa-onnx zh-int8-2025
+### 6. 准备 sherpa-onnx zh-int8-2025（Runner）
+
+sherpa-onnx 由 daemon 的 sherpa-onnx Runner（`org.macai.sherpa-onnx`）提供服务，
+Python 环境由 uv 受管：在 MacAIConsole「设置 → Runner 引擎（实验）」里对
+`org.macai.sherpa-onnx` 执行安装，或手动：
+
+```bash
+uv sync --project runners/sherpa-onnx --locked --no-dev
+```
 
 sherpa-onnx 使用官方 streaming Zipformer 中文 int8 模型
 `sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30`。模型目录必须保留以下
@@ -222,47 +229,35 @@ sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/
 └── joiner.int8.onnx
 ```
 
-安装与模型下载：
+模型下载（GitHub release 包或维护者 HF 镜像均可，布局一致）：
 
 ```bash
-./scripts/setup-sherpa-onnx.sh
 curl -L -o sherpa-onnx-model.tar.bz2 \
   https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30.tar.bz2
 tar xf sherpa-onnx-model.tar.bz2
 rm sherpa-onnx-model.tar.bz2
 ```
 
-注册并运行。`aiworkd` 会校验完整目录，加载时启动一个常驻 Python worker，
-识别时复用同一个 sherpa-onnx recognizer：
+注册时显式选择 Runner provider `org.macai.sherpa-onnx`，模型 ID 与目录名一致：
 
 ```bash
 ./target/release/macai load \
   ./sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30 \
-  --id sherpa-onnx-zh-int8-2025 \
+  --id sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30 \
   --type stt \
-  --provider sherpa-onnx \
+  --provider org.macai.sherpa-onnx \
   --keep-alive always
 
 ./target/release/macai transcribe meeting.m4a \
-  --model sherpa-onnx-zh-int8-2025 \
+  --model sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30 \
   --language zh
 ```
 
-上传入口会把 wav / mp3 / flac / ogg / m4a 统一解码为 PCM WAV；worker 再将
+上传入口会把 wav / mp3 / flac / ogg / m4a 统一解码为 PCM WAV；Runner 再将
 多声道输入下混为单声道并按 streaming chunk 解码，因此长录音不会因一次性
 把全部音频交给模型而改变内存行为。该模型只支持中文；`--language` 省略或
-使用 `zh` / `zh-CN` / `Chinese` 均可。
-
-默认使用 CPU，显式选择 Core ML 可设置：
-
-```bash
-export AIWORK_SHERPA_ONNX_DEVICE=coreml
-```
-
-也可以用 `AIWORK_SHERPA_ONNX_PYTHON` 指向已安装 `sherpa-onnx==1.13.6` 与
-`numpy>=1.26,<3` 的其他 Python 解释器。`AIWORK_SHERPA_ONNX_THREADS` 控制 ONNX Runtime 线程数；
-`AIWORK_SHERPA_ONNX_LOAD_TIMEOUT_SECS` 与
-`AIWORK_SHERPA_ONNX_INFERENCE_TIMEOUT_SECS` 分别控制加载和识别超时。
+使用 `zh` / `zh-CN` / `Chinese` 均可。当前 Runner 固定 CPU 推理（Core ML
+provider 需 runner 包内显式启用后另行声明）。
 
 ### 7. 准备 Kokoro TTS
 
@@ -689,8 +684,8 @@ crates/
 apps/
 └── MacAIConsole/  # 原生 SwiftUI 控制台
 
-scripts/           # llama.cpp、whisper.cpp 构建脚本与剩余 legacy worker（sherpa-onnx）
-runners/           # daemon 自动发现的 Runner 包（Kokoro TTS、Qwen3-ASR STT、Qwen3-TTS、mlx-lm LLM）
+scripts/           # llama.cpp、whisper.cpp 构建脚本
+runners/           # daemon 自动发现的 Runner 包（Kokoro TTS、Qwen3-ASR STT、Qwen3-TTS、sherpa-onnx STT、mlx-lm LLM）
 samples/           # 第三方集成示例（含 Hermes TTS/STT 适配器）
 docs/              # 当前工作提案、决策、契约草案与实施计划
 ```
