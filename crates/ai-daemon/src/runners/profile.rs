@@ -86,6 +86,15 @@ impl ModelProfile {
         Self::parse(&contents)
     }
 
+    /// 解析 SQLite 中保存的 canonical JSON snapshot。持久快照走与 TOML 输入相同的
+    /// 语义校验，避免数据库内容绕过 schema、revision 或路径约束。
+    pub fn from_snapshot(contents: &str) -> Result<Self, ProfileError> {
+        let profile: Self = serde_json::from_str(contents)
+            .map_err(|error| ProfileError(format!("invalid model profile snapshot: {error}")))?;
+        profile.validate()?;
+        Ok(profile)
+    }
+
     pub fn validate(&self) -> Result<(), ProfileError> {
         if self.schema != MODEL_PROFILE_SCHEMA_V1 {
             return Err(ProfileError(format!(

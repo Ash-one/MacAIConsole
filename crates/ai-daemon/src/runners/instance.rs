@@ -12,9 +12,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::Duration;
 
+use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
@@ -26,11 +27,40 @@ use super::{
 /// 单个 Runner instance：监督中的子进程 + manifest 语义。
 /// shutdown 时进程被 take 出来消费，None 表示已关闭。
 struct RunnerInstance {
-    manifest: RunnerManifest,
     process: Mutex<Option<RunnerProcess>>,
-    /// 环境的运行解释器（`<env_root>/.venv/bin/python`，manifest
-    /// `{environment.python}` 模板的解析结果）。
-    runtime_python: PathBuf,
+    state: StdRwLock<RunnerInstanceSnapshot>,
+}
+
+/// 不获取 Runner I/O 锁即可读取的实例状态。它是 provider/runtime status 的唯一
+/// resident authority；environment ready 不能替代实际进程与已加载模型状态。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RunnerInstanceSnapshot {
+    pub runner_id: String,
+    pub instance_id: String,
+    pub pid: Option<u32>,
+    pub alive: bool,
+    pub loaded_model: Option<String>,
+    pub effective_device: Option<String>,
+    pub resident_bytes: Option<u64>,
+    pub active_requests: u32,
+    pub last_error: Option<String>,
+}
+
+impl RunnerInstance {
+    fn snapshot(&self) -> RunnerInstanceSnapshot {
+        self.state
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn update_state(&self, update: impl FnOnce(&mut RunnerInstanceSnapshot)) {
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        update(&mut state);
+    }
 }
 
 /// Runner instance manager：跨模型共享的进程与协议 owner。
@@ -153,6 +183,32 @@ impl RunnerInstanceManager {
         self.registry.entries().iter().cloned().collect()
     }
 
+    /// 返回一个无需等待推理 I/O 的实例快照。若进程锁空闲，会顺便用 try_wait
+    /// 刷新已退出进程；推理进行中则返回独立状态锁中的最近快照。
+    pub async fn instance_snapshot(&self, runner_id: &str) -> Option<RunnerInstanceSnapshot> {
+        let instance = self.instances.lock().await.get(runner_id).cloned()?;
+        if let Ok(mut guard) = instance.process.try_lock() {
+            if let Some(process) = guard.as_mut() {
+                match process.try_wait() {
+                    Ok(Some(status)) => instance.update_state(|state| {
+                        state.alive = false;
+                        state.loaded_model = None;
+                        state.active_requests = 0;
+                        state.last_error = Some(format!("runner exited with {status}"));
+                    }),
+                    Ok(None) => {}
+                    Err(error) => instance.update_state(|state| {
+                        state.alive = false;
+                        state.loaded_model = None;
+                        state.active_requests = 0;
+                        state.last_error = Some(format!("cannot inspect runner process: {error}"));
+                    }),
+                }
+            }
+        }
+        Some(instance.snapshot())
+    }
+
     fn next_id(&self, prefix: &str) -> String {
         let n = self.request_counter.fetch_add(1, Ordering::SeqCst);
         format!("{prefix}-{n}")
@@ -261,26 +317,79 @@ impl RunnerInstanceManager {
                     phase: status.phase.as_str().to_string(),
                 })?;
 
-        let mut instances = self.instances.lock().await;
-        if let Some(existing) = instances.get(runner_id) {
-            // 复用 instance：同一 Runner 只有一个常驻实例（v1 容量边界）。
-            let mut guard = existing.process.lock().await;
-            let process = guard
-                .as_mut()
-                .ok_or_else(|| RunnerInstanceError::ProtocolViolation {
-                    message: "instance process was closed".to_string(),
-                })?;
-            let reply = process
-                .request(
-                    "load",
-                    &self.next_id("load"),
-                    profile_payload,
-                    "loaded",
-                    Duration::from_secs(manifest.timeouts.load_seconds),
-                )
-                .await?;
-            validate_loaded(&reply, model_id)?;
-            return Ok(());
+        let existing = self.instances.lock().await.get(runner_id).cloned();
+        if let Some(existing) = existing {
+            let snapshot = self
+                .instance_snapshot(runner_id)
+                .await
+                .unwrap_or_else(|| existing.snapshot());
+            if !snapshot.alive {
+                self.shutdown_instance(runner_id).await?;
+            } else {
+                // v1 明确是单实例/单并发；Runtime 在切换模型前先走 unload。
+                let mut guard = existing.process.lock().await;
+                let process =
+                    guard
+                        .as_mut()
+                        .ok_or_else(|| RunnerInstanceError::ProtocolViolation {
+                            message: "instance process was closed".to_string(),
+                        })?;
+                let reply = process
+                    .request(
+                        "load",
+                        &self.next_id("load"),
+                        profile_payload,
+                        "loaded",
+                        Duration::from_secs(manifest.timeouts.load_seconds),
+                    )
+                    .await;
+                match reply {
+                    Ok(reply) => {
+                        let metadata =
+                            match validate_loaded(&reply, model_id, &manifest.capabilities) {
+                                Ok(metadata) => metadata,
+                                Err(error) => {
+                                    existing.update_state(|state| {
+                                        state.alive = false;
+                                        state.loaded_model = None;
+                                        state.resident_bytes = None;
+                                        state.last_error = Some(error.to_string());
+                                    });
+                                    let process = guard.take();
+                                    drop(guard);
+                                    if let Some(process) = process {
+                                        let _ = process.shutdown().await;
+                                    }
+                                    self.instances.lock().await.remove(runner_id);
+                                    return Err(error);
+                                }
+                            };
+                        existing.update_state(|state| {
+                            state.alive = true;
+                            state.loaded_model = Some(model_id.to_string());
+                            state.effective_device = metadata.effective_device;
+                            state.resident_bytes = metadata.resident_bytes;
+                            state.last_error = None;
+                        });
+                        return Ok(());
+                    }
+                    Err(error) => {
+                        existing.update_state(|state| {
+                            state.alive = false;
+                            state.loaded_model = None;
+                            state.resident_bytes = None;
+                            state.last_error = Some(error.to_string());
+                        });
+                        let process = guard.take();
+                        drop(guard);
+                        if let Some(process) = process {
+                            let _ = process.shutdown().await;
+                        }
+                        self.instances.lock().await.remove(runner_id);
+                        return Err(error.into());
+                    }
+                }
+            }
         }
 
         let instance = Arc::new(
@@ -302,10 +411,54 @@ impl RunnerInstanceManager {
                     "loaded",
                     Duration::from_secs(manifest.timeouts.load_seconds),
                 )
-                .await?;
-            validate_loaded(&reply, model_id)?;
+                .await;
+            match reply {
+                Ok(reply) => {
+                    let metadata = match validate_loaded(&reply, model_id, &manifest.capabilities) {
+                        Ok(metadata) => metadata,
+                        Err(error) => {
+                            instance.update_state(|state| {
+                                state.alive = false;
+                                state.loaded_model = None;
+                                state.resident_bytes = None;
+                                state.last_error = Some(error.to_string());
+                            });
+                            let process = guard.take();
+                            drop(guard);
+                            if let Some(process) = process {
+                                let _ = process.shutdown().await;
+                            }
+                            return Err(error);
+                        }
+                    };
+                    instance.update_state(|state| {
+                        state.alive = true;
+                        state.loaded_model = Some(model_id.to_string());
+                        state.effective_device = metadata.effective_device;
+                        state.resident_bytes = metadata.resident_bytes;
+                        state.last_error = None;
+                    });
+                }
+                Err(error) => {
+                    instance.update_state(|state| {
+                        state.alive = false;
+                        state.loaded_model = None;
+                        state.resident_bytes = None;
+                        state.last_error = Some(error.to_string());
+                    });
+                    let process = guard.take();
+                    drop(guard);
+                    if let Some(process) = process {
+                        let _ = process.shutdown().await;
+                    }
+                    return Err(error.into());
+                }
+            }
         }
-        instances.insert(runner_id.to_string(), instance);
+        self.instances
+            .lock()
+            .await
+            .insert(runner_id.to_string(), instance);
         Ok(())
     }
 
@@ -337,10 +490,21 @@ impl RunnerInstanceManager {
             let _ = std::fs::remove_dir_all(&instance_temp);
             return Err(error.into());
         }
+        let instance_id = self.next_id("instance");
+        let pid = process.pid();
         Ok(RunnerInstance {
-            manifest: manifest.clone(),
             process: Mutex::new(Some(process)),
-            runtime_python,
+            state: StdRwLock::new(RunnerInstanceSnapshot {
+                runner_id: manifest.id.clone(),
+                instance_id,
+                pid,
+                alive: true,
+                loaded_model: None,
+                effective_device: None,
+                resident_bytes: None,
+                active_requests: 0,
+                last_error: None,
+            }),
         })
     }
 
@@ -368,79 +532,97 @@ impl RunnerInstanceManager {
                 message: format!("no loaded instance for runner '{runner_id}'"),
             })?;
         let request_id = self.next_id("infer");
+        instance
+            .update_state(|state| state.active_requests = state.active_requests.saturating_add(1));
         let mut guard = instance.process.lock().await;
-        let process = guard
-            .as_mut()
-            .ok_or_else(|| RunnerInstanceError::ProtocolViolation {
-                message: "instance process was closed".to_string(),
-            })?;
-        process
-            .send(&super::Envelope::new(
-                "infer",
-                &request_id,
-                json!({
-                    "capability": capability,
-                    "request": request,
-                    "output": output,
-                }),
-            ))
-            .await?;
-        loop {
-            let event = tokio::time::timeout(deadline, process.receive(deadline))
-                .await
-                .map_err(|_| {
-                    RunnerInstanceError::Supervisor(SupervisorError::Deadline("inference"))
-                })??;
-            if event.id != request_id {
-                return Err(RunnerInstanceError::ProtocolViolation {
-                    message: format!(
-                        "event id '{}' does not match inference '{request_id}'",
-                        event.id
-                    ),
-                });
-            }
-            match event.message_type.as_str() {
-                "accepted" => on_event(InferEvent::Accepted(event.payload)),
-                "progress" => on_event(InferEvent::Progress(event.payload)),
-                "delta" => on_event(InferEvent::Delta(event.payload)),
-                "metrics" => on_event(InferEvent::Metrics(event.payload)),
-                "result" => {
-                    on_event(InferEvent::Result(event.payload.clone()));
-                    return Ok(event.payload);
-                }
-                "error" => {
-                    let code = event
-                        .payload
-                        .get("code")
-                        .and_then(Value::as_str)
-                        .unwrap_or("internal")
-                        .to_string();
-                    let message = event
-                        .payload
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    on_event(InferEvent::Error {
-                        code: code.clone(),
-                        message: message.clone(),
-                    });
-                    return Err(RunnerInstanceError::RunnerReportedError { code, message });
-                }
-                "cancelled" => {
-                    on_event(InferEvent::Cancelled);
-                    return Err(RunnerInstanceError::RunnerReportedError {
-                        code: "cancelled".to_string(),
-                        message: "inference cancelled".to_string(),
-                    });
-                }
-                other => {
+        let result = async {
+            let process = guard
+                .as_mut()
+                .ok_or_else(|| RunnerInstanceError::ProtocolViolation {
+                    message: "instance process was closed".to_string(),
+                })?;
+            process
+                .send(&super::Envelope::new(
+                    "infer",
+                    &request_id,
+                    json!({
+                        "capability": capability,
+                        "request": request,
+                        "output": output,
+                    }),
+                ))
+                .await?;
+            loop {
+                let event = tokio::time::timeout(deadline, process.receive(deadline))
+                    .await
+                    .map_err(|_| {
+                        RunnerInstanceError::Supervisor(SupervisorError::Deadline("inference"))
+                    })??;
+                if event.id != request_id {
                     return Err(RunnerInstanceError::ProtocolViolation {
-                        message: format!("unexpected inference event '{other}'"),
+                        message: format!(
+                            "event id '{}' does not match inference '{request_id}'",
+                            event.id
+                        ),
                     });
+                }
+                match event.message_type.as_str() {
+                    "accepted" => on_event(InferEvent::Accepted(event.payload)),
+                    "progress" => on_event(InferEvent::Progress(event.payload)),
+                    "delta" => on_event(InferEvent::Delta(event.payload)),
+                    "metrics" => on_event(InferEvent::Metrics(event.payload)),
+                    "result" => {
+                        on_event(InferEvent::Result(event.payload.clone()));
+                        return Ok(event.payload);
+                    }
+                    "error" => {
+                        let code = event
+                            .payload
+                            .get("code")
+                            .and_then(Value::as_str)
+                            .unwrap_or("internal")
+                            .to_string();
+                        let message = event
+                            .payload
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        on_event(InferEvent::Error {
+                            code: code.clone(),
+                            message: message.clone(),
+                        });
+                        return Err(RunnerInstanceError::RunnerReportedError { code, message });
+                    }
+                    "cancelled" => {
+                        on_event(InferEvent::Cancelled);
+                        return Err(RunnerInstanceError::RunnerReportedError {
+                            code: "cancelled".to_string(),
+                            message: "inference cancelled".to_string(),
+                        });
+                    }
+                    other => {
+                        return Err(RunnerInstanceError::ProtocolViolation {
+                            message: format!("unexpected inference event '{other}'"),
+                        });
+                    }
                 }
             }
         }
+        .await;
+        instance.update_state(|state| {
+            state.active_requests = state.active_requests.saturating_sub(1);
+            if matches!(
+                result,
+                Err(RunnerInstanceError::Supervisor(_))
+                    | Err(RunnerInstanceError::ProtocolViolation { .. })
+            ) {
+                state.alive = false;
+                state.loaded_model = None;
+                state.last_error = result.as_ref().err().map(ToString::to_string);
+            }
+        });
+        result
     }
 
     /// 卸载模型（实例内的模型状态）；进程保留。
@@ -464,7 +646,7 @@ impl RunnerInstanceManager {
             .ok_or_else(|| RunnerInstanceError::ProtocolViolation {
                 message: "instance process was closed".to_string(),
             })?;
-        process
+        let result = process
             .request(
                 "unload",
                 &self.next_id("unload"),
@@ -472,8 +654,25 @@ impl RunnerInstanceManager {
                 "unloaded",
                 deadline,
             )
-            .await?;
-        Ok(())
+            .await;
+        match result {
+            Ok(_) => {
+                instance.update_state(|state| {
+                    state.loaded_model = None;
+                    state.resident_bytes = None;
+                    state.last_error = None;
+                });
+                Ok(())
+            }
+            Err(error) => {
+                instance.update_state(|state| {
+                    state.alive = false;
+                    state.loaded_model = None;
+                    state.last_error = Some(error.to_string());
+                });
+                Err(error.into())
+            }
+        }
     }
 
     /// 关闭并移除一个 instance：graceful shutdown → kill fallback → 清理临时目录。
@@ -482,6 +681,11 @@ impl RunnerInstanceManager {
         let Some(instance) = instance else {
             return Ok(());
         };
+        instance.update_state(|state| {
+            state.alive = false;
+            state.loaded_model = None;
+            state.active_requests = 0;
+        });
         let mut guard = instance.process.lock().await;
         // shutdown() 消费 RunnerProcess；None 表示已被关闭。
         let Some(process) = guard.take() else {
@@ -493,7 +697,16 @@ impl RunnerInstanceManager {
 }
 
 /// `loaded` 回复的最小契约校验（runner-protocol-v1 §load）。
-fn validate_loaded(reply: &super::Envelope, model_id: &str) -> Result<(), RunnerInstanceError> {
+struct LoadedMetadata {
+    effective_device: Option<String>,
+    resident_bytes: Option<u64>,
+}
+
+fn validate_loaded(
+    reply: &super::Envelope,
+    model_id: &str,
+    expected_capabilities: &[String],
+) -> Result<LoadedMetadata, RunnerInstanceError> {
     if reply.message_type != "loaded" {
         return Err(RunnerInstanceError::ProtocolViolation {
             message: format!("expected 'loaded', received '{}'", reply.message_type),
@@ -503,13 +716,58 @@ fn validate_loaded(reply: &super::Envelope, model_id: &str) -> Result<(), Runner
         .payload
         .get("model_id")
         .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !reported.is_empty() && reported != model_id {
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| RunnerInstanceError::ProtocolViolation {
+            message: "loaded reply omitted model_id".to_string(),
+        })?;
+    if reported != model_id {
         return Err(RunnerInstanceError::ProtocolViolation {
             message: format!("loaded model_id '{reported}' does not match '{model_id}'"),
         });
     }
-    Ok(())
+    let effective_device = reply
+        .payload
+        .get("effective_device")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| RunnerInstanceError::ProtocolViolation {
+            message: "loaded reply omitted effective_device".to_string(),
+        })?;
+    let capabilities = reply
+        .payload
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .ok_or_else(|| RunnerInstanceError::ProtocolViolation {
+            message: "loaded reply omitted capabilities".to_string(),
+        })?;
+    for expected in expected_capabilities {
+        if !capabilities
+            .iter()
+            .any(|value| value.as_str() == Some(expected.as_str()))
+        {
+            return Err(RunnerInstanceError::ProtocolViolation {
+                message: format!("loaded reply omitted capability '{expected}'"),
+            });
+        }
+    }
+    let max_concurrency = reply
+        .payload
+        .get("limits")
+        .and_then(|limits| limits.get("max_concurrency"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| RunnerInstanceError::ProtocolViolation {
+            message: "loaded reply omitted limits.max_concurrency".to_string(),
+        })?;
+    if max_concurrency != 1 {
+        return Err(RunnerInstanceError::ProtocolViolation {
+            message: format!("runner v1 requires max_concurrency=1, received {max_concurrency}"),
+        });
+    }
+    Ok(LoadedMetadata {
+        effective_device: Some(effective_device),
+        resident_bytes: reply.payload.get("resident_bytes").and_then(Value::as_u64),
+    })
 }
 
 /// daemon shutdown 收口：关闭当前所有存活 instance（Runtime 持有 manager）。

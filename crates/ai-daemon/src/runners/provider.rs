@@ -108,6 +108,33 @@ impl RunnerProvider {
         Ok(binding)
     }
 
+    fn deadlines(
+        &self,
+        binding: &RunnerModelBinding,
+    ) -> Result<(Duration, Duration), ProviderError> {
+        let descriptor = self
+            .instances
+            .resolve_runner(
+                &binding.profile.runner,
+                &binding.profile.compatibility.runner,
+            )
+            .map_err(Self::map_error)?;
+        descriptor
+            .manifest
+            .map(|manifest| {
+                (
+                    Duration::from_secs(manifest.timeouts.inference_seconds),
+                    Duration::from_secs(manifest.timeouts.shutdown_seconds),
+                )
+            })
+            .ok_or_else(|| {
+                ProviderError::new(
+                    AIError::ProviderUnavailable,
+                    "trusted Runner descriptor has no manifest",
+                )
+            })
+    }
+
     fn map_error(error: RunnerInstanceError) -> ProviderError {
         match error {
             RunnerInstanceError::NoTrustedRunner { .. } => {
@@ -150,10 +177,8 @@ use crate::runners::SupervisorError;
 
 #[async_trait]
 impl Provider for RunnerProvider {
-    fn id(&self) -> &'static str {
-        // Runtime providers 表的 key 使用 runner_id 动态注册；descriptor 的
-        // 静态 id 用 runner_id 字符串本身（v1 单 Runner 一个桥接实例）。
-        Box::leak(self.runner_id.clone().into_boxed_str())
+    fn id(&self) -> &str {
+        &self.runner_id
     }
 
     fn capabilities(&self) -> Vec<Capability> {
@@ -165,40 +190,54 @@ impl Provider for RunnerProvider {
             id: self.runner_id.clone(),
             capabilities: self.capabilities.clone(),
             isolation: IsolationMode::Worker,
-            supported_devices: vec!["metal".to_string()],
+            // v1 manifest 尚未声明设备集合；实际设备只能由 loaded frame 报告。
+            supported_devices: Vec::new(),
         }
     }
 
     async fn status(&self) -> ProviderStatus {
         let bindings = self.bindings.read().await;
-        let mut resident = Vec::new();
-        let mut ready = !bindings.is_empty();
-        let mut reason = None;
-        if bindings.is_empty() {
-            reason = Some("no Runner-backed model is bound".to_string());
-        }
-        for binding in bindings.iter() {
-            // environment ready 视为可加载；进程常驻与否由 Runtime handles 管理。
-            let env_id = &binding.environment_id;
-            if let Some(status) = self.instances.environments().status(env_id) {
-                if status.phase == crate::runners::EnvironmentPhase::Ready {
-                    resident.push(binding.model_id.clone());
-                } else {
-                    ready = false;
-                    reason = Some(format!(
-                        "environment '{env_id}' is {}",
-                        status.phase.as_str()
-                    ));
-                }
-            } else {
-                ready = false;
-                reason = Some(format!("environment '{env_id}' has not been installed"));
-            }
-        }
+        let environment = bindings.first().and_then(|binding| {
+            self.instances
+                .environments()
+                .status(&binding.environment_id)
+        });
+        let available = environment
+            .as_ref()
+            .is_some_and(|status| status.phase == crate::runners::EnvironmentPhase::Ready);
+        let snapshot = self.instances.instance_snapshot(&self.runner_id).await;
+        let resident = snapshot
+            .as_ref()
+            .filter(|state| state.alive)
+            .and_then(|state| state.loaded_model.clone())
+            .into_iter()
+            .collect();
+        let ready = available
+            && snapshot
+                .as_ref()
+                .is_some_and(|state| state.alive && state.loaded_model.is_some());
+        let reason = if bindings.is_empty() {
+            Some("no Runner-backed model is bound".to_string())
+        } else if !available {
+            let binding = &bindings[0];
+            Some(match environment {
+                Some(status) => format!(
+                    "environment '{}' is {}",
+                    binding.environment_id,
+                    status.phase.as_str()
+                ),
+                None => format!(
+                    "environment '{}' has not been installed",
+                    binding.environment_id
+                ),
+            })
+        } else {
+            snapshot.as_ref().and_then(|state| state.last_error.clone())
+        };
         ProviderStatus {
-            available: ready,
+            available,
             ready,
-            effective_device: Some("metal".to_string()),
+            effective_device: snapshot.and_then(|state| state.effective_device),
             resident_models: resident,
             reason,
             install_hint: None,
@@ -207,6 +246,33 @@ impl Provider for RunnerProvider {
 
     async fn load(&self, model: &ModelSpec) -> Result<ModelHandle, ProviderError> {
         let binding = self.binding(&model.id).await?;
+        let artifact_root = binding.artifact_root.canonicalize().map_err(|error| {
+            ProviderError::new(
+                AIError::ModelNotFound,
+                format!(
+                    "Runner model artifact '{}' is unavailable: {error}",
+                    binding.artifact_root.display()
+                ),
+            )
+        })?;
+        if let Some(path) = model.path.as_deref() {
+            let requested = std::fs::canonicalize(path).map_err(|error| {
+                ProviderError::new(
+                    AIError::ModelNotFound,
+                    format!("cannot open registered Runner model '{path}': {error}"),
+                )
+            })?;
+            if requested != artifact_root {
+                return Err(ProviderError::new(
+                    AIError::InvalidRequest,
+                    format!(
+                        "registered path '{}' does not match Profile artifact root '{}'",
+                        requested.display(),
+                        artifact_root.display()
+                    ),
+                ));
+            }
+        }
         let runner_id = binding.profile.runner.clone();
         let requirement = binding.profile.compatibility.runner.clone();
         let profile_payload = profile_load_payload(&binding, model);
@@ -223,18 +289,44 @@ impl Provider for RunnerProvider {
     async fn unload(&self, handle: &ModelHandle) -> Result<(), ProviderError> {
         let binding = self.binding(&handle.model_id).await?;
         let runner_id = binding.profile.runner.clone();
-        // unload 期限使用保守的 shutdown 量级；lease/busy guard 已由 Runtime 裁决。
+        let (_, deadline) = self.deadlines(&binding)?;
         self.instances
-            .unload_model(&runner_id, Duration::from_secs(30))
+            .unload_model(&runner_id, deadline)
             .await
             .map_err(Self::map_error)
     }
 
     async fn health_check(&self) -> Result<ProviderHealth, ProviderError> {
+        if let Some(snapshot) = self.instances.instance_snapshot(&self.runner_id).await {
+            if !snapshot.alive {
+                return Err(ProviderError::new(
+                    AIError::BackendCrashed,
+                    snapshot
+                        .last_error
+                        .unwrap_or_else(|| "runner process is not alive".to_string()),
+                ));
+            }
+        }
         Ok(ProviderHealth {
             ok: true,
             message: None,
         })
+    }
+
+    async fn memory_usage_bytes(&self) -> Option<u64> {
+        self.instances
+            .instance_snapshot(&self.runner_id)
+            .await
+            .filter(|state| state.alive)
+            .and_then(|state| state.resident_bytes)
+    }
+
+    async fn effective_device(&self) -> Option<String> {
+        self.instances
+            .instance_snapshot(&self.runner_id)
+            .await
+            .filter(|state| state.alive)
+            .and_then(|state| state.effective_device)
     }
 }
 
@@ -262,7 +354,7 @@ impl TTSProvider for RunnerProvider {
             "format": request.format.unwrap_or_else(|| "wav".to_string()),
             "language": "auto",
         });
-        let deadline = Duration::from_secs(300);
+        let (deadline, _) = self.deadlines(&binding)?;
         let result = self
             .instances
             .infer(&runner_id, "tts.v1", tts_request, output, deadline, |_| {})
@@ -341,7 +433,7 @@ impl ai_core::provider::STTProvider for RunnerProvider {
             "audio": audio,
             "language": request.language,
         });
-        let deadline = Duration::from_secs(300);
+        let (deadline, _) = self.deadlines(&binding)?;
         let result = self
             .instances
             .infer(

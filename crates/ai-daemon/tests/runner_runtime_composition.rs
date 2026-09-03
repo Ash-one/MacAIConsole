@@ -122,8 +122,12 @@ async fn fixture(
         environments,
         temp_root.clone(),
     ));
-    let provider =
-        RunnerProvider::new("org.example.fake".to_string(), instances.clone(), temp_root);
+    let provider = RunnerProvider::new(
+        "org.example.fake".to_string(),
+        &["tts.v1".to_string()],
+        instances.clone(),
+        temp_root,
+    );
 
     // uv 不可用时测试在环境安装步骤失败；CI 固定安装 uv 0.9.21。
     let binding = ai_daemon::runners::RunnerModelBinding {
@@ -244,6 +248,58 @@ async fn status_reflects_environment_phase_without_resident_worker() {
         ready.reason
     );
     assert!(ready.resident_models.contains(&"fake-model".to_string()));
+    assert_eq!(ready.effective_device.as_deref(), Some("cpu"));
+    let snapshot = instances
+        .instance_snapshot("org.example.fake")
+        .await
+        .expect("instance snapshot");
+    assert!(snapshot.alive);
+    assert!(snapshot.pid.is_some());
+    assert_eq!(snapshot.loaded_model.as_deref(), Some("fake-model"));
+    assert_eq!(snapshot.active_requests, 0);
+    instances
+        .shutdown_instance("org.example.fake")
+        .await
+        .expect("shutdown");
+    let stopped = provider.status().await;
+    assert!(
+        stopped.available,
+        "the installed environment remains available"
+    );
+    assert!(!stopped.ready, "a stopped worker is not ready");
+    assert!(
+        stopped.resident_models.is_empty(),
+        "a stopped worker has no resident model"
+    );
+    assert_eq!(stopped.effective_device, None);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn crashed_worker_clears_residency_and_can_be_reloaded() {
+    let (root, provider, instances) = fixture("crash-reload").await;
+    provider.load(&model_spec()).await.expect("initial load");
+    let mut crash = speech_request();
+    crash.input = "__crash__".to_string();
+    let error = provider.synthesize(crash).await.unwrap_err();
+    assert_eq!(error.kind, ai_core::AIError::BackendCrashed);
+
+    let failed = provider.status().await;
+    assert!(!failed.ready);
+    assert!(failed.resident_models.is_empty());
+    assert!(provider.health_check().await.is_err());
+
+    provider
+        .load(&model_spec())
+        .await
+        .expect("reload after crash");
+    let recovered = provider.status().await;
+    assert!(recovered.ready);
+    assert_eq!(recovered.resident_models, vec!["fake-model".to_string()]);
+    provider
+        .synthesize(speech_request())
+        .await
+        .expect("inference after recovery");
     instances
         .shutdown_instance("org.example.fake")
         .await
@@ -252,14 +308,50 @@ async fn status_reflects_environment_phase_without_resident_worker() {
 }
 
 #[tokio::test]
-async fn runtime_lease_and_lru_arbitration_covers_runner_models() {
-    // Runtime 层组合：RunnerProvider 作为普通 Provider 注册进 Runtime，
-    // load/unload/lease 全走既有裁决。这里验证 Runner-backed spec 能通过
-    // Runtime 注册（Phase 1C 的 Runtime 接线边界）。
+async fn status_snapshot_does_not_wait_for_active_inference_io() {
+    let (root, provider, instances) = fixture("status-during-infer").await;
+    let provider = Arc::new(provider);
+    provider.load(&model_spec()).await.expect("load");
+    let infer_provider = provider.clone();
+    let inference = tokio::spawn(async move {
+        let mut request = speech_request();
+        request.input = "__slow__".to_string();
+        infer_provider.synthesize(request).await
+    });
+
+    let mut observed_active = false;
+    for _ in 0..100 {
+        if instances
+            .instance_snapshot("org.example.fake")
+            .await
+            .is_some_and(|snapshot| snapshot.active_requests == 1)
+        {
+            observed_active = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(observed_active, "inference must become active");
+    let status = tokio::time::timeout(Duration::from_millis(100), provider.status())
+        .await
+        .expect("status must not wait for the process I/O lock");
+    assert!(status.ready);
+    assert_eq!(status.resident_models, vec!["fake-model".to_string()]);
+    inference.await.unwrap().expect("slow inference");
+    instances
+        .shutdown_instance("org.example.fake")
+        .await
+        .expect("shutdown");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn runner_model_spec_carries_profile_defaults() {
+    // Model Profile 到 ModelSpec 的映射边界；Runtime lease/LRU 由 runtime.rs 的
+    // 行为测试拥有，不能用字段断言冒充生命周期组合证据。
     let (root, _provider, _instances) = fixture("runtime").await;
     let spec = model_spec();
-    // spec.provider 指向 RunnerProvider 注册名；Runtime 侧装配由 main 完成，
-    // 本测试验证 spec 形状与 Profile defaults 映射。
+    // spec.provider 指向 RunnerProvider 注册名；这里只验证 spec 形状与默认值。
     assert_eq!(spec.provider, "org.example.fake");
     assert_eq!(spec.default_voice.as_deref(), Some("zf_001"));
     let _ = std::fs::remove_dir_all(root);

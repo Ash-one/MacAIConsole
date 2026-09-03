@@ -107,6 +107,14 @@ impl StartupGuard {
 }
 
 impl RunnerProcess {
+    pub fn pid(&self) -> Option<u32> {
+        self.child.id()
+    }
+
+    pub fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        self.child.try_wait()
+    }
+
     /// 从受信任 descriptor 启动 Runner。
     ///
     /// `runtime_python` 是环境已同步 venv 的运行解释器
@@ -296,7 +304,7 @@ impl RunnerProcess {
     }
 
     pub async fn shutdown(mut self) -> Result<String, SupervisorError> {
-        let reply = self
+        let request_result = self
             .request(
                 "shutdown",
                 "shutdown",
@@ -304,18 +312,17 @@ impl RunnerProcess {
                 "shutdown_complete",
                 self.shutdown_timeout,
             )
-            .await?;
-        let _ = reply;
+            .await;
         let _ = self.stdin.shutdown().await;
-        match timeout(self.shutdown_timeout, self.child.wait()).await {
-            Ok(Ok(_)) => {}
-            Ok(Err(error)) => return Err(SupervisorError::Spawn(error)),
+        let wait_result = match timeout(self.shutdown_timeout, self.child.wait()).await {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(error)) => Err(SupervisorError::Spawn(error)),
             Err(_) => {
                 let _ = self.child.start_kill();
                 let _ = self.child.wait().await;
-                return Err(SupervisorError::Deadline("shutdown"));
+                Err(SupervisorError::Deadline("shutdown"))
             }
-        }
+        };
         let stderr = self
             .stderr_task
             .take()
@@ -323,6 +330,8 @@ impl RunnerProcess {
             .await
             .unwrap_or_default();
         let _ = std::fs::remove_dir_all(&self.package_staging);
+        request_result?;
+        wait_result?;
         Ok(String::from_utf8_lossy(&stderr).into_owned())
     }
 }

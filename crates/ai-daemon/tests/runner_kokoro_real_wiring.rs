@@ -131,7 +131,12 @@ async fn kokoro_runner_real_composition_load_infer_unload() {
         environments,
         temp.clone(),
     ));
-    let provider = RunnerProvider::new(RUNNER_ID.to_string(), instances.clone(), temp.clone());
+    let provider = RunnerProvider::new(
+        RUNNER_ID.to_string(),
+        &["tts.v1".to_string()],
+        instances.clone(),
+        temp.clone(),
+    );
 
     let profile =
         ModelProfile::load(&root.join("kokoro/profiles/kokoro-82m-zh.toml")).expect("profile");
