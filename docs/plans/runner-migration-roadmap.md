@@ -9,8 +9,8 @@ Status: accepted（用户拍板：目标是把所有合适 provider 切换到 Ru
 - 边界：Runner 的运行时形态是 python-uv 受管环境。因此 **llama.cpp / whisper.cpp
   这类外部原生二进制 provider 保留现有 Provider**（进程隔离已具备），不硬套 Runner；
   `mock` 直接删除；`macos-say` 若无需要随清理。
-- 迁移全集（按序）：kokoro（✓ 已完成）→ qwen3-asr-mlx → qwen3-tts → sherpa-onnx
-  → mlx-lm LLM（✓ 2026-09-03 完成，含 chat.v1 能力通路）。
+- 迁移全集（按序）：kokoro（✓ 已完成）→ qwen3-asr-mlx → qwen3-tts（✓ 2026-09-03）
+  → sherpa-onnx → mlx-lm LLM（✓ 2026-09-03 完成，含 chat.v1 能力通路）。
 
 ## 当前缺口核对（2026-09-02）
 
@@ -52,12 +52,39 @@ Status: accepted（用户拍板：目标是把所有合适 provider 切换到 Ru
 ## 执行顺序
 
 1. 迁移 qwen3-asr-mlx（复用 MLX uv 环境套路，最接近 Kokoro）✓（2026-09-02）
-2. qwen3-tts
+2. qwen3-tts ✓（2026-09-03，见下方 Phase 记录）
 3. sherpa-onnx
 4. mlx-lm LLM ✓（2026-09-03：chat.v1 能力通路 + `runners/mlx-lm` 包 + legacy 删除，
    见下方 Phase 记录）
 5. 收尾：删 mock/macos-say、删 GUI PythonEnvironmentManager（.build 一键安装 legacy 路径）、
    清理 scripts/legacy worker 与 `.build` 引用、更新 README/AGENTS。
+6. 注册路径统一（2026-09-03，`1c206cc`）：main.rs provider 白名单只剩
+   llm/stt 缺省两行，显式 provider（静态装配或 org.macai.*）统一走 descriptor
+   能力判定；目录型校验合并为通用分支。加新引擎不再改 main.rs。
+
+## Phase：qwen3-tts legacy 删除（2026-09-03 落地）
+
+迁移内容（`dcef0fc`）：
+
+- `runners/qwen3-tts/` 包：manifest `org.macai.qwen3-tts`（capabilities=["tts.v1"]）、
+  uv 受管环境（mlx-audio==0.5.1，40 包 uv.lock）、Model Profile
+  `Qwen3-TTS-0.6B-CustomVoice-4bit`（HF `mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit`
+  @ `08c72cad…` immutable revision）。
+- adapter `macai_qwen3_tts_runner`：legacy `scripts/qwen3_tts_worker.py` 语义完整迁移
+  （speaker/instruct 拆分、`generate_custom_voice`、5000 字限制、speed
+  0.25..=4.0 校验——mlx-audio CustomVoice 无 speed 参数，校验通过不改变合成速度）；
+  engine 校验单测 5 passed；manifest probe 真实通过。
+- 真实接线证据：Vivian speaker metal 合成 → 241964 字节合法 WAV（24kHz）→
+  unload → shutdown_complete 全链路（`tests/real_wiring_manual.py`）。
+- legacy 完整消费面删除：`providers/qwen3_tts.rs`、`scripts/qwen3_tts_worker.py` 及
+  pytest、runtime 静态装配（providers/tts_providers 双表）、main.rs 的
+  format/keep-alive 分支、GUI `PythonEnvironmentSpec.qwen3Tts`。
+  `AIWORK_QWEN3_TTS_PYTHON` / `AIWORK_QWEN3_TTS_SCRIPT` 零消费者。
+- voices 端点：Qwen3-TTS 内置 speaker 清单改按 `org.macai.qwen3-tts` 识别，
+  清单常量归端点所有（展示契约）；通用路径继续扫 `spec.path/voices/`。
+- GUI 推荐 Qwen3-TTS 条目改指 Runner（id 同步为 Profile id）。
+- 兼容性代价：显式 `--provider qwen3-tts` 注册入口消失（MLX TTS 目录本地导入
+  暂绑 `org.macai.kokoro`——目录形状无法区分，双轨纪律本就要求显式 provider）。
 
 ## Phase：mlx-lm legacy 删除（2026-09-03 落地）
 
