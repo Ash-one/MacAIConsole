@@ -19,6 +19,7 @@ pub use environment::{
 };
 pub use instance::{
     shutdown_all_instances, InferEvent, RunnerInstanceError, RunnerInstanceManager,
+    RunnerInstanceSnapshot,
 };
 pub use manifest::{ManifestError, RunnerManifest, RunnerRuntime};
 pub use profile::{ModelProfile, ProfileDefaults, ProfileError, ProfileResources};

@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -124,7 +125,8 @@ impl fmt::Display for EnvironmentError {
 
 impl std::error::Error for EnvironmentError {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EnvironmentPhase {
     Missing,
     Resolving,
@@ -153,7 +155,7 @@ pub struct UvSource {
     pub version: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PythonInfo {
     pub version: String,
     /// `managed`（uv 下载）或 `system`（满足约束的已有解释器）。
@@ -161,14 +163,14 @@ pub struct PythonInfo {
     pub path: PathBuf,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct EnvironmentFailure {
     pub kind: String,
     pub message: String,
     pub retryable: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct EnvironmentStatus {
     pub environment_id: String,
     pub fingerprint: String,
@@ -553,7 +555,7 @@ impl EnvironmentManager {
         };
         if let Err(error) = sync_result {
             return self
-                .fail_install(&environment_id, status, &fingerprint.0, error, true)
+                .fail_install(&environment_id, status, error, true)
                 .await;
         }
 
@@ -562,7 +564,7 @@ impl EnvironmentManager {
         let probe = self.run_probe(manifest, package_root, &staging).await;
         if let Err(error) = probe {
             return self
-                .fail_install(&environment_id, status, &fingerprint.0, error, true)
+                .fail_install(&environment_id, status, error, true)
                 .await;
         }
 
@@ -609,7 +611,6 @@ impl EnvironmentManager {
         &self,
         environment_id: &str,
         mut status: EnvironmentStatus,
-        fingerprint: &str,
         error: EnvironmentError,
         retryable: bool,
     ) -> Result<EnvironmentStatus, EnvironmentError> {

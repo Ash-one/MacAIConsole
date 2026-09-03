@@ -195,6 +195,12 @@ impl RunnerManifest {
                 "runner capacity values must be positive".to_string(),
             ));
         }
+        if self.capacity.max_instances != 1 || self.capacity.max_concurrency_per_instance != 1 {
+            return Err(ManifestError(
+                "macai.runner.v1 currently supports exactly one instance and one active inference"
+                    .to_string(),
+            ));
+        }
         if self.timeouts.boot_seconds == 0
             || self.timeouts.load_seconds == 0
             || self.timeouts.inference_seconds == 0
@@ -492,6 +498,16 @@ inherit_environment = ["HTTPS_PROXY"]
             &manifest().replace("id = \"org.example.fake-python\"", "id = \"Bad_Runtime\"")
         )
         .is_err());
+    }
+
+    #[test]
+    fn v1_rejects_capacity_the_instance_manager_cannot_honor() {
+        let error = RunnerManifest::parse(&manifest().replace(
+            "max_concurrency_per_instance = 1",
+            "max_concurrency_per_instance = 2",
+        ))
+        .unwrap_err();
+        assert!(error.to_string().contains("exactly one instance"));
     }
 
     #[test]

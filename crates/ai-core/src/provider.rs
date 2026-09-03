@@ -119,7 +119,7 @@ pub struct ProviderHealth {
 /// 统一 Provider interface（文档 §7）。
 #[async_trait]
 pub trait Provider: Send + Sync {
-    fn id(&self) -> &'static str;
+    fn id(&self) -> &str;
 
     fn capabilities(&self) -> Vec<Capability>;
 

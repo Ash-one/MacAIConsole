@@ -27,12 +27,30 @@ async fn main() {
     while let Ok(command) = read_frame(&mut input, DEFAULT_MAX_FRAME_BYTES).await {
         match command.message_type.as_str() {
             "infer" => {
+                if command
+                    .payload
+                    .get("request")
+                    .and_then(|request| request.get("text"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("__crash__")
+                {
+                    std::process::exit(86);
+                }
                 write_frame(
                     &mut output,
                     &Envelope::new("accepted", command.id.clone(), json!({})),
                 )
                 .await
                 .expect("write accepted");
+                if command
+                    .payload
+                    .get("request")
+                    .and_then(|request| request.get("text"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("__slow__")
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+                }
                 // tts.v1 结果形状：向 daemon 授权目录写一个 wav 文件并回报
                 // 路径与字节数，覆盖 daemon 的路径校验与读取路径。
                 let directory = command
@@ -97,6 +115,8 @@ async fn main() {
                             "ok": reply_type != "error",
                             "model_id": command.payload.get("model_id").cloned().unwrap_or(json!(null)),
                             "effective_device": "cpu",
+                            "capabilities": ["tts.v1"],
+                            "limits": {"max_concurrency": 1},
                         }),
                     ),
                 )
