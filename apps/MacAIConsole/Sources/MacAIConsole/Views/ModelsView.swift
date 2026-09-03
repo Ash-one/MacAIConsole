@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ModelsView: View {
     @Environment(DaemonController.self) private var controller
-    @Environment(PythonEnvironmentManager.self) private var pythonEnvironments
+    @Environment(EngineEnvironmentManager.self) private var pythonEnvironments
     @State private var repoModels: [RepoModel] = []
     @State private var showingAddSheet = false
 
@@ -121,7 +121,7 @@ struct ModelsView: View {
                         providerAvailable: controller.providerIsAvailable(model.provider),
                         providerMissing: diagnostics.missing,
                         unavailableReason: diagnostics.reason,
-                        pythonSpec: diagnostics.spec
+                        engineSpec: diagnostics.spec
                     ) {
                         Task {
                             if await controller.installRecommended(model) {
@@ -140,9 +140,9 @@ struct ModelsView: View {
     /// 推荐模型行的 Provider 诊断：区分「未装配」（如 Provider 未注册）与
     /// 「环境未就绪」（缺 Python venv），并给出对应的 Python 环境规格。
     private func providerDiagnostics(for model: RecommendedModel)
-        -> (missing: Bool, reason: String?, spec: PythonEnvironmentSpec?)
+        -> (missing: Bool, reason: String?, spec: EngineEnvironmentSpec?)
     {
-        let spec = PythonEnvironmentSpec.spec(forProvider: model.provider)
+        let spec = EngineEnvironmentSpec.spec(forProvider: model.provider)
         guard let entry = controller.providers.first(where: { $0.descriptor.id == model.provider }) else {
             return (true, "Provider 未装配：重启 aiworkd 后重试", spec)
         }
@@ -720,7 +720,7 @@ struct RepoModelRow: View {
 
 struct RecommendedModelRow: View {
     @Environment(DaemonController.self) private var controller
-    @Environment(PythonEnvironmentManager.self) private var pythonEnvironments
+    @Environment(EngineEnvironmentManager.self) private var pythonEnvironments
     let model: RecommendedModel
     let isRegistered: Bool
     let isLoaded: Bool
@@ -729,8 +729,9 @@ struct RecommendedModelRow: View {
     let providerMissing: Bool
     /// Provider 不可用的具体原因，来自 daemon 的 reason / install_hint。
     let unavailableReason: String?
-    /// 对应的 Python 环境规格；nil 表示该 Provider 不依赖 Python（如 whisper.cpp）。
-    let pythonSpec: PythonEnvironmentSpec?
+    /// 对应的引擎环境规格；nil 表示该 Provider 无 GUI 侧安装项（whisper.cpp
+    /// 与全部 org.macai.* Runner）。
+    let engineSpec: EngineEnvironmentSpec?
     let action: () -> Void
 
     private var isBusy: Bool {
@@ -798,7 +799,7 @@ struct RecommendedModelRow: View {
         .hoverableRow()
     }
 
-    /// Provider 不可用时的引导：缺失说明去设置启用；缺 Python 环境就提供就地安装。
+    /// Provider 不可用时的引导：缺失说明去设置启用；缺引擎环境就提供就地安装。
     @ViewBuilder
     private var providerGuidance: some View {
         HStack(spacing: 8) {
@@ -809,17 +810,17 @@ struct RecommendedModelRow: View {
             .font(.caption2)
             .foregroundStyle(Theme.warning)
 
-            if let spec = pythonSpec, !providerMissing {
+            if let spec = engineSpec, !providerMissing {
                 envInstallControls(for: spec)
             }
         }
     }
 
     @ViewBuilder
-    private func envInstallControls(for spec: PythonEnvironmentSpec) -> some View {
+    private func envInstallControls(for spec: EngineEnvironmentSpec) -> some View {
         let state = pythonEnvironments.state(for: spec)
         switch state.phase {
-        case .creatingVenv, .installingPackages:
+        case .installing:
             ProgressView().controlSize(.small)
             Text(state.stepText)
                 .font(.caption2)
@@ -837,7 +838,7 @@ struct RecommendedModelRow: View {
                 Button("安装运行环境") { pythonEnvironments.install(spec) }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .help("在仓库 .build/ 下创建 Python 3.12 环境并安装固定版本依赖")
+                    .help("执行仓库脚本克隆源码并编译 llama-server 到 .build/llama.cpp/bin/")
             }
         }
     }
