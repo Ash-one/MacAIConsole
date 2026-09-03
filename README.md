@@ -18,8 +18,7 @@ macai CLI ────────────┐
 MacAIConsole (SwiftUI) ├── HTTP ──> aiworkd ──┬── llama.cpp ──> GGUF / Metal
 OpenAI-compatible SDK ┘                      ├── whisper.cpp ─> Core ML / Metal
                                              ├── sherpa-onnx ─> ONNX Runtime / CPU or Core ML
-                                             ├── qwen3-tts ───> local TTS
-                                             └── Runners (uv Python) ─> Kokoro TTS / Qwen3-ASR STT / mlx-lm LLM
+                                             └── Runners (uv Python) ─> Kokoro TTS / Qwen3-ASR STT / Qwen3-TTS / mlx-lm LLM
 
                                              ├── SQLite model registry
                                              ├── memory budget / LRU / keep-alive
@@ -53,7 +52,7 @@ OpenAI-compatible SDK ┘                      ├── whisper.cpp ─> Core M
 | STT | whisper.cpp | `.bin` + PCM WAV | Core ML 优先，Metal 回退 |
 | STT | sherpa-onnx | zh-int8-2025 model directory + PCM WAV | CPU（可选 Core ML） |
 | STT | org.macai.qwen3-asr（Runner） | Qwen3-ASR MLX 模型目录 + PCM WAV | MLX / Metal GPU |
-| TTS | qwen3-tts | Qwen3-TTS CustomVoice 模型目录 | MLX / Metal GPU |
+| TTS | org.macai.qwen3-tts（Runner） | Qwen3-TTS CustomVoice 模型目录 | MLX / Metal GPU |
 | TTS | org.macai.kokoro（Runner） | Kokoro 模型目录 | MLX / Metal GPU |
 
 Python worker 类引擎逐步迁移到 [Runner 架构](docs/decisions/2026-09-02-runner-plugin-architecture.md)：Kokoro 与 Qwen3-ASR 由 daemon 自动发现 `runners/` 下的 Runner 包并预先装配为动态 provider（`org.macai.*`），因此模型下载后无需重启 daemon。Python 环境由 uv 受管，GUI「设置 → Runner 引擎」一键安装；注册模型冻结当时的 Model Profile snapshot，后续 catalog 更新不会静默改写它。
@@ -290,33 +289,34 @@ uv sync --project runners/kokoro --locked --no-dev
   --keep-alive always
 ```
 
-### 8. 准备 Qwen3-TTS CustomVoice
+### 8. 准备 Qwen3-TTS CustomVoice（Runner）
 
-Qwen3-TTS 与 Kokoro 复用同一个 `mlx-audio` Python 环境。推荐使用
-`mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit`，它通过常驻 worker
-运行在 MLX/Metal 上：
+Qwen3-TTS 由 daemon 的 Qwen3-TTS Runner（`org.macai.qwen3-tts`）提供服务，
+Apple Silicon 上走 MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole
+「设置 → Runner 引擎（实验）」里对 `org.macai.qwen3-tts` 执行安装，或手动：
 
 ```bash
-.build/kokoro-venv/bin/pip install -U mlx-audio
-hf download mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit \
-  --local-dir "$HOME/Library/Application Support/MacAIConsole/Models/tts/Qwen3-TTS-0.6B-CustomVoice-4bit"
+uv sync --project runners/qwen3-tts --locked --no-dev
 ```
 
-注册时显式选择 `qwen3-tts`：
+推荐模型（Qwen3-TTS 0.6B · CustomVoice 4-bit）可以在 MacAIConsole 模型页一键下载；
+或者手动下载 [mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit](https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit)，
+模型目录放进 `~/Library/Application Support/MacAIConsole/Models/tts/`。
+
+注册时显式选择 Runner provider `org.macai.qwen3-tts`，模型 ID 与目录名一致：
 
 ```bash
 ./target/release/macai load \
   "$HOME/Library/Application Support/MacAIConsole/Models/tts/Qwen3-TTS-0.6B-CustomVoice-4bit" \
-  --id qwen3-tts-customvoice-4bit \
+  --id Qwen3-TTS-0.6B-CustomVoice-4bit \
   --type tts \
-  --provider qwen3-tts \
+  --provider org.macai.qwen3-tts \
   --keep-alive always
 
-./target/release/macai speak qwen3-tts-customvoice-4bit "你好，这是本地模型。"
+./target/release/macai speak Qwen3-TTS-0.6B-CustomVoice-4bit "你好，这是本地模型。"
 ```
 
-可用 `AIWORK_QWEN3_TTS_PYTHON` 覆盖 Python 路径，`AIWORK_QWEN3_TTS_SCRIPT`
-覆盖 worker 脚本路径。请求只支持 WAV；`voice` 传递 Qwen3-TTS 的 speaker，
+请求只支持 WAV；`voice` 传递 Qwen3-TTS 的 speaker，
 例如 `Vivian`。首版支持用逗号携带情感指令（`Vivian, very happy`）。
 `speed` 参数仍按 `0.25..=4.0` 校验，但当前 `mlx-audio` 的
 `generate_custom_voice` 没有 speed 参数，因此通过校验后不改变合成速度；后续
@@ -689,8 +689,8 @@ crates/
 apps/
 └── MacAIConsole/  # 原生 SwiftUI 控制台
 
-scripts/           # llama.cpp、whisper.cpp 构建脚本与剩余 legacy worker（qwen3-tts、sherpa-onnx）
-runners/           # daemon 自动发现的 Runner 包（Kokoro TTS、Qwen3-ASR STT、mlx-lm LLM）
+scripts/           # llama.cpp、whisper.cpp 构建脚本与剩余 legacy worker（sherpa-onnx）
+runners/           # daemon 自动发现的 Runner 包（Kokoro TTS、Qwen3-ASR STT、Qwen3-TTS、mlx-lm LLM）
 samples/           # 第三方集成示例（含 Hermes TTS/STT 适配器）
 docs/              # 当前工作提案、决策、契约草案与实施计划
 ```
