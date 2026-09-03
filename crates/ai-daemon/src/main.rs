@@ -495,18 +495,17 @@ async fn register_and_load_model(
     };
     let requested_provider = request.provider.as_deref().map(str::trim);
     let provider: std::borrow::Cow<'_, str> = match (model_type, requested_provider) {
+        // 缺省 provider：每种类型只有一个静态缺省，显式写在这里。
         ("llm", None | Some("llama.cpp")) => "llama.cpp".into(),
         ("stt", None | Some("whisper.cpp")) => "whisper.cpp".into(),
-        ("stt", Some("sherpa-onnx")) => "sherpa-onnx".into(),
-        ("tts", Some("qwen3-tts")) => "qwen3-tts".into(),
         (other_type, None) => {
             return api_error(
                 AIError::InvalidRequest,
                 format!("no default provider is defined for model type '{other_type}'"),
             );
         }
-        // 动态 provider（Runner 装配的 org.macai.* 等）：按 descriptor 能力判定，
-        // 使 Runner-backed 模型能走产品注册/加载路径（UI 不自推，注册即显式）。
+        // 显式 provider（静态装配或 Runner 装配的 org.macai.*）：统一按
+        // descriptor 能力判定。加新引擎不再需要在此处登记白名单。
         (_, Some(other)) => {
             let capability = match model_type {
                 "tts" => ai_core::provider::Capability::TextToSpeech,
@@ -523,6 +522,8 @@ async fn register_and_load_model(
         }
     };
     let provider = provider.as_ref();
+    // 目录/扩展名契约校验：文件型 provider 校验扩展名，目录型 provider 要求目录。
+    // 深度内容校验（如 sherpa-onnx 的必需文件清单）仍由 provider 自己拥有。
     match provider {
         "llama.cpp" if path.extension().and_then(|value| value.to_str()) != Some("gguf") => {
             return api_error(
@@ -542,19 +543,19 @@ async fn register_and_load_model(
                 ),
             );
         }
-        "qwen3-tts" if !path.is_dir() => {
-            return api_error(
-                AIError::InvalidRequest,
-                format!(
-                    "expected a model directory for provider 'qwen3-tts', got '{}'",
-                    path.display()
-                ),
-            );
-        }
         "sherpa-onnx" => {
             if let Err(error) = providers::sherpa_onnx::validate_model_dir(&path) {
                 return provider_error(error);
             }
+        }
+        p if !path.is_dir() => {
+            return api_error(
+                AIError::InvalidRequest,
+                format!(
+                    "expected a model directory for provider '{p}', got '{}'",
+                    path.display()
+                ),
+            );
         }
         _ => {}
     }
