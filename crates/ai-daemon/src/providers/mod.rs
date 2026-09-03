@@ -1,22 +1,18 @@
 //! Provider 实现目录（文档 §8）。真实 backend 以独立进程接入，daemon
 //! 中的 wrapper 负责生命周期、健康检查与协议转换。
 
-pub mod kokoro_mlx;
 pub mod llama_cpp;
 pub mod macos_say;
 pub mod mlx_lm;
 pub mod mock;
-pub mod qwen3_asr;
 pub mod qwen3_tts;
 pub mod sherpa_onnx;
 pub mod whisper_cpp;
 
-pub use kokoro_mlx::KokoroMlxProvider;
 pub use llama_cpp::LlamaCppProvider;
 pub use macos_say::MacOSSayProvider;
 pub use mlx_lm::MlxLmProvider;
 pub use mock::MockProvider;
-pub use qwen3_asr::Qwen3AsrProvider;
 pub use qwen3_tts::Qwen3TtsProvider;
 pub use sherpa_onnx::SherpaOnnxProvider;
 pub use whisper_cpp::WhisperCppProvider;
