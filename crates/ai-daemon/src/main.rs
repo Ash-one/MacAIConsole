@@ -579,7 +579,6 @@ async fn register_and_load_model(
     let (format, keep_alive_default, memory_estimate) = match provider {
         "llama.cpp" => (Some("gguf"), Some("5m"), Some(size_bytes)),
         "whisper.cpp" => (Some("bin"), Some("always"), Some(size_bytes)),
-        "qwen3-tts" => (Some("qwen3-tts"), Some("always"), Some(size_bytes)),
         "sherpa-onnx" => (
             Some("sherpa-onnx-zh-int8-2025"),
             Some("always"),
@@ -729,16 +728,20 @@ async fn list_model_voices(
     let Some(spec) = state.runtime.get_model(&id).await else {
         return api_error(AIError::ModelNotFound, format!("model '{id}' not found"));
     };
-    let (voices, default_voice) = if spec.provider == "qwen3-tts" {
+    // Qwen3-TTS CustomVoice 的内置 speaker 清单（引擎语义，无 voices/ 目录文件）。
+    const QWEN3_TTS_VOICES: &[&str] = &[
+        "Vivian", "Serena", "Uncle_Fu", "Dylan", "Eric", "Ryan", "Aiden", "Ono_Anna", "Sohee",
+    ];
+    let (voices, default_voice) = if spec.provider == "org.macai.qwen3-tts" {
         (
-            providers::qwen3_tts::BUILTIN_VOICES
+            QWEN3_TTS_VOICES
                 .iter()
                 .map(|voice| (*voice).to_string())
                 .collect(),
             spec.default_voice
                 .clone()
-                .filter(|voice| providers::qwen3_tts::BUILTIN_VOICES.contains(&voice.as_str()))
-                .or_else(|| Some(providers::qwen3_tts::DEFAULT_VOICE.to_string())),
+                .filter(|voice| QWEN3_TTS_VOICES.contains(&voice.as_str()))
+                .or_else(|| Some(QWEN3_TTS_VOICES.first().unwrap().to_string())),
         )
     } else {
         let mut voices: Vec<String> = Vec::new();
@@ -1372,7 +1375,7 @@ mod tests {
             id: "qwen-tts".to_string(),
             name: "Qwen3-TTS".to_string(),
             model_type: "tts".to_string(),
-            provider: "qwen3-tts".to_string(),
+            provider: "org.macai.qwen3-tts".to_string(),
             source: None,
             path: None,
             format: Some("qwen3-tts".to_string()),

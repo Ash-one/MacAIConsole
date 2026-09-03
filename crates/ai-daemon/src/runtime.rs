@@ -23,8 +23,7 @@ use ai_core::response::{
 use ai_core::AIError;
 
 use crate::providers::{
-    LlamaCppProvider, MacOSSayProvider, MockProvider, Qwen3TtsProvider, SherpaOnnxProvider,
-    WhisperCppProvider,
+    LlamaCppProvider, MacOSSayProvider, MockProvider, SherpaOnnxProvider, WhisperCppProvider,
 };
 use crate::registry::{RegistryStore, StoredProfile};
 use crate::scheduler;
@@ -148,12 +147,10 @@ impl Runtime {
         // 装配（org.macai.*），不再静态注册 legacy Provider。
         let llama = Arc::new(LlamaCppProvider::from_env());
         let whisper = Arc::new(WhisperCppProvider::from_env());
-        let qwen3_tts = Arc::new(Qwen3TtsProvider::from_env());
 
         let mut providers: HashMap<String, Arc<dyn Provider>> = HashMap::new();
         providers.insert("llama.cpp".to_string(), llama.clone());
         providers.insert("whisper.cpp".to_string(), whisper.clone());
-        providers.insert("qwen3-tts".to_string(), qwen3_tts.clone());
 
         let mut chat_providers: HashMap<String, Arc<dyn ChatProvider>> = HashMap::new();
         chat_providers.insert("llama.cpp".to_string(), llama);
@@ -164,8 +161,7 @@ impl Runtime {
         providers.insert("sherpa-onnx".to_string(), sherpa_onnx.clone());
         stt_providers.insert("sherpa-onnx".to_string(), sherpa_onnx);
 
-        let mut tts_providers: HashMap<String, Arc<dyn TTSProvider>> = HashMap::new();
-        tts_providers.insert("qwen3-tts".to_string(), qwen3_tts);
+        let tts_providers: HashMap<String, Arc<dyn TTSProvider>> = HashMap::new();
         Self {
             registry: RwLock::new(seed_entries(seed, registered_profiles)),
             store,
@@ -1242,7 +1238,6 @@ mod tests {
                 "llama.cpp",
                 "macos-say",
                 "mock",
-                "qwen3-tts",
                 "sherpa-onnx",
                 "whisper.cpp"
             ]
