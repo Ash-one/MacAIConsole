@@ -252,10 +252,12 @@ struct ModelRow: View {
         let base = controller.api.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         switch modelType {
         case "stt":
+            // 单引号包裹路径：空格/中文无需反斜杠转义（双引号内 `\ ` 会变成
+            // 字面反斜杠，curl 报 26）。若路径本身含单引号，改用双引号并去掉转义。
             return """
             curl \(base)/v1/audio/transcriptions \\
-              -F "file=@audio.wav" \\
-              -F "model=\(model.id)"
+              -F 'file=@你的音频路径.wav' \\
+              -F 'model=\(model.id)'
             """
         case "tts":
             return """
