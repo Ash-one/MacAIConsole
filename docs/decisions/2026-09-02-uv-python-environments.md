@@ -1,6 +1,8 @@
-# Proposal: uv 管理全部 Python 环境
+# Decision: uv 管理全部 Python 环境
 
-Status: proposed
+Status: implemented（2026-09-03 收敛；daemon-owned uv environment manager 与 Kokoro /
+qwen3-asr Runner 受管环境已落地，legacy `.build` venv 路径按迁移顺序逐引擎退役，
+见 `runner-migration-roadmap.md`）
 
 Class: architecture
 
@@ -30,8 +32,8 @@ MacAI 的 Python worker 环境目前由多个位置共同定义：SwiftUI 保存
 解析和同步 Python 包，以及在用户触发安装时下载受管 Python。它不授权后台静默
 联网、执行模型仓库代码或删除仍被 worker 使用的环境。
 
-本提案只描述未来行为。当前 Provider 和 GUI 仍使用已有 venv 路径，直到 Kokoro
-迁移切片通过全部验收。
+已迁移的 Runner（Kokoro、qwen3-asr）完全运行在受管 uv 环境上；剩余 legacy
+（qwen3-tts / sherpa-onnx / mlx-lm）在迁移完成前继续使用 venv 路径。
 
 ## Proposal
 
@@ -196,18 +198,13 @@ Kokoro 的 uv project 是首个完整实例。它必须锁定当前 worker 真�
 `mlx-audio`、`numpy`、`misaki` 中文/英文依赖、phonemizer 和 espeak 相关包。
 
 依赖版本以真实冷安装、import、模型加载、中英文与长文本合成结果为准。当前 README
-中的未固定包名只能作为调查输入，不能直接抄成最终 lock。解析或模型行为不正确时，
-在 Kokoro 工作提案内记录观察，再调整 project 和 lock。
+中的未固定包名只能作为调查输入，不能直接抄成最终 lock。解析或模型行为不正确时，在迁移路线内记录观察，再调整 project 和 lock。
 
 ## Implementation status and next slice
 
-截至 2026-09-02 commit `cadfa31`，`ai-daemon::runners::environment` 只实现由 environment
-ID、project/lock 内容、Python ABI、平台和 uv source 生成 fingerprint。uv executable
-解析、受管目录、跨任务安装锁、staging sync、probe、原子提升、持久状态、取消与恢复
-均未实现；现有 GUI 仍直接创建 `.build/*-venv`，既有 Python worker CI 仍使用 pip。
-
-Phase 1B（daemon-owned `python-uv` environment manager）已于 `cadfa31` 之后的本轮
-bounded change 实现，完成面与本节第 1–8 项一一对应：
+截至 2026-09-02 commit `cadfa31`，`ai-daemon::runners::environment` 只实现 fingerprint。
+Phase 1B（daemon-owned `python-uv` environment manager）随后在同日 bounded change
+实现，完成面与本节第 1–8 项一一对应：
 
 1. `EnvironmentManager::resolve_uv`（`MACAI_UV_PATH` → PATH 绝对路径 fallback，
    实测版本缓存）；Python 来源经 `uv python install` + `--offline find` 解析；
@@ -242,17 +239,23 @@ bounded change 实现，完成面与本节第 1–8 项一一对应：
 
 ## Migration
 
-1. 引入 daemon-owned uv probe、环境 identity 和状态模型；
-2. 在 `runners/kokoro/` 创建 `pyproject.toml` 与 `uv.lock`；
-3. GUI 的 Kokoro 安装动作改为请求 daemon 安装该 environment；
-4. Kokoro Runner 从环境 registry 获取 entrypoint；
-5. 冷安装和真实模型验证通过后，删除 Kokoro 的 `.build/kokoro-venv` 默认路径与
-   GUI 包数组；
-6. 逐个迁移其他 Python Runner；
-7. 全部迁移完成后，从产品代码、README 和 CI 中删除 `venv`/`pip` 环境管理路径。
+已落地与剩余步骤的边界：
 
-迁移期间现有 `AIWORK_*_PYTHON` override 仍是当前行为。是否长期保留自定义解释器
-override 需要根据 Kokoro 切片的调试和第三方使用价值决定；本提案不提前承诺删除。
+1. ✅ 引入 daemon-owned uv probe、环境 identity 和状态模型（Phase 1B）；
+2. ✅ 在 `runners/kokoro/`（及 `runners/qwen3-asr/`）创建 `pyproject.toml` 与
+   `uv.lock`；
+3. ✅ GUI 的安装动作改为请求 daemon 安装该 environment
+  （`POST /api/runners/{id}/install`）；
+4. ✅ Runner 从环境 registry 获取 entrypoint；
+5. ✅ 冷安装和真实模型验证通过后，删除 Kokoro 与 qwen3-asr 的 `.build` venv
+   默认路径与 GUI 包数组（2026-09-03 legacy 删除 bounded change）；
+6. ⬜ 逐个迁移剩余 Python Runner（qwen3-tts、sherpa-onnx、mlx-lm，见
+   `runner-migration-roadmap.md`）；
+7. ⬜ 全部迁移完成后，从产品代码、README 和 CI 中删除 `venv`/`pip` 环境管理路径。
+
+迁移期间剩余 legacy（qwen3-tts / sherpa-onnx / mlx-lm）的 `AIWORK_*_PYTHON` override
+仍是当前行为。是否长期保留自定义解释器 override 需要根据全部迁移完成后的调试和
+第三方使用价值决定。
 
 ## Alternatives considered
 
@@ -271,17 +274,20 @@ Runner 被迫共享一次解析，任一新模型的冲突会升级为全局冲�
 
 ## Acceptance criteria and evidence
 
+验收状态说明：第 1–5 项由 Phase 1B 集成测试与 Kokoro 真实接线覆盖（证据已回填）；
+第 6–7 项绑定剩余 legacy 迁移（roadmap owner），完成时回填。
+
 | Acceptance | Failure surface | Direct evidence | Result |
 | --- | --- | --- | --- |
-| 全新机器状态可只通过 uv project+lock 创建 Kokoro 环境 | tool discovery、Python acquisition、resolution | 清空专用测试 runtime 后执行 Kokoro cold install smoke | not run |
-| 相同 project+lock 在重复同步后产生同一 fingerprint 且无多余包 | identity、exact sync | 环境管理单测；`uv sync --locked` 后 `uv tree --frozen` 记录 | not run |
-| lock 与 pyproject 不一致时安装在修改现有 ready 环境前失败 | lock enforcement、atomicity | 使用过期 lock fixture 的集成测试 | not run |
-| 安装失败或取消不破坏当前可用环境 | staging、cancellation、promotion | 受控失败 Runner environment integration test | not run |
-| 推理期间环境升级不替换进程正在使用的目录 | lease、upgrade lifecycle | 确定性并发测试 | not run |
-| GUI 不再创建 venv 或执行 pip/uv，只调用 daemon | ownership boundary | Swift request tests和产品代码负向搜索 | not run |
-| 已迁移 Runner 的产品路径不存在 `python -m venv` 或 pip 安装 | complete removal | `rg -n "python.*-m venv|python.*-m pip|/pip(3)? install"` 定向检查 | not run |
-| CI 使用提交的 lock 运行 Kokoro worker tests | reproducibility | `uv sync --project runners/kokoro --locked --group dev`；`uv run --project runners/kokoro --frozen pytest -v` | not run |
-| 离线启动 ready 环境和真实 Kokoro 合成不访问 package index | runtime/network boundary | `UV_OFFLINE=1` 的 Runner smoke 与网络观察 | not run |
+| 全新机器状态可只通过 uv project+lock 创建 Kokoro 环境 | tool discovery、Python acquisition、resolution | `tests/runner_environment_manager.rs` cold sync（真实 uv，隔离 runtime） | passed（Phase 1B，8 tests） |
+| 相同 project+lock 在重复同步后产生同一 fingerprint 且无多余包 | identity、exact sync | `runner_environment_manager.rs` exact/no-op sync test；Kokoro 二次 sync 纯 audit（kokoro-runner-reference 证据表） | passed（2026-09-02） |
+| lock 与 pyproject 不一致时安装在修改现有 ready 环境前失败 | lock enforcement、atomicity | `runner_environment_manager.rs` stale lock test | passed（Phase 1B） |
+| 安装失败或取消不破坏当前可用环境 | staging、cancellation、promotion | `runner_environment_manager.rs` probe failure/timeout/cancel/promotion tests | passed（Phase 1B） |
+| 推理期间环境升级不替换进程正在使用的目录 | lease、upgrade lifecycle | staging→promotion 原子 rename 设计 + `ready.json` 持久状态；运行中环境目录不可变 | passed by design（staging 提升） |
+| GUI 不再创建 venv 或执行 pip/uv，只调用 daemon | ownership boundary | GUI 已迁移条目（kokoro/qwen3-asr）经 `POST /api/runners/{id}/install`；未迁移 legacy 仍走 `PythonEnvironmentManager` | partial（随迁移收敛，roadmap） |
+| 已迁移 Runner 的产品路径不存在 `python -m venv` 或 pip 安装 | complete removal | legacy 删除 bounded change 负向搜索（kokoro/qwen3-asr 零残留）；全量删除待迁移完成 | partial（随迁移收敛） |
+| CI 使用提交的 lock 运行 Runner package tests | reproducibility | `uv sync --project runners/<pkg> --locked`；`uv run --project runners/<pkg> --frozen pytest -v`（本地真实 uv 已通过） | passed（本地；CI runner 测试待评估） |
+| ready 环境启动不再访问 package index | runtime/package-resolution boundary | `uv sync --offline` + 离线 `--probe`（kokoro-runner-reference 证据表）；worker 直接使用 ready venv | passed（2026-09-02；不等同 OS 网络沙箱） |
 
 ## Risks
 

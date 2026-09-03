@@ -55,10 +55,11 @@ MacAI 是面向 Apple Silicon 的本地 AI Runtime：Rust daemon `aiworkd`（默
 | 路径 | 内容 |
 | --- | --- |
 | `crates/ai-core` | 共享类型：model / provider / request / response / errors |
-| `crates/ai-daemon` | `aiworkd` 本体。`main.rs` HTTP endpoints；`runtime.rs` 模型与 Provider 生命周期（lease）；`scheduler.rs` 内存预算（`min(ram*0.75, ram-8GB)`，`AIWORKD_MEMORY_BUDGET` 可覆盖）、LRU 与 keep-alive reaper；`registry.rs` SQLite 注册表（内存 HashMap 为唯一读路径）；`tasks.rs` 有界任务历史（终态保留最近 100 条）；`pull.rs` Hugging Face 下载（断点续传）；`audio.rs` STT 音频归一化；`providers/` 含 llama_cpp、mlx_lm、whisper_cpp、kokoro_mlx、qwen3_asr、qwen3_tts、sherpa_onnx、macos_say、mock |
+| `crates/ai-daemon` | `aiworkd` 本体。`main.rs` HTTP endpoints；`runtime.rs` 模型与 Provider 生命周期（lease）；`scheduler.rs` 内存预算（`min(ram*0.75, ram-8GB)`，`AIWORKD_MEMORY_BUDGET` 可覆盖）、LRU 与 keep-alive reaper；`registry.rs` SQLite 注册表（内存 HashMap 为唯一读路径）；`tasks.rs` 有界任务历史（终态保留最近 100 条）；`pull.rs` Hugging Face/ModelScope 下载（断点续传）；`audio.rs` STT 音频归一化；`providers/` 含 llama_cpp、mlx_lm、whisper_cpp、qwen3_tts、sherpa_onnx、macos_say、mock；`runners/` 为 Runner 架构（kokoro、qwen3-asr 由 `runners/` 包动态装配） |
+| `runners/` | Runner 包（manifest + uv 受管 Python 环境 + Model Profile）：`kokoro`（TTS）、`qwen3-asr`（STT）。daemon 启动时 `bootstrap_runners` 自动发现并装配为 `org.macai.*` provider |
 | `crates/ai-cli` | `macai` CLI（clap，单文件 `main.rs`），只调 daemon |
 | `apps/MacAIConsole` | SwiftUI 控制台。`DaemonAPI.swift`（HTTP 客户端）、`DaemonController.swift`（daemon 探测与启停：`AIWORKD_PATH` → `target/release` → `target/debug`）、`PythonEnvironment.swift`（一键装 venv 到 `.build/`）、`AppSettings.swift`、`AppRouter.swift`；视图在 `Views/` |
-| `scripts/` | `build-llama-server.sh` / `build-whisper-cli.sh` / `download-whisper-model.sh`（固定经过验证的 revision）；Python worker：`kokoro_worker.py`、`mlx_lm_worker.py`、`qwen3_asr_mlx_worker.py`、`qwen3_tts_worker.py`、`sherpa_onnx_worker.py`；`tests/` 为 pytest |
+| `scripts/` | `build-llama-server.sh` / `build-whisper-cli.sh` / `download-whisper-model.sh`（固定经过验证的 revision）；Python worker：`mlx_lm_worker.py`、`qwen3_tts_worker.py`、`sherpa_onnx_worker.py`；`tests/` 为 pytest |
 | `samples/` | Hermes TTS/STT 命令型 Provider 适配器与一键配置脚本 |
 
 ## 构建与验证
@@ -87,5 +88,5 @@ python3.12 -m pytest scripts/tests -v
 - **测试哲学**：不写镜像字面量、clap derive 声明或系统框架往返的零防护力测试；同一契约只在单一位置固化（如 Kokoro 音色清单只在 DaemonAPIRequestTests 的 pull payload 测试固化）。发现死代码连同死测试时倾向删除，而不是补测试。
 - **本地产物不入库**：`target/`（Rust）、`.build/`（第三方引擎、Python venv）与模型权重都不在仓库；运行时数据在 `~/Library/Application Support/MacAIConsole/`（models.db、模型、日志）。
 - **`.wt-qa/` 是 QA 用的 git worktree 副本**，已 gitignore，不属于本仓库：不要在其中工作，不要把它的变更算进本仓库。
-- **常用环境变量**：`AIWORKD_PATH`（daemon 二进制）、`AIWORK_LLAMA_SERVER`、`AIWORK_WHISPER_CLI`、`AIWORK_KOKORO_PYTHON`、`AIWORK_QWEN3_ASR_MLX_PYTHON`、`AIWORK_QWEN3_ASR_DEVICE=mps|cpu|auto`、`AIWORKD_MEMORY_BUDGET`（字节）。
+- **常用环境变量**：`AIWORKD_PATH`（daemon 二进制）、`AIWORK_LLAMA_SERVER`、`AIWORK_WHISPER_CLI`、`AIWORKD_MEMORY_BUDGET`（字节）。`AIWORK_KOKORO_PYTHON` / `AIWORK_QWEN3_ASR_MLX_PYTHON` 随 legacy Provider 删除已无消费者；Runner 环境安装镜像用 `MACAI_UV_PYTHON_INSTALL_MIRROR`。
 - **文档同步**：改动对外行为（endpoint、CLI 命令、环境变量、目录布局）时同步 `README.md`；非机械改动在 `docs/decisions/` 创建或更新唯一 owner，并同步它引用的 `docs/specs/`。不要向 `handoff.md` 追加当前决策。

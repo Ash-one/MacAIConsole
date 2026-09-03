@@ -1,21 +1,19 @@
 # Runner Manifest v1
 
-Status: draft
+Status: current（已实现并被产品装配消费）
 
 Contract owner: this file
 
 Decision owner: [`2026-09-02-runner-plugin-architecture.md`](../decisions/2026-09-02-runner-plugin-architecture.md)
 
-本文件定义 `runner.toml` 的目标 schema。daemon 的 `ai-daemon::runners::manifest`
-模块已实现基础字段的解析与校验（含 `macai.runner.v1` schema、SemVer、协议版本、
-路径/entrypoint 约束与字段拒绝），并在 Phase 1B 中实现了 `runtime.probe`
-（`python-uv` 必填、与 entrypoint 相同的 argv 安全校验和模板解析）。isolated
-fake Runner 测试覆盖 discovery、信任、digest-bound staging、Profile snapshot 和启动
-握手；真实 uv 的环境行为由 `tests/runner_environment_manager.rs` 覆盖。Runtime/
-scheduler 对 Runner Instance 的组合路径与 Kokoro 首个 Runner package 已分别落地
-（见 [`kokoro-runner-reference.md`](../plans/kokoro-runner-reference.md) Phase 1C/2），
-但 daemon 生产装配（`main.rs`、HTTP 管理面、GUI）尚未接入 Runner；当前
-Provider/worker 仍不经 manifest 运行。
+本文件定义 `runner.toml` 的 schema。daemon 的 `ai-daemon::runners::manifest`
+模块实现完整字段的解析与校验（含 `macai.runner.v1` schema、SemVer、协议版本、
+路径/entrypoint 约束、未知字段拒绝与 `runtime.probe`——`python-uv` 必填、与
+entrypoint 相同的 argv 安全校验和模板解析）。isolated fake Runner 测试覆盖
+discovery、信任、digest-bound staging、Profile snapshot 和启动握手；真实 uv 的
+环境行为由 `tests/runner_environment_manager.rs` 覆盖。Runtime/scheduler 组合
+路径与生产装配（`main.rs` `bootstrap_runners`、HTTP 管理面、GUI）均已接入；
+Kokoro 与 qwen3-asr 两个 Runner package 经此 schema 运行。
 
 ## Location
 
@@ -91,7 +89,7 @@ adapter = "kokoro-mlx"
 | `security` | yes | 网络和环境变量权限 |
 | `models` | no | 随 Runner 分发的 Model Profile 引用 |
 
-未知顶层字段在 draft 阶段拒绝，防止拼写被静默忽略。未来兼容策略在 v1 发布前根据
+未知顶层字段被拒绝，防止拼写被静默忽略。未来兼容策略在 v1 面向第三方发布前根据
 真实扩展需求确定。
 
 ## ID and version
@@ -155,11 +153,11 @@ entrypoint 直接执行。probe 在 staging venv 上以 `timeouts.boot_seconds` 
 
 probe 只验证受管解释器、Runner package import 和运行依赖，不加载模型 artifact，也不
 创建常驻 worker。退出码 0 表示成功，非零、超时或 signal exit 均使环境进入 `failed`。
-daemon 使用清空后的环境变量和 manifest allowlist 启动 probe，
-`network_during_runtime = false` 时必须保持离线。stdout/stderr 只作为有界诊断输出处理，
-不进入 Runner Protocol。
+daemon 使用清空后的环境变量和 manifest allowlist 启动 probe。`network_during_runtime`
+描述 Runner 声明的运行期网络需求；v1 没有 OS 级网络沙箱，显式信任的 Runner 仍拥有
+daemon 用户权限。stdout/stderr 只作为有界诊断输出处理，不进入 Runner Protocol。
 
-该字段已由本 draft 确定，`RunnerRuntime` 解析器已实现（Phase 1B）：`python-uv`
+该字段已由本 spec 确定，`RunnerRuntime` 解析器已实现（Phase 1B）：`python-uv`
 缺少 probe、probe 首个 argv 非法或包含 shell 元字符时 manifest 拒绝解析；probe
 超时、非零退出或 spawn 失败时环境进入 `failed`，不产生 ready 目录。
 
@@ -172,12 +170,10 @@ unavailable，并给出机器可判定 code 和人类可读原因。
 
 ## Capacity
 
-- `max_instances`：该 Runner 同时允许的 worker process 数；
-- `max_concurrency_per_instance`：单实例同时处理的 inference 数；
-- 值必须为正整数；
-- daemon scheduler 是容量裁决 owner；Runner 仍需防御超限命令。
-
-Kokoro 首版使用 1/1，与当前模型和 worker 行为一致。
+- v1 当前只接受 `max_instances = 1` 与 `max_concurrency_per_instance = 1`；
+- daemon 以单 Runner 单进程、单活动 inference 执行；
+- 多实例或多路复用需要 stdout dispatcher、按 request ID 路由和独立容量裁决，必须通过
+  后续协议/架构决策引入；manifest 不能提前声明实现无法兑现的容量。
 
 ## Timeouts
 
@@ -186,15 +182,16 @@ manifest timeout 是 Runner 作者建议值，daemon 可以施加更严格的系
 
 ## Security
 
-- `network_during_install` 只控制显式环境安装；
-- `network_during_runtime = false` 是 Kokoro 首版要求；
+- `network_during_install` 声明显式环境安装是否需要网络；
+- `network_during_runtime` 声明 Runner 的运行期网络需求；Kokoro/qwen3-asr 声明 false；
 - `inherit_environment` 是 allowlist，daemon 默认不传递 token、credential 或完整父
   进程环境；
-- Runner 只能读取授权 model root、package root 和 environment；
-- 输出只能写 daemon 分配的 request directory；
+- daemon 只把规范化 model root 和 request directory 写入协议，并拒绝消费越界输出；
 - 安装来源、Runner package 和 lockfile digest 进入信任记录。
 
-manifest 声明是权限请求，daemon policy 可以收紧，不能由 Runner 自行扩大。
+v1 的信任边界是本地代码信任：用户显式信任 Runner 即授予与 aiworkd 相同的 OS 用户
+权限。`env_clear`、digest-bound staging 与返回路径校验提供身份、秘密最小化和数据流
+约束，不构成文件系统或网络沙箱。真正的 OS 级隔离需要独立安全决策和直接逃逸测试。
 
 ## Model references
 
@@ -233,17 +230,20 @@ descriptor 是 GUI/CLI 的状态 owner；客户端不自行重新解析 `runner.
 
 单个 Runner 无效只影响自身状态，Runner 列举继续 best-effort。
 
-## Required evidence before implementation status
+## Evidence
 
-- 完整和最小 manifest parse；
-- 每个必填字段缺失；
+以下证据均已落地（实现时的验收清单收敛为当前验证义务）：
+
+- 完整和最小 manifest parse；每个必填字段缺失的拒绝路径；
 - path traversal、symlink escape 和 shell entrypoint 拒绝；
 - 未知 capability/runtime 拒绝；
-- 同 ID 多版本选择及 no-silent-fallback；
-- `project = "."`、Kokoro Profile 的 defaults/resources、SemVer compatibility 解析；
-- `python-uv` 缺少 probe、probe 使用绝对 executable、probe 超时或非零退出时拒绝 ready；
-- discovery 后 package 被修改时，启动从 digest 相同的 daemon-owned staging 副本执行；
-- discovery 后修改 bundled Profile 不改变已解析的选择结果，且 package digest 阻止其启动；
-- boot timeout、identity 或 protocol error 后不存在遗留 Runner PID；
-- 单个坏 manifest 不影响其他 Runner；
-- descriptor 经 daemon API 被 Swift 客户端正确解码。
+- v1 拒绝 1/1 之外的 capacity；
+- 同 ID 多版本 SemVer 选择及 no-silent-fallback（ambiguity 结构化失败）；
+- `project = "."`、Profile defaults/resources、SemVer compatibility 解析；
+- `python-uv` 缺少 probe、probe 绝对 executable、probe 超时/非零退出时拒绝 ready；
+- discovery 后 package 被修改时，从 digest 校验的 daemon-owned staging 副本执行
+  （`PACKAGE_EXCLUDED_DIRS` 排除 `.venv` 等本地产物）；
+- discovery 后修改 bundled Profile 不改变已解析的选择结果；
+- boot timeout、identity 或 protocol error 后无遗留 Runner PID；
+- 单个坏 manifest 只影响自身，Runner 列举 best-effort；
+- descriptor 经 `/api/runners` 被 Swift 客户端解码（`DaemonAPI` tests）。

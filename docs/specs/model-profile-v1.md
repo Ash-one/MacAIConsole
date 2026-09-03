@@ -1,6 +1,7 @@
 # Model Profile v1
 
-Status: draft
+Status: current（已实现并被产品装配消费；v1 对第三方作者的稳定性承诺在 Plugins
+安装路径落地前保持克制）
 
 Contract owner: this file
 
@@ -8,9 +9,12 @@ Decision owner: [`2026-09-02-runner-plugin-architecture.md`](../decisions/2026-0
 
 Model Profile 是纯数据模型说明。它允许兼容现有 Runner 的新权重在不修改 daemon、
 CLI 或 GUI 源码的情况下被识别、下载、注册和加载。daemon 的
-`ai-daemon::runners::profile` 模块已实现该格式的解析与校验（`macai.model.v1`、
-immutable commit revision、typed defaults/resources 与 SemVer compatibility），但模型
-注册与 `/api/models/load` 尚未接入该格式，当前 `ModelSpec` 与推荐模型清单仍按旧路径工作。
+`ai-daemon::runners::profile` 模块实现该格式的解析与校验（`macai.model.v1`、
+immutable commit revision、typed defaults/resources 与 SemVer compatibility）；
+当前 catalog 快照持久化在 `model_profiles`；模型首次注册时再复制到
+`registered_model_profiles`，以 model ID 绑定 canonical JSON + sha256 digest。
+`bootstrap_runners` 在 daemon 启动时优先恢复 per-model snapshot，bundled catalog
+更新只影响未来注册。
 
 ## Example: Kokoro-82M-zh-MLX
 
@@ -48,8 +52,8 @@ memory_estimate_bytes = 400000000
 runner = ">=0.1,<0.2"
 ```
 
-示例中的 revision、完整 voice files 和资源值必须由 Kokoro 实施切片生成；占位内容
-不能作为最终推荐清单。
+示例中的 revision、完整 voice files 与资源值已由 Kokoro 实施切片生成
+（`runners/kokoro/profiles/kokoro-82m-zh.toml`）。
 
 ## Ownership
 
@@ -129,7 +133,7 @@ daemon 自行猜测默认值。
 - Profile 不得包含 executable、Python module 或自动运行 hook。
 
 大型 voice collection 可引用经过版本化和 digest 固定的 artifact group；该机制在
-真实 Kokoro profile 过大时再设计，v1 draft 不预设第二套清单 owner。
+真实 profile 确实过大时再设计，v1 不预设第二套清单 owner。
 
 ## Defaults and user overrides
 
@@ -146,25 +150,31 @@ override 作为独立状态保存。后续 Runner package 更新、移除或重�
 已注册模型的 artifact、默认值或 Runner compatibility；load 时以已注册 snapshot
 重新解析当前可信 Runner，并记录 requested、selected 和 reason。
 
-旧 `ModelSpec.provider` 记录在 Kokoro cutover 前继续工作。Runner-backed 模型通过一个
-通用注册路径引用 Profile identity/snapshot，不把 Runner ID 填入新的 provider 白名单，
-也不为每个 Runner 增加新的持久化字段。具体 SQLite 表形可以在 Phase 1C 实施中选择，
-但必须支持启动恢复、Profile 升级不覆盖用户 override，以及旧记录的显式迁移。
+旧 `ModelSpec.provider` 注册路径在迁移期对剩余 legacy（qwen3-tts / sherpa-onnx /
+mlx-lm）继续工作。Runner-backed 模型通过通用注册路径引用 Profile identity/snapshot，
+不把 Runner ID 填入新的 provider 白名单，也不为每个 Runner 增加新的持久化字段；
+`/api/models/load` 对 `org.macai.*` provider 按 descriptor 能力判定。
 
-该持久化与 load 路径尚未实现；当前代码只在 discovery 时持有内存 Profile snapshot。
+SQLite 使用两个 owner：`model_profiles` 保存当前可发现 catalog；
+`registered_model_profiles` 按 model ID 保存注册时的 snapshot/digest。删除模型同步删除
+绑定；daemon 重启从 per-model 表恢复，Profile catalog 升级不会改写既有模型。
 
 ## Local profiles
 
 用户可以导入本地 Model Profile 或由 daemon 为已存在 artifact 生成草稿。生成只基于
 文件和可安全解析的 metadata，不执行模型代码。用户确认 Runner/adapter 后才注册。
 
-## Required evidence before implementation status
+## Required evidence
 
-- parse、required fields、defaults/resources、version range 和 path safety 单测；
-- 完整 artifact list 与 digest 校验；
-- Runner 缺失、版本不匹配和未信任错误；
-- no-silent-fallback；
-- 用户 override 在 Profile 升级后保持；
-- daemon 重启后恢复同一 Profile snapshot/digest，Runner package 变化不会静默改写注册模型；
-- 一个未编入 daemon/GUI 的测试 Profile 完成注册和 fake inference；
-- Kokoro profile 经推荐下载、注册、真实 TTS 路径验证。
+以下证据均已落地（实现时的验收清单收敛为当前验证义务）：
+
+- parse、required fields、defaults/resources、version range 和 path safety 单测
+  （`cargo test -p ai-daemon profile::`）；
+- 完整 artifact list 与 digest 校验（`ModelProfile::digest` 确定性 + registry
+  roundtrip）；
+- Runner 缺失、版本不匹配和未信任错误（discovery/trust 拒绝路径）；
+- no-silent-fallback（SemVer ambiguity 结构化失败）；
+- daemon 重启后恢复同一 Profile snapshot/digest（registry 重开恢复测试）；
+- fake Runner 经注册 Profile 完成 load/infer（`runner_plugin_composition`）；
+- Kokoro profile 经推荐下载、注册、真实 TTS 路径验证（kokoro-runner-reference
+  证据表）。

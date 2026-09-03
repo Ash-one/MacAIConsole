@@ -1,23 +1,24 @@
 # Runner Protocol v1
 
-Status: draft
+Status: current（已实现并被 Kokoro / qwen3-asr Runner 消费；v1 是单实例、
+single-flight 协议）
 
 Contract owner: this file
 
 Decision owner: [`2026-09-02-runner-plugin-architecture.md`](../decisions/2026-09-02-runner-plugin-architecture.md)
 
 本文件定义 aiworkd 与受管 Runner 子进程之间的 wire contract。daemon 的
-`ai-daemon::runners::protocol` 已实现 frame codec（长度前缀、上限与校验），
-`supervisor` 已实现受监督子进程，`instance` 已在 Phase 1C 实现 handshake /
-load / infer / unload / shutdown 的组合语义与结构化错误映射（含 `tts.v1`
-输出路径校验与清理）；fake Runner 全链路组合测试见
-`tests/runner_runtime_composition.rs`。既有 Provider/worker 不实现该协议，
-真实 Runner 迁移通过后才能把本文件改写为已实现协议。
+`ai-daemon::runners::protocol` 实现 frame codec（长度前缀、上限与校验），
+`supervisor` 实现受监督子进程，`instance` 实现 handshake / load / infer / unload /
+shutdown 的组合语义与结构化错误映射（含 `tts.v1` 输出路径校验与清理；`stt.v1`
+经同一通道承载）。组合证据：`tests/runner_runtime_composition.rs`（fake Runner
+全链路）与真实 Kokoro / qwen3-asr 接线测试。多并发与 daemon→Runner cancel 需要
+进程 actor/dispatcher，未进入 v1 current contract。
 
 ## Goals
 
 - 跨 Rust、Python、C++ 等语言实现；
-- daemon 可监督进程、关联请求、取消、卸载和清理；
+- daemon 可监督进程、关联请求、卸载和清理；
 - 支持非流式和流式 capability；
 - stdout 不被第三方库日志破坏；
 - 错误可稳定映射到 MacAI 公共错误模型；
@@ -67,7 +68,8 @@ N-byte UTF-8 JSON object
 - `protocol`：固定为 `macai.runner.v1`；
 - `type`：frame 类型；
 - `id`：命令和其事件的 correlation ID；
-- `instance_id`：`load` 成功后由 daemon 指定，pre-load frame 可省略；
+- `instance_id`：为后续多实例路由保留；当前 single-flight v1 可省略，真实 instance ID
+  由 `/api/runners` 状态面提供；
 - `payload`：类型化内容；
 - `extensions`：可选 object，key 必须使用 Runner ID 命名空间。
 
@@ -159,12 +161,12 @@ Runner 首先发送 `accepted`，随后可发送任意数量 `progress`/`delta`/
 
 terminal frame 后同一 ID 的其他输出是 protocol violation。
 
-### cancel
+### cancellation boundary
 
-daemon 发送 `cancel`，payload 指向 inference ID。Runner 应尽快停止计算；底层引擎
-无法中止时，Runner 立即停止发布外部结果，并在计算退出后完成内部清理。
-
-取消属于正常 terminal state，不映射为 backend crash。
+Runner 可以用 `cancelled` 结束其自身中止的 inference；daemon→Runner `cancel` 命令不在
+当前 single-flight v1 中发送。客户端断开仍会把 daemon 任务标记为 cancelled，但不会
+宣称底层计算已中止。引入主动取消时必须同时实现独立 stdin writer、stdout dispatcher、
+worker 并发接收和 HTTP/task abort 消费路径。
 
 ## tts.v1
 
@@ -202,7 +204,7 @@ Kokoro 首版使用以下 request：
 安全要求：
 
 - daemon 为每个请求创建独立 output directory；
-- Runner 只能在该目录创建输出；
+- Runner contract 要求在该目录创建输出；
 - daemon canonicalize 返回路径并验证它仍位于授权目录内；
 - daemon 读取或发送完成后清理输出；
 - Runner 返回其他路径按 protocol/security violation 处理。
@@ -243,10 +245,8 @@ Runner 返回的未知 code 映射为 `internal`，原值只进入脱敏诊断 d
 
 ## Concurrency and ordering
 
-- 不同 `id` 的事件可以交错；同一 `id` 的事件保持发送顺序；
-- manifest 声明实例数和每实例最大并发；
-- Runner 超出声明并发时返回明确 busy/unavailable 错误，daemon scheduler 应在正常
-  路径避免触发；
+- v1 每个实例同时只有一个活动 inference，不允许不同 ID 的事件交错；
+- manifest 只接受单实例/单并发；
 - request ID 由 daemon 生成，Runner 不复用；
 - daemon 在 terminal frame 后释放 request lease 和 output directory。
 
@@ -256,13 +256,19 @@ Runner 返回的未知 code 映射为 `internal`，原值只进入脱敏诊断 d
 - 新的必需语义通过新 capability 或 protocol major version 引入；
 - Runner manifest 声明完整支持的 protocol/capability versions；
 - handshake 只选择双方明确支持的版本；
-- v1 在 fake Runner 与真实 Kokoro Runner 验证完成前不承诺第三方稳定性。
+- v1 已经 fake Runner 与真实 Kokoro Runner 两种实现验证；在 Plugins 第三方安装
+  路径落地前，对第三方作者的稳定性承诺保持克制。
 
-## Required evidence before implementation status
+## Evidence
 
-- codec 对 partial read、coalesced frames、oversize、truncated 和 invalid JSON 的单测；
-- fake Runner 的 handshake/load/infer/cancel/unload/crash composition test；
-- stderr 噪声不影响 stdout 协议；
-- Kokoro 真实 WAV 结果、非法 output path 和临时目录清理测试；
-- 推理活动期间 status 快照无 I/O 锁等待；
-- daemon shutdown 后无孤儿 Runner 进程。
+以下证据均已落地（实现时的验收清单收敛为当前验证义务）：
+
+- codec 对 partial read、coalesced frames、oversize、truncated 和 invalid JSON 的
+  单测（`protocol` 模块）；
+- fake Runner 的 handshake/load/infer/unload/crash composition test
+  （`runner_plugin_composition` + `runner_runtime_composition`）；
+- stderr 噪声不影响 stdout 协议（`redirect_stdout` 隔离 + smoke 独立 codec 复核）；
+- Kokoro 真实 WAV 结果、非法 output path 拒绝和临时目录清理（real wiring 测试）；
+- 推理活动期间 status 快照无 I/O 锁等待（composition status 测试）；
+- daemon shutdown 后无孤儿 Runner 进程（`shutdown_all` 收口 + composition 断言）。
+- worker crash 会清空 resident 状态；同一模型下一次 load 可创建新进程并恢复。
