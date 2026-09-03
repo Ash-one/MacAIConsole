@@ -76,8 +76,9 @@ struct LoadModelRequest {
     name: Option<String>,
     /// llm（默认）/ stt / tts。
     model_type: Option<String>,
-    /// 显式推理后端。STT 支持 whisper.cpp（默认）、qwen3-asr-mlx 与 sherpa-onnx；
-    /// TTS 支持 kokoro-mlx（默认）与 qwen3-tts。
+    /// 显式推理后端。STT 支持 whisper.cpp（默认）与 sherpa-onnx；
+    /// TTS 支持 qwen3-tts；Python 引擎（Kokoro / Qwen3-ASR）由 Runner 装配，
+    /// 显式指定其 runner provider id（org.macai.*）走 descriptor 能力判定。
     provider: Option<String>,
     context_length: Option<u64>,
     keep_alive: Option<String>,
@@ -318,6 +319,11 @@ async fn runner_statuses(State(state): State<AppState>) -> Json<Value> {
             .find(|status| status.environment_id == environment_id)
             .map(|status| status.phase.as_str().to_string())
             .unwrap_or_else(|| "missing".to_string());
+        let environment = statuses
+            .iter()
+            .find(|status| status.environment_id == environment_id)
+            .cloned();
+        let instance = manager.instance_snapshot(&manifest.id).await;
         let models: Vec<Value> = manifest
             .models
             .iter()
@@ -325,10 +331,24 @@ async fn runner_statuses(State(state): State<AppState>) -> Json<Value> {
             .collect();
         data.push(json!({
             "id": manifest.id,
+            "version": manifest.version,
             "root": format!("{}", entry.root.display()),
             "state": if matches!(entry.state, ai_daemon::runners::RunnerState::Trusted) { "trusted" } else { "untrusted" },
+            "reason": entry.reason,
+            "capabilities": manifest.capabilities,
+            "capacity": {
+                "max_instances": manifest.capacity.max_instances,
+                "max_concurrency_per_instance": manifest.capacity.max_concurrency_per_instance,
+            },
+            "permissions": {
+                "os_scope": "daemon-user",
+                "network_during_runtime_declared": manifest.security.network_during_runtime,
+                "inherit_environment": manifest.security.inherit_environment,
+            },
             "environment_id": environment_id,
             "phase": phase,
+            "environment": environment,
+            "instance": instance,
             "models": models,
         }));
     }
@@ -478,9 +498,7 @@ async fn register_and_load_model(
         ("llm", None | Some("llama.cpp")) => "llama.cpp".into(),
         ("llm", Some("mlx-lm")) => "mlx-lm".into(),
         ("stt", None | Some("whisper.cpp")) => "whisper.cpp".into(),
-        ("stt", Some("qwen3-asr-mlx")) => "qwen3-asr-mlx".into(),
         ("stt", Some("sherpa-onnx")) => "sherpa-onnx".into(),
-        ("tts", None | Some("kokoro-mlx")) => "kokoro-mlx".into(),
         ("tts", Some("qwen3-tts")) => "qwen3-tts".into(),
         (other_type, None) => {
             return api_error(
@@ -525,15 +543,6 @@ async fn register_and_load_model(
                 ),
             );
         }
-        "kokoro-mlx" if !path.is_dir() => {
-            return api_error(
-                AIError::InvalidRequest,
-                format!(
-                    "expected a model directory containing model.safetensors for provider 'kokoro-mlx', got '{}'",
-                    path.display()
-                ),
-            );
-        }
         "qwen3-tts" if !path.is_dir() => {
             return api_error(
                 AIError::InvalidRequest,
@@ -545,11 +554,6 @@ async fn register_and_load_model(
         }
         "mlx-lm" => {
             if let Err(error) = providers::mlx_lm::validate_model_dir(&path) {
-                return provider_error(error);
-            }
-        }
-        "qwen3-asr-mlx" => {
-            if let Err(error) = providers::qwen3_asr::validate_mlx_8bit_model_dir(&path) {
                 return provider_error(error);
             }
         }
@@ -582,12 +586,6 @@ async fn register_and_load_model(
         // MLX 权重体积即内存占用主体；real RSS 由 worker 上报。
         "mlx-lm" => (Some("mlx"), Some("5m"), Some(size_bytes)),
         "whisper.cpp" => (Some("bin"), Some("always"), Some(size_bytes)),
-        // 6 GiB is MacAI's initial scheduling estimate; real RSS is reported from the worker.
-        "qwen3-asr-mlx" => (
-            Some("qwen3-asr-mlx-8bit"),
-            Some("always"),
-            Some(2 * 1024 * 1024 * 1024),
-        ),
         "qwen3-tts" => (Some("qwen3-tts"), Some("always"), Some(size_bytes)),
         "sherpa-onnx" => (
             Some("sherpa-onnx-zh-int8-2025"),
@@ -1007,7 +1005,19 @@ async fn audio_speech(
     Json(mut request): Json<SpeechRequest>,
 ) -> Response {
     if request.model.trim().is_empty() {
-        request.model = "kokoro-mlx".to_string();
+        // 未指定模型时自动选第一个已注册的 TTS 模型（如 Runner 版 Kokoro）；
+        // 没有任何 TTS 模型时明确报错，不再指向已删除的 legacy provider id。
+        let default_tts = state
+            .runtime
+            .list_models()
+            .await
+            .into_iter()
+            .find(|entry| entry.spec.model_type == "tts")
+            .map(|entry| entry.spec.id);
+        let Some(default_tts) = default_tts else {
+            return api_error(AIError::ModelNotFound, "no TTS model registered");
+        };
+        request.model = default_tts;
     }
     let task = state.runtime.start_task(
         "tts",
@@ -1134,14 +1144,6 @@ fn builtin_runners_root() -> Option<PathBuf> {
 }
 
 async fn bootstrap_runners(runtime: &mut Runtime) {
-    use std::collections::HashMap;
-    use std::collections::HashSet;
-
-    use ai_daemon::runners::{
-        EnvironmentManager, EnvironmentManagerConfig, ModelProfile, RunnerInstanceManager,
-        RunnerModelBinding, RunnerProvider, RunnerRegistry, RunnerState,
-    };
-
     let Some(home) = std::env::var_os("HOME") else {
         return;
     };
@@ -1154,6 +1156,24 @@ async fn bootstrap_runners(runtime: &mut Runtime) {
         tracing::info!(path = %runner_root.display(), "built-in runners dir unavailable");
         return;
     }
+
+    bootstrap_runners_from_root(runtime, runner_root, app_support).await;
+}
+
+/// 从已经解析出的 built-in root 装配 Runner。拆出该边界后，首次安装测试可以使用
+/// 隔离目录验证“模型 artifact 尚不存在时 Provider 仍已 attach”。
+async fn bootstrap_runners_from_root(
+    runtime: &mut Runtime,
+    runner_root: PathBuf,
+    app_support: PathBuf,
+) {
+    use std::collections::HashMap;
+    use std::collections::HashSet;
+
+    use ai_daemon::runners::{
+        EnvironmentManager, EnvironmentManagerConfig, ModelProfile, RunnerInstanceManager,
+        RunnerModelBinding, RunnerProvider, RunnerRegistry, RunnerState,
+    };
 
     let registry = RunnerRegistry::discover(&[runner_root.clone()], &[], &HashSet::new());
     // 诊断：打印非可用/非 trusted 条目及其原因，便于定位 manifest/校验拒绝点。
@@ -1196,7 +1216,9 @@ async fn bootstrap_runners(runtime: &mut Runtime) {
         return;
     }
 
-    let environments = EnvironmentManager::new(EnvironmentManagerConfig::for_app_support());
+    let environments = EnvironmentManager::new(EnvironmentManagerConfig {
+        runtime_root: app_support.join("Runtimes/python"),
+    });
     let temp_root = app_support.join("Runtimes/tmp");
     if let Err(error) = std::fs::create_dir_all(&temp_root) {
         tracing::warn!(%error, path = %temp_root.display(), "cannot create runner temp root");
@@ -1213,8 +1235,15 @@ async fn bootstrap_runners(runtime: &mut Runtime) {
     for entry in &entries {
         let manifest = entry.manifest.as_ref().expect("filtered above");
         let runner_id = manifest.id.clone();
+        let provider = Arc::new(RunnerProvider::new(
+            runner_id.clone(),
+            &manifest.capabilities,
+            instances.clone(),
+            temp_root.clone(),
+        ));
+        providers.insert(runner_id.clone(), provider.clone());
         for model in &manifest.models {
-            let profile = match ModelProfile::load(&entry.root.join(&model.profile)) {
+            let catalog_profile = match ModelProfile::load(&entry.root.join(&model.profile)) {
                 Ok(profile) => profile,
                 Err(error) => {
                     tracing::warn!(
@@ -1226,6 +1255,31 @@ async fn bootstrap_runners(runtime: &mut Runtime) {
                     continue;
                 }
             };
+            match runtime.register_runner_profile(&catalog_profile) {
+                Ok(Some(digest)) => {
+                    tracing::info!(profile = %catalog_profile.id, digest = %digest, "runner profile persisted")
+                }
+                Ok(None) => {
+                    tracing::info!(profile = %catalog_profile.id, "runner profile registered (memory mode)")
+                }
+                Err(error) => {
+                    tracing::warn!(profile = %catalog_profile.id, %error, "profile persist failed")
+                }
+            }
+            if let Ok(true) = runtime
+                .freeze_existing_runner_profile(&catalog_profile)
+                .await
+            {
+                tracing::info!(
+                    profile = %catalog_profile.id,
+                    "froze current Profile for a pre-snapshot model registration"
+                );
+            }
+            // 已注册模型以 per-model snapshot 为准；catalog 更新只影响未来注册。
+            let profile = runtime
+                .registered_runner_profile(&catalog_profile.id)
+                .await
+                .unwrap_or(catalog_profile);
             let kind = if profile.capabilities.iter().any(|cap| cap == "stt.v1") {
                 "stt"
             } else if profile.capabilities.iter().any(|cap| cap == "tts.v1") {
@@ -1234,38 +1288,6 @@ async fn bootstrap_runners(runtime: &mut Runtime) {
                 "llm"
             };
             let model_dir = models_root.join(kind).join(&profile.artifacts.directory);
-            if !model_dir.is_dir() {
-                tracing::info!(
-                    profile = %profile.id,
-                    path = %model_dir.display(),
-                    "model artifact missing; Runner binding skipped (not pretending ready)"
-                );
-                continue;
-            }
-            match runtime.register_runner_profile(&profile) {
-                Ok(Some(digest)) => {
-                    tracing::info!(profile = %profile.id, digest = %digest, "runner profile persisted")
-                }
-                Ok(None) => {
-                    tracing::info!(profile = %profile.id, "runner profile registered (memory mode)")
-                }
-                Err(error) => {
-                    tracing::warn!(profile = %profile.id, %error, "profile persist failed")
-                }
-            }
-            let provider = match providers.get(&runner_id).cloned() {
-                Some(provider) => provider,
-                None => {
-                    let provider = Arc::new(RunnerProvider::new(
-                        runner_id.clone(),
-                        &manifest.capabilities,
-                        instances.clone(),
-                        temp_root.clone(),
-                    ));
-                    providers.insert(runner_id.clone(), provider.clone());
-                    provider
-                }
-            };
             provider
                 .bind_model(RunnerModelBinding {
                     model_id: profile.id.clone(),
@@ -1278,6 +1300,7 @@ async fn bootstrap_runners(runtime: &mut Runtime) {
                 runner = %runner_id,
                 profile = %profile.id,
                 artifact = %model_dir.display(),
+                artifact_present = model_dir.is_dir(),
                 "runner model bound"
             );
         }
@@ -1536,6 +1559,103 @@ mod tests {
             install_runner_environment(State(state), AxumPath("org.missing.runner".to_string()))
                 .await;
         assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn builtin_runner_attaches_before_its_model_artifact_exists() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "macai-bootstrap-runner-{}-{unique}",
+            std::process::id()
+        ));
+        let package = root.join("runners/example");
+        std::fs::create_dir_all(package.join("profiles")).unwrap();
+        std::fs::write(
+            package.join("runner.toml"),
+            r#"schema = "macai.runner.v1"
+id = "org.example.fresh"
+version = "0.1.0"
+protocols = ["macai.runner.v1"]
+capabilities = ["tts.v1"]
+[entrypoint]
+command = ["runner"]
+working_directory = "package"
+[runtime]
+type = "python-uv"
+id = "org.example.fresh-python"
+project = "."
+lock = "uv.lock"
+python = ">=3.12,<3.13"
+probe = ["{environment.python}", "-c", "print('ok')"]
+[capacity]
+max_instances = 1
+max_concurrency_per_instance = 1
+[timeouts]
+boot_seconds = 5
+load_seconds = 5
+inference_seconds = 5
+shutdown_seconds = 5
+[security]
+network_during_install = false
+network_during_runtime = false
+[[models]]
+profile = "profiles/fresh.toml"
+adapter = "fresh"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("profiles/fresh.toml"),
+            r#"schema = "macai.model.v1"
+id = "fresh-model"
+name = "Fresh model"
+capabilities = ["tts.v1"]
+runner = "org.example.fresh"
+adapter = "fresh"
+format = "directory"
+[source]
+type = "huggingface"
+repo = "org/fresh"
+revision = "0123456789abcdef0123456789abcdef01234567"
+[artifacts]
+directory = "fresh-model"
+files = ["model.safetensors"]
+[compatibility]
+runner = ">=0.1,<0.2"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("pyproject.toml"),
+            "[project]\nname='fresh'\nversion='0.1.0'\nrequires-python='>=3.12'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("uv.lock"),
+            "version = 1\nrevision = 3\nrequires-python = '>=3.12'\n",
+        )
+        .unwrap();
+
+        let app_support = root.join("Application Support/MacAIConsole");
+        let mut runtime = Runtime::new();
+        bootstrap_runners_from_root(&mut runtime, root.join("runners"), app_support.clone()).await;
+
+        assert!(runtime.provider_has_capability(
+            "org.example.fresh",
+            ai_core::provider::Capability::TextToSpeech
+        ));
+        assert!(runtime.runner_instances().is_some());
+        assert!(!app_support.join("Models/tts/fresh-model").exists());
+        let runtime = Arc::new(runtime);
+        let Json(body) = runner_statuses(State(app_state(runtime.clone()))).await;
+        assert_eq!(body["data"][0]["id"], "org.example.fresh");
+        assert_eq!(body["data"][0]["capabilities"], json!(["tts.v1"]));
+        assert_eq!(body["data"][0]["instance"], Value::Null);
+        runtime.shutdown_all().await;
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

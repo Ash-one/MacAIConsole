@@ -149,11 +149,23 @@ enum ModelRepository {
             if sherpaFiles.allSatisfy({ fm.fileExists(atPath: url.appendingPathComponent($0).path) }) {
                 return "sherpa-onnx"
             }
+            // Qwen3-ASR 模型目录：由 Runner provider（org.macai.qwen3-asr）承接。
+            // 以 config.json 的 model_type 判别，4bit / 8bit 目录结构均兼容。
+            if fm.fileExists(atPath: url.appendingPathComponent("preprocessor_config.json").path),
+               let data = try? Data(contentsOf: url.appendingPathComponent("config.json")),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               json["model_type"] as? String == "qwen3_asr" {
+                return "org.macai.qwen3-asr"
+            }
+            return nil
         }
         guard fm.fileExists(atPath: url.appendingPathComponent("model.safetensors").path) else {
             return nil
         }
-        if type == "tts" { return "kokoro-mlx" }
+        if type == "tts" {
+            // Kokoro 模型目录：由 Runner provider（org.macai.kokoro）承接。
+            return "org.macai.kokoro"
+        }
         if type == "llm" {
             // MLX LLM 目录（config.json + safetensors）；sharded 权重经 index 文件加载。
             guard fm.fileExists(atPath: url.appendingPathComponent("config.json").path) else {
@@ -161,16 +173,7 @@ enum ModelRepository {
             }
             return "mlx-lm"
         }
-        guard type == "stt",
-              fm.fileExists(atPath: url.appendingPathComponent("preprocessor_config.json").path),
-              let data = try? Data(contentsOf: url.appendingPathComponent("config.json")),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        let quantization = (json["quantization"] as? [String: Any])
-            ?? (json["quantization_config"] as? [String: Any])
-        return (quantization?["bits"] as? NSNumber)?.intValue == 8
-            ? "qwen3-asr-mlx"
-            : nil
+        return nil
     }
 
     private static func directorySize(at url: URL) -> UInt64 {

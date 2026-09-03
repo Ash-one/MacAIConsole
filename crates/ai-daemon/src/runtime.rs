@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::{Mutex, RwLock};
@@ -23,10 +23,10 @@ use ai_core::response::{
 use ai_core::AIError;
 
 use crate::providers::{
-    KokoroMlxProvider, LlamaCppProvider, MacOSSayProvider, MlxLmProvider, MockProvider,
-    Qwen3AsrProvider, Qwen3TtsProvider, SherpaOnnxProvider, WhisperCppProvider,
+    LlamaCppProvider, MacOSSayProvider, MlxLmProvider, MockProvider, Qwen3TtsProvider,
+    SherpaOnnxProvider, WhisperCppProvider,
 };
-use crate::registry::RegistryStore;
+use crate::registry::{RegistryStore, StoredProfile};
 use crate::scheduler;
 use crate::tasks::{TaskHandle, TaskRegistry};
 use ai_daemon::runners::RunnerInstanceManager;
@@ -35,6 +35,8 @@ use ai_daemon::runners::RunnerInstanceManager;
 #[derive(Debug, Clone)]
 pub struct RegistryEntry {
     pub spec: ModelSpec,
+    /// Runner-backed 模型注册当时的 immutable Profile snapshot；legacy 模型为 None。
+    pub profile: Option<StoredProfile>,
     pub state: String,
     pub loaded_at: Option<u64>,
     pub last_used_at: Option<u64>,
@@ -55,6 +57,9 @@ pub struct Runtime {
     lifecycle_lock: Mutex<()>,
     /// Runner-backed 模型的进程/协议通道（Phase 1C）。None = 未配置 Runner。
     runner_instances: Option<Arc<RunnerInstanceManager>>,
+    /// discovery 得到的当前 Profile catalog。它只用于新注册；已注册模型继续使用
+    /// RegistryEntry.profile 中冻结的 snapshot。
+    runner_profiles: StdRwLock<HashMap<String, ai_daemon::runners::ModelProfile>>,
     started_at: Instant,
     tasks: TaskRegistry,
     request_counter: AtomicU64,
@@ -82,7 +87,7 @@ impl Drop for ModelLease {
 impl Runtime {
     /// 纯内存构造，仅供单元测试：额外注入 mock 与 macos-say 测试 provider。
     pub fn new() -> Self {
-        let mut runtime = Self::with_options_and_seed(None, Vec::new());
+        let mut runtime = Self::with_options_and_seed(None, Vec::new(), HashMap::new());
         runtime.inject_test_providers();
         runtime
     }
@@ -115,7 +120,11 @@ impl Runtime {
             .as_ref()
             .map(|store| store.load_all())
             .unwrap_or_default();
-        let runtime = Self::with_options_and_seed(store, restored.clone());
+        let restored_profiles = store
+            .as_ref()
+            .map(RegistryStore::load_model_profile_bindings)
+            .unwrap_or_default();
+        let runtime = Self::with_options_and_seed(store, restored.clone(), restored_profiles);
         if runtime.store.is_some() {
             // 在锁外已算好的种子条目数，避免 async 上下文里做阻塞读（会 panic）。
             let count = restored.len();
@@ -127,6 +136,7 @@ impl Runtime {
     fn with_options_and_seed(
         store: Option<RegistryStore>,
         seed: Vec<(ModelSpec, Option<u64>)>,
+        registered_profiles: HashMap<String, StoredProfile>,
     ) -> Self {
         let memory_budget = scheduler::memory_budget();
         if let Some(budget) = memory_budget {
@@ -134,16 +144,16 @@ impl Runtime {
         }
         // 生产构造只装配真实引擎；mock / macos-say 是测试能力，
         // 由 new() 的 inject_test_providers 注入，不进生产 providers 表。
+        // Python worker 类引擎（kokoro / qwen3-asr / qwen3-tts）由 Runner
+        // 装配（org.macai.*），不再静态注册 legacy Provider。
         let llama = Arc::new(LlamaCppProvider::from_env());
         let whisper = Arc::new(WhisperCppProvider::from_env());
-        let kokoro = Arc::new(KokoroMlxProvider::from_env());
         let mlx_lm = Arc::new(MlxLmProvider::from_env());
         let qwen3_tts = Arc::new(Qwen3TtsProvider::from_env());
 
         let mut providers: HashMap<String, Arc<dyn Provider>> = HashMap::new();
         providers.insert("llama.cpp".to_string(), llama.clone());
         providers.insert("whisper.cpp".to_string(), whisper.clone());
-        providers.insert("kokoro-mlx".to_string(), kokoro.clone());
         providers.insert("mlx-lm".to_string(), mlx_lm.clone());
         providers.insert("qwen3-tts".to_string(), qwen3_tts.clone());
 
@@ -153,18 +163,14 @@ impl Runtime {
 
         let mut stt_providers: HashMap<String, Arc<dyn STTProvider>> = HashMap::new();
         stt_providers.insert("whisper.cpp".to_string(), whisper);
-        let qwen3_asr_mlx = Arc::new(Qwen3AsrProvider::mlx_from_env());
-        providers.insert("qwen3-asr-mlx".to_string(), qwen3_asr_mlx.clone());
-        stt_providers.insert("qwen3-asr-mlx".to_string(), qwen3_asr_mlx);
         let sherpa_onnx = Arc::new(SherpaOnnxProvider::from_env());
         providers.insert("sherpa-onnx".to_string(), sherpa_onnx.clone());
         stt_providers.insert("sherpa-onnx".to_string(), sherpa_onnx);
 
         let mut tts_providers: HashMap<String, Arc<dyn TTSProvider>> = HashMap::new();
-        tts_providers.insert("kokoro-mlx".to_string(), kokoro);
         tts_providers.insert("qwen3-tts".to_string(), qwen3_tts);
         Self {
-            registry: RwLock::new(seed_entries(seed)),
+            registry: RwLock::new(seed_entries(seed, registered_profiles)),
             store,
             memory_budget,
             providers,
@@ -175,16 +181,11 @@ impl Runtime {
             model_leases: StdMutex::new(HashMap::new()),
             lifecycle_lock: Mutex::new(()),
             runner_instances: None,
+            runner_profiles: StdRwLock::new(HashMap::new()),
             started_at: Instant::now(),
             tasks: TaskRegistry::new(),
             request_counter: AtomicU64::new(0),
         }
-    }
-
-    /// 配置 Runner 通道（Phase 1C）。`main` 在构造 Runtime 后调用一次；
-    /// RunnerProvider 由调用方装配并注册进 providers 表。
-    pub fn set_runner_instances(&mut self, instances: Arc<RunnerInstanceManager>) {
-        self.runner_instances = Some(instances);
     }
 
     pub fn runner_instances(&self) -> Option<Arc<RunnerInstanceManager>> {
@@ -246,6 +247,10 @@ impl Runtime {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs())
             .unwrap_or(0);
+        self.runner_profiles
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(profile.id.clone(), profile.clone());
         let Some(store) = self.store.as_ref() else {
             return Ok(None);
         };
@@ -260,17 +265,85 @@ impl Runtime {
         Ok(Some(digest))
     }
 
+    /// 返回某个已注册模型冻结的 Profile；用于 daemon 重启后重新建立 Runner binding。
+    pub async fn registered_runner_profile(
+        &self,
+        model_id: &str,
+    ) -> Option<ai_daemon::runners::ModelProfile> {
+        let snapshot = self
+            .registry
+            .read()
+            .await
+            .get(model_id)
+            .and_then(|entry| entry.profile.clone())?;
+        ai_daemon::runners::ModelProfile::from_snapshot(&snapshot.snapshot).ok()
+    }
+
+    fn current_runner_profile(&self, model_id: &str, provider_id: &str) -> Option<StoredProfile> {
+        let profile = self
+            .runner_profiles
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(model_id)
+            .filter(|profile| profile.runner == provider_id)
+            .cloned()?;
+        let digest = profile.digest().ok()?;
+        let snapshot = String::from_utf8(profile.canonical_json().ok()?).ok()?;
+        Some(StoredProfile {
+            profile_id: profile.id,
+            runner: profile.runner,
+            compatibility: profile.compatibility.runner,
+            digest,
+            snapshot,
+            installed_at: unix_now(),
+        })
+    }
+
+    /// 一次性迁移旧库：已有 Runner-backed ModelSpec 若尚未绑定 Profile，就冻结当前
+    /// catalog snapshot。已有绑定永不被 catalog 更新覆盖。
+    pub async fn freeze_existing_runner_profile(
+        &self,
+        profile: &ai_daemon::runners::ModelProfile,
+    ) -> Result<bool, String> {
+        let frozen = self
+            .current_runner_profile(&profile.id, &profile.runner)
+            .ok_or_else(|| format!("profile '{}' is not in the current catalog", profile.id))?;
+        let mut registry = self.registry.write().await;
+        let Some(entry) = registry.get_mut(&profile.id) else {
+            return Ok(false);
+        };
+        if entry.spec.provider != profile.runner || entry.profile.is_some() {
+            return Ok(false);
+        }
+        entry.profile = Some(frozen.clone());
+        drop(registry);
+        if let Some(store) = &self.store {
+            store.bind_model_profile(&profile.id, &frozen);
+        }
+        Ok(true)
+    }
+
     /// 注册一个模型。注册不等于常驻；初始状态始终为 unloaded。
     /// 已存在时更新规格（保留状态与使用时间）。
     pub async fn register(&self, spec: ModelSpec) {
+        self.register_with_profile(spec, None).await;
+    }
+
+    async fn register_with_profile(&self, spec: ModelSpec, profile: Option<StoredProfile>) {
         let mut registry = self.registry.write().await;
         match registry.get_mut(&spec.id) {
-            Some(entry) => entry.spec = spec.clone(),
+            Some(entry) => {
+                entry.spec = spec.clone();
+                if profile.is_some() {
+                    entry.profile = profile.clone();
+                }
+            }
             None => {
                 registry.insert(
                     spec.id.clone(),
                     RegistryEntry {
                         spec: spec.clone(),
+                        profile: profile.clone(),
                         state: "unloaded".to_string(),
                         loaded_at: None,
                         last_used_at: None,
@@ -280,6 +353,9 @@ impl Runtime {
         }
         if let Some(store) = &self.store {
             store.upsert(&spec, unix_now(), None);
+            if let Some(profile) = profile {
+                store.bind_model_profile(&spec.id, &profile);
+            }
         }
     }
 
@@ -307,10 +383,16 @@ impl Runtime {
         }
         {
             let registry = self.registry.read().await;
-            if !registry.contains_key(id) {
+            let Some(existing) = registry.get(id) else {
                 return Err(ProviderError::new(
                     AIError::ModelNotFound,
                     format!("model '{id}' not found"),
+                ));
+            };
+            if existing.profile.is_some() {
+                return Err(ProviderError::new(
+                    AIError::InvalidRequest,
+                    "Runner-backed Model Profile IDs are stable and cannot be renamed",
                 ));
             }
             if registry.contains_key(new_id) {
@@ -346,6 +428,9 @@ impl Runtime {
                 .insert(new_id.to_string(), entry.clone());
             if let Some(store) = &self.store {
                 store.upsert(&entry.spec, unix_now(), None);
+                if let Some(profile) = &entry.profile {
+                    store.bind_model_profile(new_id, profile);
+                }
                 store.remove(id);
             }
         }
@@ -415,8 +500,16 @@ impl Runtime {
         if self.handles.read().await.contains_key(&spec.id) {
             self.unload_model(&spec.id).await?;
         }
+        let existing_profile = self
+            .registry
+            .read()
+            .await
+            .get(&spec.id)
+            .and_then(|entry| entry.profile.clone());
         let existed_before = self.get_model(&spec.id).await.is_some();
-        self.register(spec.clone()).await;
+        let profile =
+            existing_profile.or_else(|| self.current_runner_profile(&spec.id, &spec.provider));
+        self.register_with_profile(spec.clone(), profile).await;
         match self.load_model(&spec.id).await {
             Ok(handle) => Ok(handle),
             Err(error) => {
@@ -998,12 +1091,16 @@ fn unix_now() -> u64 {
 
 /// 把持久层恢复的 (spec, last_used) 播种进内存注册表；状态一律 unloaded，
 /// 因为 daemon 重启后没有任何 worker 进程存活。
-fn seed_entries(seed: Vec<(ModelSpec, Option<u64>)>) -> HashMap<String, RegistryEntry> {
+fn seed_entries(
+    seed: Vec<(ModelSpec, Option<u64>)>,
+    mut registered_profiles: HashMap<String, StoredProfile>,
+) -> HashMap<String, RegistryEntry> {
     let mut map = HashMap::new();
     for (spec, last_used_at) in seed {
         map.insert(
             spec.id.clone(),
             RegistryEntry {
+                profile: registered_profiles.remove(&spec.id),
                 spec,
                 state: "unloaded".to_string(),
                 loaded_at: None,
@@ -1139,12 +1236,10 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                "kokoro-mlx",
                 "llama.cpp",
                 "macos-say",
                 "mlx-lm",
                 "mock",
-                "qwen3-asr-mlx",
                 "qwen3-tts",
                 "sherpa-onnx",
                 "whisper.cpp"
@@ -1215,8 +1310,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn register_runner_profile_persists_snapshot_to_store() {
+    #[tokio::test]
+    async fn registered_runner_model_restores_its_immutable_profile_snapshot() {
         let path = std::env::temp_dir().join(format!(
             "macai-runtime-profile-{}-{}.db",
             std::process::id(),
@@ -1257,12 +1352,56 @@ runner = ">=0.1,<0.2"
             .expect("store-backed runtime must persist");
         assert_eq!(digest.len(), 64);
 
+        let spec = ModelSpec {
+            id: profile.id.clone(),
+            name: profile.name.clone(),
+            model_type: "tts".to_string(),
+            provider: profile.runner.clone(),
+            source: None,
+            path: Some("/Models/tts/kokoro-82m-zh".to_string()),
+            format: Some(profile.format.clone()),
+            size_bytes: None,
+            memory_estimate: profile.resources.memory_estimate_bytes,
+            keep_alive: profile.defaults.keep_alive.clone(),
+            context_length: None,
+            default_voice: profile.defaults.voice.clone(),
+        };
+        let frozen = runtime
+            .current_runner_profile(&profile.id, &profile.runner)
+            .expect("catalog profile");
+        runtime.register(spec).await;
+        assert!(runtime
+            .freeze_existing_runner_profile(&profile)
+            .await
+            .expect("legacy registration migration"));
+        assert!(!runtime
+            .freeze_existing_runner_profile(&profile)
+            .await
+            .expect("existing binding is immutable"));
+        drop(runtime);
+
+        let restored = Runtime::with_store(&path);
+        let restored_profile = restored
+            .registered_runner_profile(&profile.id)
+            .await
+            .expect("registered profile must survive restart");
+        assert_eq!(restored_profile.digest().unwrap(), digest);
+        let rename_error = restored
+            .rename_model(&profile.id, "renamed-runner-model")
+            .await
+            .unwrap_err();
+        assert_eq!(rename_error.kind, AIError::InvalidRequest);
         let store = crate::registry::RegistryStore::open(&path).unwrap();
         let profiles = store.load_profiles();
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].profile_id, "kokoro-82m-zh");
         assert_eq!(profiles[0].runner, "org.macai.kokoro");
         assert_eq!(profiles[0].digest, digest);
+        assert_eq!(
+            store.load_model_profile_bindings()[&profile.id].digest,
+            frozen.digest
+        );
+        drop(restored);
         drop(store);
         let _ = std::fs::remove_file(&path);
     }

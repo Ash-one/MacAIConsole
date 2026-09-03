@@ -4,13 +4,15 @@ import XCTest
 
 final class PythonEnvironmentTests: XCTestCase {
     /// 每个依赖 Python 的推荐模型都必须有对应环境规格，否则模型页的
-    /// 「安装运行环境」按钮会无声消失；whisper.cpp 这类非 Python Provider 则不应有。
+    /// 「安装运行环境」按钮会无声消失；whisper.cpp 这类非 Python Provider，
+    /// 以及 org.macai.* Runner（环境由 daemon uv 受管、经 /api/runners 安装）
+    /// 则不应有 GUI 侧 .build 规格。
     @MainActor
     func testEveryPythonBackedRecommendedModelHasEnvironmentSpec() {
         for model in RecommendedModel.builtIns {
             let spec = PythonEnvironmentSpec.spec(forProvider: model.provider)
-            if model.provider == "whisper.cpp" {
-                XCTAssertNil(spec, "\(model.provider) 不需要 Python 环境")
+            if model.provider == "whisper.cpp" || model.provider.hasPrefix("org.macai.") {
+                XCTAssertNil(spec, "\(model.provider) 不需要 GUI 侧 Python 环境")
             } else {
                 XCTAssertNotNil(spec, "\(model.provider) 缺少 Python 环境规格")
                 XCTAssertEqual(spec?.id, model.provider)

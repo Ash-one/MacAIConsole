@@ -29,7 +29,7 @@ pub struct PullRequest {
     pub model_type: String,
     /// 注册 ID；缺省用文件名去扩展名
     pub id: Option<String>,
-    /// 显式 Provider，例如 qwen3-asr-mlx。
+    /// 显式 Provider，例如 org.macai.qwen3-asr（Runner）或 sherpa-onnx。
     pub provider: Option<String>,
     /// 下载后是否立即注册加载；默认保持原有 pull 行为。
     pub auto_load: Option<bool>,

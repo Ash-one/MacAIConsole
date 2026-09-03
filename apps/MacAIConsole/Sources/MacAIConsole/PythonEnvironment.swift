@@ -27,14 +27,6 @@ struct PythonEnvironmentSpec: Identifiable, Equatable {
         artifactPath ?? ".build/\(venvName)/bin/python"
     }
 
-    static let qwen3ASRMlx = PythonEnvironmentSpec(
-        id: "qwen3-asr-mlx",
-        label: "STT · Qwen3-ASR (MLX)",
-        summary: "语音识别（Apple Silicon Metal 加速）",
-        venvName: "qwen3-asr-mlx-venv",
-        packages: ["mlx-audio==0.5.0"],
-        pythonOverrideEnv: "AIWORK_QWEN3_ASR_MLX_PYTHON"
-    )
     static let mlxLm = PythonEnvironmentSpec(
         id: "mlx-lm",
         label: "LLM · MLX-LM",
@@ -42,14 +34,6 @@ struct PythonEnvironmentSpec: Identifiable, Equatable {
         venvName: "mlx-lm-venv",
         packages: ["mlx-lm==0.31.3"],
         pythonOverrideEnv: "AIWORK_MLX_LM_PYTHON"
-    )
-    static let kokoroMlx = PythonEnvironmentSpec(
-        id: "kokoro-mlx",
-        label: "TTS · Kokoro (MLX)",
-        summary: "语音合成（Apple Silicon Metal 加速）",
-        venvName: "kokoro-venv",
-        packages: ["mlx-audio", "misaki[zh]", "misaki[en]", "phonemizer-fork", "espeakng-loader"],
-        pythonOverrideEnv: "AIWORK_KOKORO_PYTHON"
     )
 
     static let sherpaOnnx = PythonEnvironmentSpec(
@@ -61,8 +45,8 @@ struct PythonEnvironmentSpec: Identifiable, Equatable {
         pythonOverrideEnv: "AIWORK_SHERPA_ONNX_PYTHON"
     )
 
-    /// Qwen3-TTS 与 Kokoro 复用同一个 mlx-audio 环境（kokoro-venv），
-    /// 仅在 daemon 侧用独立的解释器覆盖变量寻址。
+    /// Qwen3-TTS 与已退役的 Kokoro legacy 曾共用 kokoro-venv；Runner 迁移后
+    /// 仅 qwen3-tts legacy 仍在使用该环境。
     static let qwen3Tts = PythonEnvironmentSpec(
         id: "qwen3-tts",
         label: "TTS · Qwen3-TTS (MLX)",
@@ -85,7 +69,7 @@ struct PythonEnvironmentSpec: Identifiable, Equatable {
         artifactPath: ".build/llama.cpp/bin/llama-server"
     )
 
-    static let all = [llamaCpp, mlxLm, qwen3ASRMlx, sherpaOnnx, kokoroMlx, qwen3Tts]
+    static let all = [llamaCpp, mlxLm, sherpaOnnx, qwen3Tts]
 
     static func spec(forProvider providerID: String) -> PythonEnvironmentSpec? {
         all.first { $0.id == providerID }
