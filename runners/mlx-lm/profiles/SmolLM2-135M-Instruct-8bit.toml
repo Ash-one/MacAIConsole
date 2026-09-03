@@ -1,0 +1,36 @@
+schema = "macai.model.v1"
+id = "SmolLM2-135M-Instruct-8bit"
+name = "SmolLM2 135M Instruct 8bit"
+capabilities = ["chat.v1"]
+runner = "org.macai.mlx-lm"
+adapter = "mlx-lm-chat"
+format = "directory"
+
+[source]
+type = "huggingface"
+repo = "mlx-community/SmolLM2-135M-Instruct-8bit"
+# 2024-11-01 git ls-remote main HEAD（immutable 40-hex，2026-09-03 经 HF API 核对）
+revision = "0f0d9b8218915bc34d401e1a340b8c049d300d5e"
+
+[artifacts]
+# artifacts.directory 是相对 Models root 的子目录名（safe relative path，不允许 "."）
+directory = "SmolLM2-135M-Instruct-8bit"
+files = [
+    "config.json",
+    "merges.txt",
+    "model.safetensors",
+    "model.safetensors.index.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.json",
+]
+
+[defaults]
+keep_alive = "5m"
+
+[resources]
+memory_estimate_bytes = 300000000
+
+[compatibility]
+runner = ">=0.1,<0.2"

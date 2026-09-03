@@ -27,15 +27,6 @@ struct PythonEnvironmentSpec: Identifiable, Equatable {
         artifactPath ?? ".build/\(venvName)/bin/python"
     }
 
-    static let mlxLm = PythonEnvironmentSpec(
-        id: "mlx-lm",
-        label: "LLM · MLX-LM",
-        summary: "本地大语言模型对话（Apple Silicon Metal 加速）",
-        venvName: "mlx-lm-venv",
-        packages: ["mlx-lm==0.31.3"],
-        pythonOverrideEnv: "AIWORK_MLX_LM_PYTHON"
-    )
-
     static let sherpaOnnx = PythonEnvironmentSpec(
         id: "sherpa-onnx",
         label: "STT · sherpa-onnx",
@@ -69,7 +60,7 @@ struct PythonEnvironmentSpec: Identifiable, Equatable {
         artifactPath: ".build/llama.cpp/bin/llama-server"
     )
 
-    static let all = [llamaCpp, mlxLm, sherpaOnnx, qwen3Tts]
+    static let all = [llamaCpp, sherpaOnnx, qwen3Tts]
 
     static func spec(forProvider providerID: String) -> PythonEnvironmentSpec? {
         all.first { $0.id == providerID }

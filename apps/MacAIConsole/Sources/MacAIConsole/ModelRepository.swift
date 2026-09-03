@@ -168,10 +168,11 @@ enum ModelRepository {
         }
         if type == "llm" {
             // MLX LLM 目录（config.json + safetensors）；sharded 权重经 index 文件加载。
+            // chat.v1 Runner（org.macai.mlx-lm）承接，legacy mlx-lm 已删除。
             guard fm.fileExists(atPath: url.appendingPathComponent("config.json").path) else {
                 return nil
             }
-            return "mlx-lm"
+            return "org.macai.mlx-lm"
         }
         return nil
     }

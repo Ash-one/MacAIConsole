@@ -1,0 +1,25 @@
+[project]
+name = "macai-mlx-lm-runner"
+version = "0.1.0"
+description = "MLX-LM Chat Runner 的受管 Python 环境（MacAI Runner 全面迁移）"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "mlx-lm==0.31.3",
+    "numpy>=2,<3",
+    "macai-mlx-lm-runner",
+]
+
+[tool.uv.sources]
+macai-mlx-lm-runner = { path = ".", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/macai_mlx_lm_runner"]

@@ -53,7 +53,7 @@ final class DaemonAPIRequestTests: XCTestCase {
     }
 
     func testPullBuildsMlxLmPayloadForRecommendedQwen3() async throws {
-        let api = try makeAPI(status: 200, body: #"{"id":"qwen3-8b-mlx-4bit","provider":"mlx-lm"}"#)
+        let api = try makeAPI(status: 200, body: #"{"id":"qwen3-8b-mlx-4bit","provider":"org.macai.mlx-lm"}"#)
 
         let qwen3 = try XCTUnwrap(RecommendedModel.builtIns.first { $0.id == "qwen3-8b-mlx-4bit" })
         _ = try await api.pull(qwen3, autoLoad: true)
@@ -61,7 +61,7 @@ final class DaemonAPIRequestTests: XCTestCase {
         let payload = try XCTUnwrap(RecordingURLProtocol.recorded.first?.bodyData).jsonDictionary
         XCTAssertEqual(payload["repo"] as? String, "mlx-community/Qwen3-8B-4bit")
         XCTAssertEqual(payload["model_type"] as? String, "llm")
-        XCTAssertEqual(payload["provider"] as? String, "mlx-lm")
+        XCTAssertEqual(payload["provider"] as? String, "org.macai.mlx-lm")
         XCTAssertEqual(payload["directory"] as? String, "qwen3-8b-mlx-4bit")
         // worker 只需要权重与 tokenizer；README/.gitattributes 不进清单。
         let files = try XCTUnwrap(payload["files"] as? [String])
