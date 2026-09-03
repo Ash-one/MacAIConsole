@@ -22,7 +22,7 @@ schema = "macai.runner.v1"
 id = "org.example.fake"
 version = "0.1.0"
 protocols = ["macai.runner.v1"]
-capabilities = ["tts.v1"]
+capabilities = ["chat.v1", "tts.v1"]
 [entrypoint]
 command = ["fake-runner"]
 working_directory = "package"
@@ -124,7 +124,7 @@ async fn fixture(
     ));
     let provider = RunnerProvider::new(
         "org.example.fake".to_string(),
-        &["tts.v1".to_string()],
+        &["tts.v1".to_string(), "chat.v1".to_string()],
         instances.clone(),
         temp_root,
     );
@@ -338,6 +338,73 @@ async fn status_snapshot_does_not_wait_for_active_inference_io() {
     assert!(status.ready);
     assert_eq!(status.resident_models, vec!["fake-model".to_string()]);
     inference.await.unwrap().expect("slow inference");
+    instances
+        .shutdown_instance("org.example.fake")
+        .await
+        .expect("shutdown");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_stream_maps_delta_events_and_result_usage() {
+    let (root, provider, instances) = fixture("chat-stream").await;
+    provider.load(&model_spec()).await.expect("load");
+
+    let request = ai_core::request::ChatRequest {
+        model: "fake-model".to_string(),
+        messages: vec![ai_core::request::ChatMessage {
+            role: "user".to_string(),
+            content: "hello runner chat".to_string(),
+        }],
+        stream: true,
+        temperature: Some(0.7),
+        max_tokens: Some(64),
+    };
+
+    let stream = ai_core::provider::ChatProvider::chat_stream(&provider, request.clone())
+        .await
+        .expect("chat stream");
+    use futures::StreamExt;
+    let chunks: Vec<ai_core::response::ChatChunk> =
+        stream.map(|item| item.expect("chunk ok")).collect().await;
+    // 首个 chunk 带 role；delta chunks 拼出原文；末 chunk 带 finish_reason + usage。
+    assert_eq!(
+        chunks.first().and_then(|c| c.choices[0].delta.role.clone()),
+        Some("assistant".to_string())
+    );
+    let text: String = chunks[1..]
+        .iter()
+        .filter_map(|chunk| chunk.choices[0].delta.content.clone())
+        .collect();
+    assert_eq!(text, "hello runner chat");
+    let last = chunks.last().expect("final chunk");
+    assert_eq!(last.choices[0].finish_reason.as_deref(), Some("stop"));
+    let usage = last.usage.clone().expect("usage on final chunk");
+    assert_eq!(usage.prompt_tokens, 3);
+    assert_eq!(usage.completion_tokens, 3);
+    assert_eq!(usage.total_tokens, 6);
+
+    // 非流式路径聚合出同一个 ChatResponse。
+    let response = ai_core::provider::ChatProvider::chat(&provider, request)
+        .await
+        .expect("chat response");
+    assert_eq!(response.object, "chat.completion");
+    assert_eq!(
+        response.choices[0].message.content,
+        "hello runner chat".to_string()
+    );
+    assert_eq!(response.usage.total_tokens, 6);
+
+    // 空 messages 在 provider 层快速失败，不下发 runner。
+    let empty = ai_core::request::ChatRequest {
+        model: "fake-model".to_string(),
+        ..Default::default()
+    };
+    let error = ai_core::provider::ChatProvider::chat(&provider, empty)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, ai_core::AIError::InvalidRequest);
+
     instances
         .shutdown_instance("org.example.fake")
         .await

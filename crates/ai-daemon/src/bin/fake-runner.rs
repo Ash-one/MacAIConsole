@@ -1,4 +1,4 @@
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::io::{stdin, stdout};
 
 use ai_daemon::runners::{read_frame, write_frame, Envelope, DEFAULT_MAX_FRAME_BYTES};
@@ -16,7 +16,7 @@ async fn main() {
                 "runner_id": "org.example.fake",
                 "runner_version": "0.1.0",
                 "protocol_versions": ["macai.runner.v1"],
-                "capabilities": ["tts.v1"],
+                "capabilities": ["chat.v1", "tts.v1"],
                 "pid": std::process::id(),
             }),
         ),
@@ -26,6 +26,83 @@ async fn main() {
 
     while let Ok(command) = read_frame(&mut input, DEFAULT_MAX_FRAME_BYTES).await {
         match command.message_type.as_str() {
+            "infer"
+                if command.payload.get("capability").and_then(Value::as_str) == Some("chat.v1") =>
+            {
+                write_frame(
+                    &mut output,
+                    &Envelope::new("accepted", command.id.clone(), json!({})),
+                )
+                .await
+                .expect("write accepted");
+                let request = command.payload.get("request").cloned().unwrap_or(json!({}));
+                let messages = request
+                    .get("messages")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                if messages.is_empty() {
+                    write_frame(
+                        &mut output,
+                        &Envelope::new(
+                            "error",
+                            command.id.clone(),
+                            json!({
+                                "code": "invalid_request",
+                                "message": "messages must be a non-empty list",
+                                "retryable": false,
+                            }),
+                        ),
+                    )
+                    .await
+                    .expect("write error");
+                    continue;
+                }
+                // 逐段回显最后一条 user 消息，覆盖 daemon 的 delta→chunk 映射。
+                let content = messages
+                    .last()
+                    .and_then(|message| message.get("content"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                for segment in split_chunks(&content) {
+                    write_frame(
+                        &mut output,
+                        &Envelope::new("delta", command.id.clone(), json!({ "text": segment })),
+                    )
+                    .await
+                    .expect("write delta");
+                }
+                let prompt_tokens: u64 = messages
+                    .iter()
+                    .filter_map(|message| {
+                        message
+                            .get("content")
+                            .and_then(Value::as_str)
+                            .map(|content| content.split_whitespace().count() as u64)
+                    })
+                    .sum();
+                let completion_tokens = content.split_whitespace().count() as u64;
+                write_frame(
+                    &mut output,
+                    &Envelope::new(
+                        "result",
+                        command.id.clone(),
+                        json!({
+                            "text": content,
+                            "finish_reason": "stop",
+                            "usage": {
+                                "prompt_tokens": prompt_tokens,
+                                "completion_tokens": completion_tokens,
+                                "total_tokens": prompt_tokens + completion_tokens,
+                            },
+                            "effective_device": "cpu",
+                        }),
+                    ),
+                )
+                .await
+                .expect("write result");
+            }
             "infer" => {
                 if command
                     .payload
@@ -115,7 +192,7 @@ async fn main() {
                             "ok": reply_type != "error",
                             "model_id": command.payload.get("model_id").cloned().unwrap_or(json!(null)),
                             "effective_device": "cpu",
-                            "capabilities": ["tts.v1"],
+                            "capabilities": ["chat.v1", "tts.v1"],
                             "limits": {"max_concurrency": 1},
                         }),
                     ),
@@ -128,6 +205,19 @@ async fn main() {
             }
         }
     }
+}
+
+/// 把文本切成多段 delta（每个词一段），覆盖 daemon 的 delta→chunk 映射。
+fn split_chunks(content: &str) -> Vec<String> {
+    let mut segments: Vec<String> = content
+        .split_inclusive(char::is_whitespace)
+        .map(str::to_string)
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    if segments.is_empty() && !content.is_empty() {
+        segments.push(content.to_string());
+    }
+    segments
 }
 
 /// 最小合法 RIFF/WAVE（16-bit PCM 单声道），用于覆盖 daemon 的音频读取路径。

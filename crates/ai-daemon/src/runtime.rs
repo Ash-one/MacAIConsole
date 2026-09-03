@@ -216,6 +216,12 @@ impl Runtime {
         self.providers.insert(id.clone(), provider.clone());
         if descriptor
             .capabilities
+            .contains(&ai_core::provider::Capability::Chat)
+        {
+            self.chat_providers.insert(id.clone(), provider.clone());
+        }
+        if descriptor
+            .capabilities
             .contains(&ai_core::provider::Capability::TextToSpeech)
         {
             self.tts_providers.insert(id.clone(), provider.clone());
