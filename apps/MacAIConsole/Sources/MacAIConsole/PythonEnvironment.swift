@@ -36,17 +36,6 @@ struct PythonEnvironmentSpec: Identifiable, Equatable {
         pythonOverrideEnv: "AIWORK_SHERPA_ONNX_PYTHON"
     )
 
-    /// Qwen3-TTS 与已退役的 Kokoro legacy 曾共用 kokoro-venv；Runner 迁移后
-    /// 仅 qwen3-tts legacy 仍在使用该环境。
-    static let qwen3Tts = PythonEnvironmentSpec(
-        id: "qwen3-tts",
-        label: "TTS · Qwen3-TTS (MLX)",
-        summary: "自定义音色中文语音合成（Apple Silicon Metal 加速）",
-        venvName: "kokoro-venv",
-        packages: ["mlx-audio"],
-        pythonOverrideEnv: "AIWORK_QWEN3_TTS_PYTHON"
-    )
-
     /// llama.cpp 引擎二进制：安装 = 执行仓库脚本（浅克隆固定 revision + cmake 编译
     /// llama-server），产物落 `.build/llama.cpp/bin/llama-server`，与 daemon 探测路径一致。
     static let llamaCpp = PythonEnvironmentSpec(
@@ -60,7 +49,7 @@ struct PythonEnvironmentSpec: Identifiable, Equatable {
         artifactPath: ".build/llama.cpp/bin/llama-server"
     )
 
-    static let all = [llamaCpp, sherpaOnnx, qwen3Tts]
+    static let all = [llamaCpp, sherpaOnnx]
 
     static func spec(forProvider providerID: String) -> PythonEnvironmentSpec? {
         all.first { $0.id == providerID }
