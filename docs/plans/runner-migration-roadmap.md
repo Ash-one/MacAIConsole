@@ -57,7 +57,10 @@ Status: accepted（用户拍板：目标是把所有合适 provider 切换到 Ru
 3. sherpa-onnx ✓（2026-09-03，见下方 Phase 记录）
 4. mlx-lm LLM ✓（2026-09-03：chat.v1 能力通路 + `runners/mlx-lm` 包 + legacy 删除，
    见下方 Phase 记录）
-5. 收尾：删 mock/macos-say、删 GUI PythonEnvironmentManager（.build 一键安装 legacy 路径）、
+5. 收尾：mock/macos-say 保留（见决策记录）；GUI Python 环境管理器退役
+   ✓（2026-09-03：`PythonEnvironmentManager`/`PythonEnvironmentSpec` 改名
+   `EngineEnvironmentManager`/`EngineEnvironmentSpec`，venv/pip 安装路径删除，
+   只留 llama.cpp 脚本安装；Runner 环境统一走 daemon `/api/runners`）；
    清理 scripts/legacy worker 与 `.build` 引用、更新 README/AGENTS。
 6. 注册路径统一（2026-09-03，`1c206cc`）：main.rs provider 白名单只剩
    llm/stt 缺省两行，显式 provider（静态装配或 org.macai.*）统一走 descriptor

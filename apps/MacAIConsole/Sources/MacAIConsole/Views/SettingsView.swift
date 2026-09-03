@@ -10,7 +10,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.downloadSourceKey) private var downloadSource = ModelDownloadSource.official.rawValue
     @AppStorage(AppSettings.customDownloadEndpointKey) private var customDownloadEndpoint = ""
     @Environment(DaemonController.self) private var controller
-    @Environment(PythonEnvironmentManager.self) private var pythonEnvironments
+    @Environment(EngineEnvironmentManager.self) private var pythonEnvironments
 
     var body: some View {
         Form {
@@ -46,8 +46,8 @@ struct SettingsView: View {
             }
 
             Section {
-                ForEach(PythonEnvironmentSpec.all) { spec in
-                    PythonEnvironmentRow(spec: spec)
+                ForEach(EngineEnvironmentSpec.all) { spec in
+                    EngineEnvironmentRow(spec: spec)
                 }
             } header: {
                 HStack(spacing: 6) {
@@ -165,7 +165,7 @@ struct SettingsView: View {
     }
 
     private var runtimeEnvironmentDescription: String {
-        "各 Provider worker 依赖仓库 .build/ 下的运行环境：Python worker 使用 Python 3.12 venv，llama.cpp 由脚本克隆源码并编译（需要 Xcode 或 Command Line Tools 与 cmake）。安装需联网下载数百 MB 至数 GB 依赖。已用 AIWORK_* 变量指向自定义环境的无需安装。安装完成后重启 aiworkd 生效。"
+        "llama.cpp 引擎由脚本克隆固定 revision 源码并编译（需要 Xcode 或 Command Line Tools 与 cmake），产物落仓库 .build/llama.cpp/bin/llama-server。Python worker 已全部迁移 Runner，其环境在下方「Runner 引擎」区块安装。已用 AIWORK_* 变量指向自定义引擎的无需安装。安装完成后重启 aiworkd 生效。"
     }
 
     private var runnerEnvironmentsDescription: String {
@@ -226,12 +226,12 @@ struct SettingsView: View {
 }
 
 /// 「运行环境」区块的一行：环境名 + 就绪状态 + 安装/取消/重试。
-/// 安装是显式触发的长任务，进度以步骤文案 + 输出尾部呈现（pip / cmake 都不提供百分比）。
-struct PythonEnvironmentRow: View {
-    @Environment(PythonEnvironmentManager.self) private var pythonEnvironments
-    let spec: PythonEnvironmentSpec
+/// 安装是显式触发的长任务，进度以步骤文案 + 输出尾部呈现（cmake 不提供百分比）。
+struct EngineEnvironmentRow: View {
+    @Environment(EngineEnvironmentManager.self) private var pythonEnvironments
+    let spec: EngineEnvironmentSpec
 
-    private var state: PythonEnvironmentManager.InstallState {
+    private var state: EngineEnvironmentManager.InstallState {
         pythonEnvironments.state(for: spec)
     }
 
@@ -240,7 +240,7 @@ struct PythonEnvironmentRow: View {
     }
 
     private var isInstalling: Bool {
-        state.phase == .creatingVenv || state.phase == .installingPackages
+        state.phase == .installing
     }
 
     var body: some View {
