@@ -1,0 +1,37 @@
+schema = "macai.runner.v1"
+id = "org.macai.sherpa-onnx"
+version = "0.1.0"
+protocols = ["macai.runner.v1"]
+capabilities = ["stt.v1"]
+
+[entrypoint]
+command = ["{environment.python}", "-m", "macai_sherpa_onnx_runner"]
+working_directory = "package"
+
+[runtime]
+type = "python-uv"
+id = "org.macai.sherpa-onnx-python"
+project = "."
+lock = "uv.lock"
+python = ">=3.12,<3.13"
+# probe argv 与 entrypoint 同受 shell 元字符校验（禁 `;`），用纯 import 表达式。
+probe = ["{environment.python}", "-c", "import sherpa_onnx, numpy"]
+
+[capacity]
+max_instances = 1
+max_concurrency_per_instance = 1
+
+[timeouts]
+boot_seconds = 30
+load_seconds = 300
+inference_seconds = 600
+shutdown_seconds = 10
+
+[security]
+network_during_install = true
+network_during_runtime = false
+inherit_environment = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
+
+[[models]]
+profile = "profiles/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30.toml"
+adapter = "sherpa-onnx-transducer"

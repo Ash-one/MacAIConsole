@@ -1,0 +1,30 @@
+[project]
+name = "macai-sherpa-onnx-runner"
+version = "0.1.0"
+description = "sherpa-onnx streaming Zipformer STT Runner 的受管 Python 环境（MacAI Runner 全面迁移）"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # 1.13.6 的 macOS arm64 wheel 缺 sherpa-onnx-core（libonnxruntime.dylib
+    # 随 core 包分发），import 即 dlopen 失败；1.13.7 拆包修复。
+    # core 虽是 sherpa-onnx 的传递依赖，但 uv 0.9.21 解析该 wheel 时
+    # 未继承它，显式声明保证 `uv sync --locked` 不把它卸掉。
+    "sherpa-onnx==1.13.7",
+    "sherpa-onnx-core==1.13.7",
+    "numpy>=2,<3",
+    "macai-sherpa-onnx-runner",
+]
+
+[tool.uv.sources]
+macai-sherpa-onnx-runner = { path = ".", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/macai_sherpa_onnx_runner"]
