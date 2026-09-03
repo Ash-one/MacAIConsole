@@ -10,7 +10,7 @@ Status: accepted（用户拍板：目标是把所有合适 provider 切换到 Ru
   这类外部原生二进制 provider 保留现有 Provider**（进程隔离已具备），不硬套 Runner；
   `mock` 直接删除；`macos-say` 若无需要随清理。
 - 迁移全集（按序）：kokoro（✓ 已完成）→ qwen3-asr-mlx → qwen3-tts → sherpa-onnx
-  →（可选）mlx-lm LLM。
+  → mlx-lm LLM（✓ 2026-09-03 完成，含 chat.v1 能力通路）。
 
 ## 当前缺口核对（2026-09-02）
 
@@ -54,8 +54,40 @@ Status: accepted（用户拍板：目标是把所有合适 provider 切换到 Ru
 1. 迁移 qwen3-asr-mlx（复用 MLX uv 环境套路，最接近 Kokoro）✓（2026-09-02）
 2. qwen3-tts
 3. sherpa-onnx
-4. 收尾：删 mock/macos-say、删 GUI PythonEnvironmentManager（.build 一键安装 legacy 路径）、
+4. mlx-lm LLM ✓（2026-09-03：chat.v1 能力通路 + `runners/mlx-lm` 包 + legacy 删除，
+   见下方 Phase 记录）
+5. 收尾：删 mock/macos-say、删 GUI PythonEnvironmentManager（.build 一键安装 legacy 路径）、
    清理 scripts/legacy worker 与 `.build` 引用、更新 README/AGENTS。
+
+## Phase：mlx-lm legacy 删除（2026-09-03 落地）
+
+前置：Runner chat.v1 能力通路落地（`9ad777e`）——RunnerProvider 实现 ChatProvider，
+delta 事件映射 OpenAI SSE chunk（首 chunk role、末 chunk finish_reason+usage），
+attach_runner 注册 chat_providers 表，fake-runner chat 行为 + 组合测试覆盖
+流式/非流式/快速失败。
+
+迁移内容（`f4572ae`）：
+
+- `runners/mlx-lm/` 包：manifest `org.macai.mlx-lm`（capabilities=["chat.v1"]）、
+  uv 受管环境（mlx-lm==0.31.3，39 包 uv.lock）、Model Profile
+  `SmolLM2-135M-Instruct-8bit`（HF `mlx-community/SmolLM2-135M-Instruct-8bit` @
+  `0f0d9b82…` immutable revision）。
+- adapter `macai_mlx_lm_runner`：legacy `scripts/mlx_lm_worker.py` 语义完整迁移
+  （chat template 失败降级 plain join、`make_sampler(temp=…)` temp=0 贪心、
+  流式 GenerationResponse 迭代、stdout 重定向隔离协议帧）；engine 校验单测
+  4 passed；manifest probe（`import mlx_lm, mlx.core`）真实通过。
+- 真实接线证据：SmolLM2（143MB）metal 加载 → 逐 token delta（52 段）→
+  result 带 usage（prompt 46 + completion 64，finish=length）→ unload →
+  shutdown_complete 全链路（`tests/real_wiring_manual.py`）。
+- legacy 完整消费面删除：`providers/mlx_lm.rs`、`scripts/mlx_lm_worker.py` 及
+  pytest、runtime 静态装配（providers/chat_providers 双表）、main.rs 的
+  `("llm", Some("mlx-lm"))` 映射、目录校验分支与 format/keep-alive 分支、
+  GUI `PythonEnvironmentSpec.mlxLm`、`ModelRepository` LLM 目录启发式改指
+  `org.macai.mlx-lm`。`AIWORK_MLX_LM_PYTHON` 覆盖变量零消费者。
+- GUI 推荐模型：新增 SmolLM2（Runner 轻量 LLM），Qwen3-8B provider 改指
+  `org.macai.mlx-lm`；`DaemonAPIRequestTests` pull payload 断言同步。
+- 兼容性代价：显式 `--provider mlx-lm` 注册入口消失（`llm` 缺省仍是 llama.cpp，
+  MLX LLM 目录本地导入自动绑 `org.macai.mlx-lm`）。
 
 ## Phase：kokoro / qwen3-asr legacy 删除（2026-09-03 落地）
 
