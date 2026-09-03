@@ -40,9 +40,10 @@ pub struct RunnerModelBinding {
 /// 协议细节全部委托给 RunnerInstanceManager。
 pub struct RunnerProvider {
     runner_id: String,
-    /// manifest 声明的 ai-core Capability（tts.v1→TextToSpeech、stt.v1→SpeechToText）。
+    /// manifest 声明的 ai-core Capability（chat.v1→Chat、tts.v1→TextToSpeech、
+    /// stt.v1→SpeechToText）。
     capabilities: Vec<Capability>,
-    /// capability 名到模型 ID 的映射（当前 v1 只桥接 tts.v1）。
+    /// capability 名到模型 ID 的映射（v1 桥接 chat.v1 / tts.v1 / stt.v1）。
     bindings: tokio::sync::RwLock<Vec<RunnerModelBinding>>,
     instances: Arc<RunnerInstanceManager>,
     temp_root: PathBuf,
@@ -58,6 +59,7 @@ impl RunnerProvider {
         let mut capabilities = Vec::new();
         for name in manifest_capabilities {
             match name.as_str() {
+                "chat.v1" => capabilities.push(Capability::Chat),
                 "tts.v1" => capabilities.push(Capability::TextToSpeech),
                 "stt.v1" => capabilities.push(Capability::SpeechToText),
                 _ => {}
@@ -469,6 +471,212 @@ impl ai_core::provider::STTProvider for RunnerProvider {
             }
             Err(error) => Err(Self::map_error(error)),
         }
+    }
+}
+
+#[async_trait]
+impl ai_core::provider::ChatProvider for RunnerProvider {
+    /// chat.v1 请求：messages 直接承载 conversation；delta 事件映射为逐 token
+    /// SSE chunk，usage 由 result 帧回带。无授权输出目录（纯文本协议）。
+    async fn chat(
+        &self,
+        request: ai_core::request::ChatRequest,
+    ) -> Result<ai_core::response::ChatResponse, ProviderError> {
+        let mut stream = self.chat_stream(request).await?;
+        use futures::StreamExt;
+        let mut text = String::new();
+        let mut usage = None;
+        let mut finish_reason = None;
+        let mut header = None;
+        while let Some(item) = stream.next().await {
+            let chunk = item?;
+            if header.is_none() {
+                header = Some((chunk.id.clone(), chunk.created, chunk.model.clone()));
+            }
+            for choice in chunk.choices {
+                if let Some(content) = choice.delta.content {
+                    text.push_str(&content);
+                }
+                if choice.finish_reason.is_some() {
+                    finish_reason = choice.finish_reason;
+                }
+                if chunk.usage.is_some() {
+                    usage = chunk.usage.clone();
+                }
+            }
+        }
+        let (id, created, model) = header.ok_or_else(|| {
+            ProviderError::new(AIError::Internal, "chat stream produced no chunks")
+        })?;
+        Ok(ai_core::response::ChatResponse {
+            id,
+            object: "chat.completion".to_string(),
+            created,
+            model,
+            choices: vec![ai_core::response::ChatChoice {
+                index: 0,
+                message: ai_core::response::ChatResponseMessage {
+                    role: "assistant".to_string(),
+                    content: text,
+                },
+                finish_reason,
+            }],
+            usage: usage.unwrap_or_default(),
+        })
+    }
+
+    async fn chat_stream(
+        &self,
+        request: ai_core::request::ChatRequest,
+    ) -> Result<ai_core::provider::ChatStream, ProviderError> {
+        if request.messages.is_empty() {
+            return Err(ProviderError::new(
+                AIError::InvalidRequest,
+                "chat request has no messages",
+            ));
+        }
+        let binding = self.binding(&request.model).await?;
+        let runner_id = binding.profile.runner.clone();
+        let model = request.model.clone();
+        let chat_request = json!({
+            "messages": request.messages,
+            "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
+        });
+        let (deadline, _) = self.deadlines(&binding)?;
+        let instances = self.instances.clone();
+        let completion_id = format!("chatcmpl-runner-{}", uuid_like());
+        let created = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let stream = async_stream::stream! {
+            // v1 单实例/单并发：infer 内部持有进程 I/O 锁，天然排队。
+            let (tx, mut rx) = futures::channel::mpsc::channel::<
+                Result<ai_core::response::ChatChunk, ProviderError>,
+            >(8);
+            let driver_tx = tx.clone();
+            let infer_runner_id = runner_id.clone();
+            let infer_model = model.clone();
+            let infer_completion = completion_id.clone();
+            let driver = tokio::spawn(async move {
+                let mut tx = driver_tx;
+                let events = instances.infer(
+                    &infer_runner_id,
+                    "chat.v1",
+                    chat_request,
+                    json!({}),
+                    deadline,
+                    |event| match event {
+                        crate::runners::InferEvent::Delta(payload) => {
+                            let _ = tx.try_send(Ok(chunk_with(
+                                &infer_completion,
+                                created,
+                                &infer_model,
+                                payload.get("text").and_then(Value::as_str).unwrap_or_default(),
+                                None,
+                                None,
+                            )));
+                        }
+                        crate::runners::InferEvent::Result(payload) => {
+                            let usage = payload.get("usage").cloned().unwrap_or_else(|| json!({}));
+                            let _ = tx.try_send(Ok(chunk_with(
+                                &infer_completion,
+                                created,
+                                &infer_model,
+                                "",
+                                Some(
+                                    payload
+                                        .get("finish_reason")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("stop")
+                                        .to_string(),
+                                ),
+                                Some(ai_core::response::ChatUsage {
+                                    prompt_tokens: usage
+                                        .get("prompt_tokens")
+                                        .and_then(Value::as_u64)
+                                        .unwrap_or(0),
+                                    completion_tokens: usage
+                                        .get("completion_tokens")
+                                        .and_then(Value::as_u64)
+                                        .unwrap_or(0),
+                                    total_tokens: usage
+                                        .get("total_tokens")
+                                        .and_then(Value::as_u64)
+                                        .unwrap_or(0),
+                                }),
+                            )));
+                        }
+                        _ => {}
+                    },
+                );
+                match events.await {
+                    Ok(_) => {}
+                    Err(error) => {
+                        let _ = tx.try_send(Err(RunnerProvider::map_error(error)));
+                    }
+                }
+            });
+            drop(tx);
+            use futures::StreamExt;
+            // OpenAI 流式契约：首个 chunk 带 role，最后一个 chunk 带 finish_reason+usage。
+            yield Ok(ai_core::response::ChatChunk {
+                id: completion_id.clone(),
+                object: "chat.completion.chunk".to_string(),
+                created,
+                model: model.clone(),
+                choices: vec![ai_core::response::ChatChunkChoice {
+                    index: 0,
+                    delta: ai_core::response::ChatChunkDelta {
+                        role: Some("assistant".to_string()),
+                        content: Some(String::new()),
+                    },
+                    finish_reason: None,
+                }],
+                usage: None,
+            });
+            while let Some(item) = rx.next().await {
+                yield item;
+            }
+            if let Err(join_error) = driver.await {
+                if !join_error.is_cancelled() && !join_error.is_panic() {
+                    yield Err(ProviderError::new(
+                        AIError::Internal,
+                        format!("chat driver failed: {join_error}"),
+                    ));
+                }
+            }
+        };
+        Ok(Box::pin(stream))
+    }
+}
+
+/// 带可选 finish_reason/usage 的流式 chunk 构造。
+#[allow(clippy::too_many_arguments)]
+fn chunk_with(
+    id: &str,
+    created: u64,
+    model: &str,
+    content: &str,
+    finish_reason: Option<String>,
+    usage: Option<ai_core::response::ChatUsage>,
+) -> ai_core::response::ChatChunk {
+    ai_core::response::ChatChunk {
+        id: id.to_string(),
+        object: "chat.completion.chunk".to_string(),
+        created,
+        model: model.to_string(),
+        choices: vec![ai_core::response::ChatChunkChoice {
+            index: 0,
+            delta: ai_core::response::ChatChunkDelta {
+                role: None,
+                content: Some(content.to_string()),
+            },
+            finish_reason,
+        }],
+        usage,
     }
 }
 
