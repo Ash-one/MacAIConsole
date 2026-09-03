@@ -16,11 +16,10 @@ MacAI 是一个跑在你 Mac 上的本地 AI Runtime。它的核心只有一个�
 ```text
 macai CLI ────────────┐
 MacAIConsole (SwiftUI) ├── HTTP ──> aiworkd ──┬── llama.cpp ──> GGUF / Metal
-OpenAI-compatible SDK ┘                      ├── mlx-lm ──────> MLX / Metal
-                                             ├── whisper.cpp ─> Core ML / Metal
+OpenAI-compatible SDK ┘                      ├── whisper.cpp ─> Core ML / Metal
                                              ├── sherpa-onnx ─> ONNX Runtime / CPU or Core ML
                                              ├── qwen3-tts ───> local TTS
-                                             └── Runners (uv Python) ─> Kokoro TTS / Qwen3-ASR STT
+                                             └── Runners (uv Python) ─> Kokoro TTS / Qwen3-ASR STT / mlx-lm LLM
 
                                              ├── SQLite model registry
                                              ├── memory budget / LRU / keep-alive
@@ -50,7 +49,7 @@ OpenAI-compatible SDK ┘                      ├── mlx-lm ─────�
 | 能力 | Provider | 模型/输入 | 加速 |
 | --- | --- | --- | --- |
 | LLM | llama.cpp | GGUF | Metal / Accelerate |
-| LLM | mlx-lm | MLX 模型目录（safetensors） | MLX / Metal |
+| LLM | org.macai.mlx-lm（Runner） | MLX 模型目录（safetensors） | MLX / Metal |
 | STT | whisper.cpp | `.bin` + PCM WAV | Core ML 优先，Metal 回退 |
 | STT | sherpa-onnx | zh-int8-2025 model directory + PCM WAV | CPU（可选 Core ML） |
 | STT | org.macai.qwen3-asr（Runner） | Qwen3-ASR MLX 模型目录 + PCM WAV | MLX / Metal GPU |
@@ -95,7 +94,7 @@ MacAIConsole 当前提供：
 - Rust stable toolchain
 - Xcode Command Line Tools
 - CMake
-- Python 3.12（sherpa-onnx STT 与 mlx-lm LLM 需要；Runner 的 uv 受管环境同样以 3.12 为基础解释器）
+- Python 3.12（sherpa-onnx STT 需要；Runner 的 uv 受管环境同样以 3.12 为基础解释器）
 
 仓库不含模型权重、编译好的第三方推理引擎和 Python 虚拟环境——这些都留在本机，仓库保持干净。
 
@@ -325,22 +324,37 @@ hf download mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit \
 `Vivian`、`Serena`、`Uncle_Fu`、`Dylan`、`Eric`、`Ryan`、`Aiden`、
 `Ono_Anna`、`Sohee`；首版不包含流式、声音克隆或 VoiceDesign。
 
-### 9. 准备 MLX-LM
+### 9. 准备 MLX-LM（Runner）
 
-创建 Python 环境（也可在 MacAIConsole「设置 → Python 运行环境」中一键安装）：
+MLX LLM 由 daemon 的 mlx-lm Runner（`org.macai.mlx-lm`）提供服务，Apple Silicon 上走
+MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole「设置 → Runner 引擎（实验）」里
+对 `org.macai.mlx-lm` 执行安装，或手动：
 
 ```bash
-python3.12 -m venv .build/mlx-lm-venv
-.build/mlx-lm-venv/bin/pip install "mlx-lm==0.31.3"
+uv sync --project runners/mlx-lm --locked --no-dev
 ```
 
-推荐模型（Qwen3 8B · MLX 4-bit）可以在 MacAIConsole 模型页一键下载；或者手动把 MLX 格式模型目录（含 `config.json` 与 safetensors 权重，例如 [mlx-community/Qwen3-8B-4bit](https://huggingface.co/mlx-community/Qwen3-8B-4bit)）放进：
+推荐模型（SmolLM2-135M-Instruct-8bit、Qwen3 8B · MLX 4-bit）可以在 MacAIConsole
+模型页一键下载；或者手动把 MLX 格式模型目录（含 `config.json` 与 safetensors 权重，
+例如 [mlx-community/Qwen3-8B-4bit](https://huggingface.co/mlx-community/Qwen3-8B-4bit)）
+放进：
 
 ```text
 ~/Library/Application Support/MacAIConsole/Models/llm/
 ```
 
-注册时显式选 provider `mlx-lm`。GGUF 和 MLX 格式互不通用：GGUF 走 llama.cpp，MLX 走 mlx-lm。`AIWORK_MLX_LM_PYTHON` 指向其他 Python 环境；加载与推理超时分别由 `AIWORK_MLX_LM_LOAD_TIMEOUT_SECS` 与 `AIWORK_MLX_LM_INFERENCE_TIMEOUT_SECS` 控制。
+注册时显式选择 Runner provider `org.macai.mlx-lm`，模型 ID 与目录名一致：
+
+```bash
+./target/release/macai load \
+  "$HOME/Library/Application Support/MacAIConsole/Models/llm/SmolLM2-135M-Instruct-8bit" \
+  --id SmolLM2-135M-Instruct-8bit \
+  --type llm \
+  --provider org.macai.mlx-lm \
+  --keep-alive 5m
+```
+
+GGUF 和 MLX 格式互不通用：GGUF 走 llama.cpp，MLX 走 mlx-lm Runner。
 
 ## MacAIConsole
 
@@ -675,8 +689,8 @@ crates/
 apps/
 └── MacAIConsole/  # 原生 SwiftUI 控制台
 
-scripts/           # llama.cpp、whisper.cpp 构建脚本与剩余 legacy worker（mlx-lm、qwen3-tts、sherpa-onnx）
-runners/           # daemon 自动发现的 Runner 包（Kokoro TTS、Qwen3-ASR STT）
+scripts/           # llama.cpp、whisper.cpp 构建脚本与剩余 legacy worker（qwen3-tts、sherpa-onnx）
+runners/           # daemon 自动发现的 Runner 包（Kokoro TTS、Qwen3-ASR STT、mlx-lm LLM）
 samples/           # 第三方集成示例（含 Hermes TTS/STT 适配器）
 docs/              # 当前工作提案、决策、契约草案与实施计划
 ```

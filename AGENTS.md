@@ -55,11 +55,11 @@ MacAI 是面向 Apple Silicon 的本地 AI Runtime：Rust daemon `aiworkd`（默
 | 路径 | 内容 |
 | --- | --- |
 | `crates/ai-core` | 共享类型：model / provider / request / response / errors |
-| `crates/ai-daemon` | `aiworkd` 本体。`main.rs` HTTP endpoints；`runtime.rs` 模型与 Provider 生命周期（lease）；`scheduler.rs` 内存预算（`min(ram*0.75, ram-8GB)`，`AIWORKD_MEMORY_BUDGET` 可覆盖）、LRU 与 keep-alive reaper；`registry.rs` SQLite 注册表（内存 HashMap 为唯一读路径）；`tasks.rs` 有界任务历史（终态保留最近 100 条）；`pull.rs` Hugging Face/ModelScope 下载（断点续传）；`audio.rs` STT 音频归一化；`providers/` 含 llama_cpp、mlx_lm、whisper_cpp、qwen3_tts、sherpa_onnx、macos_say、mock；`runners/` 为 Runner 架构（kokoro、qwen3-asr 由 `runners/` 包动态装配） |
-| `runners/` | Runner 包（manifest + uv 受管 Python 环境 + Model Profile）：`kokoro`（TTS）、`qwen3-asr`（STT）。daemon 启动时 `bootstrap_runners` 自动发现并装配为 `org.macai.*` provider |
+| `crates/ai-daemon` | `aiworkd` 本体。`main.rs` HTTP endpoints；`runtime.rs` 模型与 Provider 生命周期（lease）；`scheduler.rs` 内存预算（`min(ram*0.75, ram-8GB)`，`AIWORKD_MEMORY_BUDGET` 可覆盖）、LRU 与 keep-alive reaper；`registry.rs` SQLite 注册表（内存 HashMap 为唯一读路径）；`tasks.rs` 有界任务历史（终态保留最近 100 条）；`pull.rs` Hugging Face/ModelScope 下载（断点续传）；`audio.rs` STT 音频归一化；`providers/` 含 llama_cpp、whisper_cpp、qwen3_tts、sherpa_onnx、macos_say、mock；`runners/` 为 Runner 架构（kokoro、qwen3-asr、mlx-lm 由 `runners/` 包动态装配） |
+| `runners/` | Runner 包（manifest + uv 受管 Python 环境 + Model Profile）：`kokoro`（TTS）、`qwen3-asr`（STT）、`mlx-lm`（LLM chat）。daemon 启动时 `bootstrap_runners` 自动发现并装配为 `org.macai.*` provider |
 | `crates/ai-cli` | `macai` CLI（clap，单文件 `main.rs`），只调 daemon |
 | `apps/MacAIConsole` | SwiftUI 控制台。`DaemonAPI.swift`（HTTP 客户端）、`DaemonController.swift`（daemon 探测与启停：`AIWORKD_PATH` → `target/release` → `target/debug`）、`PythonEnvironment.swift`（一键装 venv 到 `.build/`）、`AppSettings.swift`、`AppRouter.swift`；视图在 `Views/` |
-| `scripts/` | `build-llama-server.sh` / `build-whisper-cli.sh` / `download-whisper-model.sh`（固定经过验证的 revision）；Python worker：`mlx_lm_worker.py`、`qwen3_tts_worker.py`、`sherpa_onnx_worker.py`；`tests/` 为 pytest |
+| `scripts/` | `build-llama-server.sh` / `build-whisper-cli.sh` / `download-whisper-model.sh`（固定经过验证的 revision）；Python worker：`qwen3_tts_worker.py`、`sherpa_onnx_worker.py`；`tests/` 为 pytest |
 | `samples/` | Hermes TTS/STT 命令型 Provider 适配器与一键配置脚本 |
 
 ## 构建与验证
