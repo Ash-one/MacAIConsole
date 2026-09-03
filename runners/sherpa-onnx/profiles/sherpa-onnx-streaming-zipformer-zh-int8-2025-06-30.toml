@@ -1,0 +1,33 @@
+schema = "macai.model.v1"
+id = "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30"
+name = "sherpa-onnx Streaming Zipformer zh int8 2025-06-30"
+capabilities = ["stt.v1"]
+runner = "org.macai.sherpa-onnx"
+adapter = "sherpa-onnx-transducer"
+format = "directory"
+
+[source]
+type = "huggingface"
+# k2-fsa 官方 GitHub release tar.bz2 的 HF 镜像（csukuangfj = sherpa-onnx 维护者），
+# 布局与 release 包一致（tokens.txt + encoder/decoder/joiner）。
+repo = "csukuangfj/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30"
+revision = "ad658fa0201659a09ea3c176129a191c77ecae8f"
+
+[artifacts]
+# artifacts.directory 是相对 Models root 的子目录名（safe relative path，不允许 "."）
+directory = "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30"
+files = [
+    "tokens.txt",
+    "encoder.int8.onnx",
+    "decoder.onnx",
+    "joiner.int8.onnx",
+]
+
+[defaults]
+keep_alive = "always"
+
+[resources]
+memory_estimate_bytes = 400000000
+
+[compatibility]
+runner = ">=0.1,<0.2"

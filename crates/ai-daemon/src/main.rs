@@ -543,11 +543,6 @@ async fn register_and_load_model(
                 ),
             );
         }
-        "sherpa-onnx" => {
-            if let Err(error) = providers::sherpa_onnx::validate_model_dir(&path) {
-                return provider_error(error);
-            }
-        }
         p if !path.is_dir() => {
             return api_error(
                 AIError::InvalidRequest,
@@ -579,11 +574,6 @@ async fn register_and_load_model(
     let (format, keep_alive_default, memory_estimate) = match provider {
         "llama.cpp" => (Some("gguf"), Some("5m"), Some(size_bytes)),
         "whisper.cpp" => (Some("bin"), Some("always"), Some(size_bytes)),
-        "sherpa-onnx" => (
-            Some("sherpa-onnx-zh-int8-2025"),
-            Some("always"),
-            Some(size_bytes),
-        ),
         _ => (None, Some("always"), Some(size_bytes)),
     };
     let spec = ai_core::model::ModelSpec {

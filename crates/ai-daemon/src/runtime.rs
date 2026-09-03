@@ -22,9 +22,7 @@ use ai_core::response::{
 };
 use ai_core::AIError;
 
-use crate::providers::{
-    LlamaCppProvider, MacOSSayProvider, MockProvider, SherpaOnnxProvider, WhisperCppProvider,
-};
+use crate::providers::{LlamaCppProvider, MacOSSayProvider, MockProvider, WhisperCppProvider};
 use crate::registry::{RegistryStore, StoredProfile};
 use crate::scheduler;
 use crate::tasks::{TaskHandle, TaskRegistry};
@@ -157,9 +155,6 @@ impl Runtime {
 
         let mut stt_providers: HashMap<String, Arc<dyn STTProvider>> = HashMap::new();
         stt_providers.insert("whisper.cpp".to_string(), whisper);
-        let sherpa_onnx = Arc::new(SherpaOnnxProvider::from_env());
-        providers.insert("sherpa-onnx".to_string(), sherpa_onnx.clone());
-        stt_providers.insert("sherpa-onnx".to_string(), sherpa_onnx);
 
         let tts_providers: HashMap<String, Arc<dyn TTSProvider>> = HashMap::new();
         Self {
@@ -1232,16 +1227,7 @@ mod tests {
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect();
-        assert_eq!(
-            ids,
-            vec![
-                "llama.cpp",
-                "macos-say",
-                "mock",
-                "sherpa-onnx",
-                "whisper.cpp"
-            ]
-        );
+        assert_eq!(ids, vec!["llama.cpp", "macos-say", "mock", "whisper.cpp"]);
     }
 
     #[tokio::test]

@@ -4,11 +4,9 @@
 pub mod llama_cpp;
 pub mod macos_say;
 pub mod mock;
-pub mod sherpa_onnx;
 pub mod whisper_cpp;
 
 pub use llama_cpp::LlamaCppProvider;
 pub use macos_say::MacOSSayProvider;
 pub use mock::MockProvider;
-pub use sherpa_onnx::SherpaOnnxProvider;
 pub use whisper_cpp::WhisperCppProvider;

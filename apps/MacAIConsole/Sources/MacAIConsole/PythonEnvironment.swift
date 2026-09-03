@@ -27,15 +27,6 @@ struct PythonEnvironmentSpec: Identifiable, Equatable {
         artifactPath ?? ".build/\(venvName)/bin/python"
     }
 
-    static let sherpaOnnx = PythonEnvironmentSpec(
-        id: "sherpa-onnx",
-        label: "STT · sherpa-onnx",
-        summary: "中文语音识别（Zipformer int8，CPU 或 Core ML）",
-        venvName: "sherpa-onnx-venv",
-        packages: ["sherpa-onnx==1.13.6", "numpy>=1.26,<3"],
-        pythonOverrideEnv: "AIWORK_SHERPA_ONNX_PYTHON"
-    )
-
     /// llama.cpp 引擎二进制：安装 = 执行仓库脚本（浅克隆固定 revision + cmake 编译
     /// llama-server），产物落 `.build/llama.cpp/bin/llama-server`，与 daemon 探测路径一致。
     static let llamaCpp = PythonEnvironmentSpec(
@@ -49,7 +40,7 @@ struct PythonEnvironmentSpec: Identifiable, Equatable {
         artifactPath: ".build/llama.cpp/bin/llama-server"
     )
 
-    static let all = [llamaCpp, sherpaOnnx]
+    static let all = [llamaCpp]
 
     static func spec(forProvider providerID: String) -> PythonEnvironmentSpec? {
         all.first { $0.id == providerID }

@@ -147,7 +147,7 @@ enum ModelRepository {
                 "joiner.int8.onnx"
             ]
             if sherpaFiles.allSatisfy({ fm.fileExists(atPath: url.appendingPathComponent($0).path) }) {
-                return "sherpa-onnx"
+                return "org.macai.sherpa-onnx"
             }
             // Qwen3-ASR 模型目录：由 Runner provider（org.macai.qwen3-asr）承接。
             // 以 config.json 的 model_type 判别，4bit / 8bit 目录结构均兼容。
