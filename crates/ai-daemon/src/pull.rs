@@ -240,7 +240,7 @@ fn content_range_total(value: &header::HeaderValue) -> Option<u64> {
     (total != "*").then(|| total.parse().ok()).flatten()
 }
 
-fn build_client() -> Result<reqwest::Client, String> {
+pub fn build_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         // Large HF files have previously failed with an HTTP/2 response-body
         // decoding error. Keep this transfer path on HTTP/1.1, then retry from

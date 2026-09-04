@@ -15,9 +15,8 @@ MacAI 是一个跑在你 Mac 上的本地 AI Runtime。它的核心只有一个�
 
 ```text
 macai CLI ────────────┐
-MacAIConsole (SwiftUI) ├── HTTP ──> aiworkd ──┬── llama.cpp ──> GGUF / Metal
-OpenAI-compatible SDK ┘                      ├── whisper.cpp ─> Core ML / Metal
-                                             └── Runners (uv Python) ─> Kokoro TTS / Qwen3-ASR STT / Qwen3-TTS / sherpa-onnx STT / mlx-lm LLM
+MacAIConsole (SwiftUI) ├── HTTP ──> aiworkd ──┬── whisper.cpp ─> Core ML / Metal
+OpenAI-compatible SDK ┘                      └── Runners (uv Python) ─> Kokoro TTS / Qwen3-ASR STT / Qwen3-TTS / sherpa-onnx STT / mlx-lm LLM / llama.cpp LLM (GGUF / Metal)
 
                                              ├── SQLite model registry
                                              ├── memory budget / LRU / keep-alive
@@ -46,7 +45,7 @@ OpenAI-compatible SDK ┘                      ├── whisper.cpp ─> Core M
 
 | 能力 | Provider | 模型/输入 | 加速 |
 | --- | --- | --- | --- |
-| LLM | llama.cpp | GGUF | Metal / Accelerate |
+| LLM | org.macai.llama.cpp（Runner） | GGUF | Metal / Accelerate |
 | LLM | org.macai.mlx-lm（Runner） | MLX 模型目录（safetensors） | MLX / Metal |
 | STT | whisper.cpp | `.bin` + PCM WAV | Core ML 优先，Metal 回退 |
 | STT | org.macai.sherpa-onnx（Runner） | zh-int8-2025 model directory + PCM WAV | CPU |
@@ -54,7 +53,7 @@ OpenAI-compatible SDK ┘                      ├── whisper.cpp ─> Core M
 | TTS | org.macai.qwen3-tts（Runner） | Qwen3-TTS CustomVoice 模型目录 | MLX / Metal GPU |
 | TTS | org.macai.kokoro（Runner） | Kokoro 模型目录 | MLX / Metal GPU |
 
-Python worker 类引擎逐步迁移到 [Runner 架构](docs/decisions/2026-09-02-runner-plugin-architecture.md)：Kokoro 与 Qwen3-ASR 由 daemon 自动发现 `runners/` 下的 Runner 包并预先装配为动态 provider（`org.macai.*`），因此模型下载后无需重启 daemon。Python 环境由 uv 受管，GUI「设置 → Runner 引擎」一键安装；注册模型冻结当时的 Model Profile snapshot，后续 catalog 更新不会静默改写它。
+Python worker 类引擎已全部迁移到 [Runner 架构](docs/decisions/2026-09-02-runner-plugin-architecture.md)：五个引擎由 daemon 自动发现 `runners/` 下的 Runner 包并预先装配为动态 provider（`org.macai.*`），因此模型下载后无需重启 daemon。Python 环境由 uv 受管，GUI「设置 → 运行环境」一键安装；注册模型冻结当时的 Model Profile snapshot，后续 catalog 更新不会静默改写它。
 
 当前 Runner Protocol v1 是单实例、单活动推理。显式信任 Runner 等同信任本地代码以
 aiworkd 用户权限运行；digest、环境变量 allowlist 和输出路径校验不构成 OS 沙箱。
@@ -118,18 +117,22 @@ cargo build --release --workspace
 ./target/release/macai ps
 ```
 
-### 3. 构建 llama.cpp worker
+### 3. 安装 llama.cpp 引擎（Runner）
 
-构建脚本固定了经过验证的 llama.cpp revision，升版本之前先跑通这里的版本：
+llama.cpp 已迁移 Runner 架构（`org.macai.llama.cpp`）。安装走 daemon 统一
+入口——GUI「设置 → 运行环境」或直接调 API：
 
 ```bash
-./scripts/build-llama-server.sh
+curl -X POST http://127.0.0.1:11435/api/runners/org.macai.llama.cpp/install
 ```
 
-产物在 `.build/llama.cpp/bin/llama-server`。本机已经有合适的二进制的话：
+install 会同步 uv 受管的适配器环境，并下载经过验证的 llama.cpp 预编译
+产物（manifest `[engine]` 固定 tag + sha256 强制校验）到
+`~/Library/Application Support/MacAIConsole/Engines/org.macai.llama.cpp/`。
+本机已经有合适的二进制的话，可以显式覆盖：
 
 ```bash
-export AIWORK_LLAMA_SERVER=/absolute/path/to/llama-server
+export MACAI_LLAMA_SERVER=/absolute/path/to/llama-server
 ```
 
 注册并运行一个本地 GGUF：
@@ -184,7 +187,7 @@ ggml-large-v3-turbo-encoder.mlmodelc/
 
 ### 5. 准备 Qwen3-ASR 0.6B
 
-Qwen3-ASR 由 daemon 的 Qwen3-ASR Runner（`org.macai.qwen3-asr`）提供服务，Apple Silicon 上走 MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole「设置 → Runner 引擎（实验）」里对 `org.macai.qwen3-asr` 执行安装，或手动：
+Qwen3-ASR 由 daemon 的 Qwen3-ASR Runner（`org.macai.qwen3-asr`）提供服务，Apple Silicon 上走 MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole「设置 → 运行环境」里对 `org.macai.qwen3-asr` 执行安装，或手动：
 
 ```bash
 uv sync --project runners/qwen3-asr --locked --no-dev
@@ -210,7 +213,7 @@ uv sync --project runners/qwen3-asr --locked --no-dev
 ### 6. 准备 sherpa-onnx zh-int8-2025（Runner）
 
 sherpa-onnx 由 daemon 的 sherpa-onnx Runner（`org.macai.sherpa-onnx`）提供服务，
-Python 环境由 uv 受管：在 MacAIConsole「设置 → Runner 引擎（实验）」里对
+Python 环境由 uv 受管：在 MacAIConsole「设置 → 运行环境」里对
 `org.macai.sherpa-onnx` 执行安装，或手动：
 
 ```bash
@@ -261,7 +264,7 @@ provider 需 runner 包内显式启用后另行声明）。
 
 ### 7. 准备 Kokoro TTS
 
-Kokoro 由 daemon 的 Kokoro Runner（`org.macai.kokoro`）提供服务，Python 环境由 uv 受管：在 MacAIConsole「设置 → Runner 引擎（实验）」里对 `org.macai.kokoro` 执行安装，或手动：
+Kokoro 由 daemon 的 Kokoro Runner（`org.macai.kokoro`）提供服务，Python 环境由 uv 受管：在 MacAIConsole「设置 → 运行环境」里对 `org.macai.kokoro` 执行安装，或手动：
 
 ```bash
 uv sync --project runners/kokoro --locked --no-dev
@@ -288,7 +291,7 @@ uv sync --project runners/kokoro --locked --no-dev
 
 Qwen3-TTS 由 daemon 的 Qwen3-TTS Runner（`org.macai.qwen3-tts`）提供服务，
 Apple Silicon 上走 MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole
-「设置 → Runner 引擎（实验）」里对 `org.macai.qwen3-tts` 执行安装，或手动：
+「设置 → 运行环境」里对 `org.macai.qwen3-tts` 执行安装，或手动：
 
 ```bash
 uv sync --project runners/qwen3-tts --locked --no-dev
@@ -322,7 +325,7 @@ uv sync --project runners/qwen3-tts --locked --no-dev
 ### 9. 准备 MLX-LM（Runner）
 
 MLX LLM 由 daemon 的 mlx-lm Runner（`org.macai.mlx-lm`）提供服务，Apple Silicon 上走
-MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole「设置 → Runner 引擎（实验）」里
+MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole「设置 → 运行环境」里
 对 `org.macai.mlx-lm` 执行安装，或手动：
 
 ```bash

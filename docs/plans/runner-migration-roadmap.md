@@ -6,8 +6,12 @@ Status: accepted（用户拍板：目标是把所有合适 provider 切换到 Ru
 
 - 目标：Python worker 类 provider 全部迁移到 daemon-owned uv Runner；
   日常模型注册/默认 provider 指向 Runner 版本；最终删除 legacy Provider 路径。
-- 边界：Runner 的运行时形态是 python-uv 受管环境。因此 **llama.cpp / whisper.cpp
-  这类外部原生二进制 provider 保留现有 Provider**（进程隔离已具备），不硬套 Runner；
+- ~~边界：Runner 的运行时形态是 python-uv 受管环境。因此 **llama.cpp / whisper.cpp
+  这类外部原生二进制 provider 保留现有 Provider**（进程隔离已具备），不硬套 Runner；~~
+  **2026-09-03 修订（用户拍板）**：llama.cpp / whisper.cpp 也要迁移到 Runner，
+  原「cpp 保留 legacy」边界作废；「运行环境」的 GUI 本地脚本安装一并退役，
+  引擎安装/状态统一收敛到 daemon `/api/runners`。迁移方案见下方
+  「Phase：GUI Runner-first 与 cpp 引擎 Runner 化」。
   `mock` / `macos-say` 保留为测试与 CLI 兜底能力（2026-09-03 用户拍板：不删除，
   生产装配不含，GUI 无注册入口）。
 - 迁移全集（按序）：kokoro（✓ 已完成）→ qwen3-asr-mlx → qwen3-tts（✓ 2026-09-03）
@@ -198,3 +202,108 @@ Legacy 语义已核对：
 阻塞（已解除）：模型源与 immutable revision 已核（ModelScope
 `aufklarer/Qwen3-ASR-0.6B-MLX-4bit` @ 3478f17…），下载链路缺陷（TLS/UA/502
 映射）修复见 `2026-09-02-download-link-fixes.md`。真实验证待模型落盘后执行。
+
+## Phase：GUI Runner-first 与 cpp 引擎 Runner 化（2026-09-03 提案；B ✓ 落地、A1 ✓ llama.cpp 落地、A2 未实施）
+
+动机（solution-independent）：用户切换到 Runner 引擎后，GUI 中仍写死的
+legacy 绑定全部失效——设置页「运行环境」区块还是旧引擎视角（截图实锤：
+旧区块显示 MLX-LM「安装」而 Runner 区块 mlx-lm「已就绪」，两套状态矛盾）；
+注册/加载路径里 llama.cpp / whisper.cpp 作为静态缺省硬编码，与 Runner
+引擎在架构上处于不对等地位。
+
+### 写死点清单（2026-09-03 探测，逐条有出处）
+
+**GUI 侧：**
+
+1. 设置页双区块并存：`SettingsView.swift:48-66` 的「运行环境」
+   （`EngineEnvironmentSpec.all`，本地脚本安装）与「Runner 引擎（实验）」
+   （`/api/runners`）两个区块，信息重复、状态可能互相矛盾；区块标题仍带
+   「（实验）」字样。
+2. 「运行环境」文案谎报现状：`SettingsView.swift:167-168`
+   `runtimeEnvironmentDescription` 说「Python worker 已全部迁移 Runner」，
+   但它自己仍是旧的本地脚本安装区块；`SettingsView.swift:172` 还说 Runner
+   「尚未进入既有模型列表」——chat.v1 落地后此描述已过时。
+3. `EngineEnvironmentSpec.all = [llamaCpp]`（`EngineEnvironment.swift:34`）：
+   整个 manager 只剩一个条目，存在价值仅为 llama.cpp 本地脚本安装。
+4. whisper.cpp 无 GUI 安装入口：`ModelsView.swift:732-734` 注释明说
+   engineSpec nil「whisper.cpp 与全部 org.macai.* Runner」——whisper.cpp
+   引擎二进制缺失时 GUI 无法引导安装。
+5. `ModelsView.swift` 模型页「Provider 未装配」行的「安装运行环境」按钮
+   （838-841）只对 llama.cpp 生效，Runner 引擎缺失时无引导。
+6. `ModelRepository.directoryProvider`（`ModelRepository.swift:77-150`）：
+   目录形状启发式写死 org.macai.* 绑定（sherpa 四文件、qwen3_asr
+   config.json 判别等）；TTS 目录无法区分、暂绑 `org.macai.kokoro`。
+7. `AddModelSheet.swift:18-20`：按类型硬编码扩展名约定（llm→.gguf /
+   stt→.bin），与 main.rs 的写死校验一一对应。
+
+**daemon 侧：**
+
+8. `main.rs:497-500`：`/api/models/load` 缺省映射 `(llm,None)→llama.cpp`、
+   `(stt,None)→whisper.cpp` 写死两行（1c206cc 刚收敛，属有意设计，但
+   cpp Runner 化后这层缺省语义需要重新裁决）。
+9. `main.rs:528-577`：llama.cpp/whisper.cpp 的扩展名硬校验与
+   format/keep-alive/memory-estimate 分支写死（.gguf/.bin、5m/always）。
+10. `runtime.rs:146-149`：静态装配只剩 `LlamaCppProvider::from_env()` /
+    `WhisperCppProvider::from_env()` 两个，绕过 Runner discovery 生命周期
+    （无 install/manifest/status，与 `org.macai.*` 不对等）。
+
+**迁移方向：**
+
+A. **cpp Runner 化（未实施）**：`runners/llama.cpp`、`runners/whisper.cpp` 作为
+   native-binary Runner 包（manifest 类型不同于 python-uv），binary 获取
+   交给 Runner install（下载预编译产物或触发脚本编译）；legacy
+   `providers/llama_cpp.rs` / `whisper_cpp.rs` 删除，静态装配归零，全部
+   provider 由 bootstrap_runners 装配。缺省映射改由 descriptor
+   能力判定 + 类型唯一就绪 provider 决定。
+B. **GUI Runner-first 收敛（✓ 2026-09-03 已落地）**：删除设置页「运行环境」
+   区块与 `EngineEnvironmentManager`（`EngineEnvironment.swift` 与
+   `EngineEnvironmentTests.swift` 删除，App 环境注入移除），
+   「Runner 引擎（实验）」区块转正为「运行环境」单一区块；模型页
+   「Provider 未装配」引导改为「去设置安装引擎」按钮（经 `AppRouter.goToSettings()`
+   跳转）；信息文案同步当前事实。`swift build` + `swift test --enable-xctest`
+   35 passed 验证；GUI README 与根 README 的区块名称同步。
+   目录启发式与 `AddModelSheet` 扩展名约定待 A 阶段缺省路径裁决后同步。
+
+### 顺序建议
+
+1. 先 B 后 A（GUI 收敛不依赖 daemon 改动，先消除双轨矛盾状态）；
+2. A 分两个 bounded change：llama.cpp（含 chat 缺省裁决）→ whisper.cpp
+   （含 STT 缺省裁决、CoreML encoder 同目录语义迁移）；
+3. 全部完成后：`scripts/build-*.sh` 退役或纳入 Runner install、
+   `AIWORK_LLAMA_SERVER` / `AIWORK_WHISPER_CLI` 零消费者确认、
+   README/AGENTS/决策记录三层同步。
+
+### A1 落地记录：llama.cpp Runner 化（2026-09-04 ✓）
+
+方案（用户拍板三项）：引擎安装下载预编译产物；llm 缺省与显式 `llama.cpp`
+一律切 `org.macai.llama.cpp` Runner；所有引擎走适配器方案（同一 Runner
+层级，python-uv runtime + Python 适配器桥接引擎进程）。
+
+- **Runner 包** `runners/llama.cpp/`：manifest（`default_adapter =
+  "llama-cpp-http"` + `[engine]` 表）+ Python 适配器（`macai.runner.v1`
+  常驻 JSONL worker，spawn llama-server 子进程、OpenAI HTTP + SSE 桥接为
+  delta 流）。probe 通过、pytest 6/6。
+- **引擎产物**：manifest `[engine]` 声明 b10785 预编译包（URL + sha256 +
+  包内 binary 路径）；daemon 新模块 `runners/engine_asset.rs` 在 install
+  流程（uv sync 之后）下载、sha256 强制校验、`/usr/bin/tar` 解压、原子
+  提交到 `~/Library/Application Support/MacAIConsole/Engines/<runner-id>/`，
+  指纹 `.macai-engine.json` 支持幂等跳过与升级重建。
+- **ad-hoc 绑定**：`RunnerProvider.bind_adhoc_model()` 为无 catalog
+  Profile 的任意 .gguf 构造内存 Profile（`local` 来源，不入 catalog、
+  不持久化 snapshot）；`Runtime.bind_adhoc_runner_model()` 在注册路径
+  接线，catalog 已绑定时间接跳过。`profile.rs` validate 放行 local 来源。
+- **缺省裁决**：`(llm, None|Some("llama.cpp"))` → `org.macai.llama.cpp`；
+  keep-alive/format/内存估算分支同步（gguf/5m/size）。
+- **legacy 删除**：`providers/llama_cpp.rs`、`process_memory.rs`（唯一
+  消费者随之消失）删除；runtime.rs 静态装配只剩 whisper.cpp；provider
+  断言同步；GUI `ModelRepository` LLM 文件注册直指 Runner id。
+- **安全白名单**：manifest `inherit_environment` 校验白名单扩展 `HOME`
+  （受管引擎产物定位需要；只读泄露面可控），spec 同步。
+- **验证**：cargo fmt/check/test 全绿（workspace 110 passed）；GUI swift
+  test 35 passed；**E2E 真实闭环**（隔离 HOME + 端口 11500）：install 200
+  （环境 ready + 产物 sha256 一致）→ register-and-load 200（state ready）
+  → chat 200（真实生成文本 + usage）。引擎实测 `build 10785, commit
+  7bb0fc18` 与 manifest 契约一致。
+- **兼容性代价**：显式 `--provider llama.cpp` 语义变为 Runner（重定向），
+  `AIWORK_LLAMA_SERVER` 覆盖由适配器的 `MACAI_LLAMA_SERVER` 承接（迁移期
+  两者均可设，legacy 变量零消费者后删除）。
