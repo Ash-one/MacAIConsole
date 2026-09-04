@@ -10,7 +10,6 @@ struct SettingsView: View {
     @AppStorage(AppSettings.downloadSourceKey) private var downloadSource = ModelDownloadSource.official.rawValue
     @AppStorage(AppSettings.customDownloadEndpointKey) private var customDownloadEndpoint = ""
     @Environment(DaemonController.self) private var controller
-    @Environment(EngineEnvironmentManager.self) private var pythonEnvironments
 
     var body: some View {
         Form {
@@ -46,21 +45,10 @@ struct SettingsView: View {
             }
 
             Section {
-                ForEach(EngineEnvironmentSpec.all) { spec in
-                    EngineEnvironmentRow(spec: spec)
-                }
-            } header: {
-                HStack(spacing: 6) {
-                    Text("运行环境")
-                    InfoTip(text: runtimeEnvironmentDescription, maxWidth: 320)
-                }
-            }
-
-            Section {
                 RunnerEnvironmentsSection()
             } header: {
                 HStack(spacing: 6) {
-                    Text("Runner 引擎（实验）")
+                    Text("运行环境")
                     InfoTip(text: runnerEnvironmentsDescription, maxWidth: 320)
                 }
             }
@@ -164,12 +152,8 @@ struct SettingsView: View {
         "留空使用自动策略：物理内存的 75%，且最多保留 8 GB 给系统。示例：8G、8192M。修改后需要重启 aiworkd 才会生效。"
     }
 
-    private var runtimeEnvironmentDescription: String {
-        "llama.cpp 引擎由脚本克隆固定 revision 源码并编译（需要 Xcode 或 Command Line Tools 与 cmake），产物落仓库 .build/llama.cpp/bin/llama-server。Python worker 已全部迁移 Runner，其环境在下方「Runner 引擎」区块安装。已用 AIWORK_* 变量指向自定义引擎的无需安装。安装完成后重启 aiworkd 生效。"
-    }
-
     private var runnerEnvironmentsDescription: String {
-        "Runner 是实验性的 daemon 原生引擎骨架（尚未进入既有模型列表）。状态来自 daemon /api/runners；安装 = daemon 用 uv 同步受管 Python 环境（首次需联网下载依赖，已由 daemon 热缓存后较快）。安装完成后刷新状态即可。"
+        "引擎环境由 daemon 的 Runner 管理（llama.cpp / whisper.cpp / 全部 org.macai.* 引擎）。状态来自 daemon /api/runners；安装 = daemon 定位并准备引擎（Python 引擎用 uv 同步受管环境，首次需联网下载依赖）。安装完成后刷新状态即可，重启 aiworkd 生效。"
     }
 
     private var settingsAreValid: Bool {
@@ -225,88 +209,7 @@ struct SettingsView: View {
     }
 }
 
-/// 「运行环境」区块的一行：环境名 + 就绪状态 + 安装/取消/重试。
-/// 安装是显式触发的长任务，进度以步骤文案 + 输出尾部呈现（cmake 不提供百分比）。
-struct EngineEnvironmentRow: View {
-    @Environment(EngineEnvironmentManager.self) private var pythonEnvironments
-    let spec: EngineEnvironmentSpec
-
-    private var state: EngineEnvironmentManager.InstallState {
-        pythonEnvironments.state(for: spec)
-    }
-
-    private var isInstalled: Bool {
-        pythonEnvironments.isInstalled(spec)
-    }
-
-    private var isInstalling: Bool {
-        state.phase == .installing
-    }
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(spec.label)
-                        .font(.body.weight(.medium))
-                    InfoTip(text: spec.summary, maxWidth: 260)
-                }
-                if isInstalling {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text(state.stepText)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if let message = state.errorMessage {
-                    Text(message)
-                        .font(.caption)
-                        .foregroundStyle(Theme.danger)
-                    if !state.outputTail.isEmpty {
-                        Text(lastOutputLine)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(2)
-                            .truncationMode(.head)
-                            .help(state.outputTail)
-                    }
-                }
-            }
-            Spacer(minLength: 12)
-            if isInstalled {
-                HStack(spacing: 5) {
-                    StatusDot(color: Theme.success, size: 6, glow: true)
-                    Text("已就绪")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Theme.success)
-                }
-            } else if isInstalling {
-                Button("取消") { pythonEnvironments.cancel(spec) }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            } else {
-                Button(state.phase == .failed ? "重试" : "安装") {
-                    pythonEnvironments.install(spec)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    /// 失败时 pip 的关键报错通常在输出末尾，展示最后一行非空内容。
-    private var lastOutputLine: String {
-        state.outputTail
-            .split(separator: "\n")
-            .reversed()
-            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-            .map(String.init) ?? ""
-    }
-}
-
-/// 「Runner 引擎（实验）」区块：状态来自 daemon /api/runners，安装动作
+/// 「Runner 引擎」区块：状态来自 daemon /api/runners，安装动作
 /// POST /api/runners/{id}/install（显式、幂等）。UI 只消费 daemon 数据。
 struct RunnerEnvironmentsSection: View {
     @Environment(DaemonController.self) private var controller
