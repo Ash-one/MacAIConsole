@@ -108,28 +108,44 @@ impl ModelProfile {
             ("runner", &self.runner),
             ("adapter", &self.adapter),
             ("format", &self.format),
-            ("source.repo", &self.source.repo),
-            ("source.revision", &self.source.revision),
             ("compatibility.runner", &self.compatibility.runner),
         ] {
             if value.trim().is_empty() {
                 return Err(ProfileError(format!("{name} must not be empty")));
             }
         }
+        // source.repo / source.revision 的空值语义按 source_type 裁决：
+        // huggingface 必须两者俱全（immutable commit 校验见下）；local 来源
+        // 必须两者皆空（ad-hoc 绑定，见下）。
         VersionReq::parse(&self.compatibility.runner).map_err(|error| {
             ProfileError(format!(
                 "compatibility.runner must be a SemVer range: {error}"
             ))
         })?;
-        if self.source.source_type != "huggingface" {
+        // `local` 来源只允许 ad-hoc 绑定路径构造（bind_adhoc_model）：
+        // 用户本地目录注册的模型没有 HF repo/revision 身份，持久身份由
+        // models.db 的注册记录承担。catalog Profile 仍必须是 huggingface
+        // + immutable revision。
+        if self.source.source_type == "local" {
+            if !self.source.repo.is_empty() || !self.source.revision.is_empty() {
+                return Err(ProfileError(
+                    "local source must not declare repo or revision".to_string(),
+                ));
+            }
+        } else if self.source.source_type != "huggingface" {
             return Err(ProfileError(
-                "only huggingface profile sources are supported in v1".to_string(),
+                "only huggingface or local profile sources are supported in v1".to_string(),
             ));
         }
-        if !is_immutable_commit(&self.source.revision) {
-            return Err(ProfileError(
-                "source.revision must be a 40- or 64-character hexadecimal commit".to_string(),
-            ));
+        if self.source.source_type == "huggingface" {
+            if self.source.repo.trim().is_empty() {
+                return Err(ProfileError("source.repo must not be empty".to_string()));
+            }
+            if !is_immutable_commit(&self.source.revision) {
+                return Err(ProfileError(
+                    "source.revision must be a 40- or 64-character hexadecimal commit".to_string(),
+                ));
+            }
         }
         if self.capabilities.is_empty()
             || self
@@ -141,12 +157,25 @@ impl ModelProfile {
                 "profile capabilities must be versioned capability contracts".to_string(),
             ));
         }
-        if !safe_relative(&self.artifacts.directory) || self.artifacts.files.is_empty() {
+        if !safe_relative(&self.artifacts.directory) {
             return Err(ProfileError(
                 "artifacts require a safe directory and at least one file".to_string(),
             ));
         }
-        if self.artifacts.files.iter().any(|file| !safe_relative(file)) {
+        // ad-hoc 绑定（local 来源）在注册时只有一个目录名，files 清单留空；
+        // catalog Profile 必须逐文件声明 artifacts。
+        if self.source.source_type == "huggingface"
+            && (self.artifacts.files.is_empty()
+                || self.artifacts.files.iter().any(|file| !safe_relative(file)))
+        {
+            return Err(ProfileError(
+                "artifact file paths must be relative and must not escape their directory"
+                    .to_string(),
+            ));
+        }
+        if self.source.source_type == "local"
+            && self.artifacts.files.iter().any(|file| !safe_relative(file))
+        {
             return Err(ProfileError(
                 "artifact file paths must be relative and must not escape their directory"
                     .to_string(),

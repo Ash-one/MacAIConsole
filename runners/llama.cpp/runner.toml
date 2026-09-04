@@ -1,0 +1,43 @@
+schema = "macai.runner.v1"
+id = "org.macai.llama.cpp"
+version = "0.1.0"
+protocols = ["macai.runner.v1"]
+capabilities = ["chat.v1"]
+
+[entrypoint]
+command = ["{environment.python}", "-m", "macai_llama_cpp_runner"]
+working_directory = "package"
+
+[runtime]
+type = "python-uv"
+id = "org.macai.llama.cpp-python"
+project = "."
+lock = "uv.lock"
+python = ">=3.12,<3.13"
+# probe 只验证适配器可导入；llama-server 二进制缺失时 load 才报错。
+probe = ["{environment.python}", "-c", "import macai_llama_cpp_runner"]
+# 无 [[models]]：任意 GGUF 注册时构造 ad-hoc 绑定，adapter 取这里。
+default_adapter = "llama-cpp-http"
+
+[capacity]
+max_instances = 1
+max_concurrency_per_instance = 1
+
+[timeouts]
+boot_seconds = 30
+# llama-server 加载大 GGUF 可能很慢，与 legacy load 语义一致放宽。
+load_seconds = 600
+inference_seconds = 600
+shutdown_seconds = 10
+
+[security]
+network_during_install = true
+network_during_runtime = false
+inherit_environment = ["HOME", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
+
+# 引擎预编译产物：install 时由 daemon 下载、sha256 校验后解压到
+# ~/Library/Application Support/MacAIConsole/Engines/org.macai.llama.cpp/。
+[engine]
+download_url = "https://github.com/ggml-org/llama.cpp/releases/download/b10785/llama-b10785-bin-macos-arm64.tar.gz"
+sha256 = "671f89a9208820051278ede7d5fb85382bb40a1708d13b0d17292c93b792e788"
+binary = "llama-b10785/llama-server"

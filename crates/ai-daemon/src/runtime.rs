@@ -22,7 +22,7 @@ use ai_core::response::{
 };
 use ai_core::AIError;
 
-use crate::providers::{LlamaCppProvider, MacOSSayProvider, MockProvider, WhisperCppProvider};
+use crate::providers::{MacOSSayProvider, MockProvider, WhisperCppProvider};
 use crate::registry::{RegistryStore, StoredProfile};
 use crate::scheduler;
 use crate::tasks::{TaskHandle, TaskRegistry};
@@ -54,6 +54,9 @@ pub struct Runtime {
     lifecycle_lock: Mutex<()>,
     /// Runner-backed 模型的进程/协议通道（Phase 1C）。None = 未配置 Runner。
     runner_instances: Option<Arc<RunnerInstanceManager>>,
+    /// ad-hoc 绑定通道：attach 过的 RunnerProvider 按 runner id 索引。
+    /// 注册路径据此为无 catalog Profile 的模型建立内存绑定。
+    runner_providers: StdRwLock<HashMap<String, Arc<ai_daemon::runners::RunnerProvider>>>,
     /// discovery 得到的当前 Profile catalog。它只用于新注册；已注册模型继续使用
     /// RegistryEntry.profile 中冻结的 snapshot。
     runner_profiles: StdRwLock<HashMap<String, ai_daemon::runners::ModelProfile>>,
@@ -139,19 +142,15 @@ impl Runtime {
         if let Some(budget) = memory_budget {
             tracing::info!(budget_gb = budget / (1024 * 1024 * 1024), "memory budget");
         }
-        // 生产构造只装配真实引擎；mock / macos-say 是测试能力，
+        // 生产构造只装配 whisper.cpp（llama.cpp 已迁 Runner org.macai.llama.cpp，
+        // 2026-09-03 用户拍板 cpp 引擎 Runner 化）；mock / macos-say 是测试能力，
         // 由 new() 的 inject_test_providers 注入，不进生产 providers 表。
-        // Python worker 类引擎（kokoro / qwen3-asr / qwen3-tts）由 Runner
-        // 装配（org.macai.*），不再静态注册 legacy Provider。
-        let llama = Arc::new(LlamaCppProvider::from_env());
         let whisper = Arc::new(WhisperCppProvider::from_env());
 
         let mut providers: HashMap<String, Arc<dyn Provider>> = HashMap::new();
-        providers.insert("llama.cpp".to_string(), llama.clone());
         providers.insert("whisper.cpp".to_string(), whisper.clone());
 
         let mut chat_providers: HashMap<String, Arc<dyn ChatProvider>> = HashMap::new();
-        chat_providers.insert("llama.cpp".to_string(), llama);
 
         let mut stt_providers: HashMap<String, Arc<dyn STTProvider>> = HashMap::new();
         stt_providers.insert("whisper.cpp".to_string(), whisper);
@@ -169,6 +168,7 @@ impl Runtime {
             model_leases: StdMutex::new(HashMap::new()),
             lifecycle_lock: Mutex::new(()),
             runner_instances: None,
+            runner_providers: StdRwLock::new(HashMap::new()),
             runner_profiles: StdRwLock::new(HashMap::new()),
             started_at: Instant::now(),
             tasks: TaskRegistry::new(),
@@ -201,6 +201,10 @@ impl Runtime {
     ) {
         let descriptor = provider.descriptor();
         let id = descriptor.id.clone();
+        self.runner_providers
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(id.clone(), provider.clone());
         self.providers.insert(id.clone(), provider.clone());
         if descriptor
             .capabilities
@@ -513,6 +517,44 @@ impl Runtime {
                 Err(error)
             }
         }
+    }
+
+    /// ad-hoc Runner 绑定（无 catalog Profile 的引擎，如 llama.cpp）：在注册
+    /// 路径上为模型建立内存绑定。catalog 已绑定（registry snapshot 或当前
+    /// catalog 命中）时跳过，返回 false。
+    pub async fn bind_adhoc_runner_model(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+        model_path: &std::path::Path,
+        adapter: &str,
+    ) -> Result<bool, String> {
+        // 只把「有 catalog Profile snapshot」视为已绑定。spec.provider 匹配
+        // 不能算：daemon 重启后注册记录从 SQLite 恢复，但 RunnerProvider 的
+        // 内存绑定表是空的，必须重新建立 ad-hoc 绑定。
+        let already_profiled = {
+            let registry = self.registry.read().await;
+            registry
+                .get(model_id)
+                .is_some_and(|entry| entry.profile.is_some())
+        } || self
+            .runner_profiles
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains_key(model_id);
+        if already_profiled {
+            return Ok(false);
+        }
+        let provider = self
+            .runner_providers
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(provider_id)
+            .cloned()
+            .ok_or_else(|| format!("runner provider '{provider_id}' is not attached"))?;
+        provider
+            .bind_adhoc_model(model_id, model_path, adapter)
+            .await
     }
 
     pub async fn load_model(&self, id: &str) -> Result<ModelHandle, ProviderError> {
@@ -1227,7 +1269,7 @@ mod tests {
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect();
-        assert_eq!(ids, vec!["llama.cpp", "macos-say", "mock", "whisper.cpp"]);
+        assert_eq!(ids, vec!["macos-say", "mock", "whisper.cpp"]);
     }
 
     #[tokio::test]

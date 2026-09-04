@@ -88,6 +88,8 @@ adapter = "kokoro-mlx"
 | `timeouts` | yes | 可覆盖的默认 deadline |
 | `security` | yes | 网络和环境变量权限 |
 | `models` | no | 随 Runner 分发的 Model Profile 引用 |
+| `default_adapter` | no | 无 bundled Model Profile 的引擎（如 llama.cpp）的 ad-hoc 绑定默认 adapter；注册路径据此为任意本地模型构造内存绑定 |
+| `engine` | no | 引擎预编译产物声明（cpp 引擎 Runner 化）：`download_url` / `sha256`（强制校验）/ `binary`（压缩包内可执行文件相对路径）。install 流程在环境同步之后下载、校验、解压到 `<app-support>/Engines/<runner-id>/`，指纹写入 `.macai-engine.json`，已就绪时幂等跳过 |
 
 未知顶层字段被拒绝，防止拼写被静默忽略。未来兼容策略在 v1 面向第三方发布前根据
 真实扩展需求确定。
@@ -185,7 +187,8 @@ manifest timeout 是 Runner 作者建议值，daemon 可以施加更严格的系
 - `network_during_install` 声明显式环境安装是否需要网络；
 - `network_during_runtime` 声明 Runner 的运行期网络需求；Kokoro/qwen3-asr 声明 false；
 - `inherit_environment` 是 allowlist，daemon 默认不传递 token、credential 或完整父
-  进程环境；
+  进程环境。v1 允许的完整白名单：`HOME`（受管引擎产物定位 `Engines/`）、
+  `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`；
 - daemon 只把规范化 model root 和 request directory 写入协议，并拒绝消费越界输出；
 - 安装来源、Runner package 和 lockfile digest 进入信任记录。
 

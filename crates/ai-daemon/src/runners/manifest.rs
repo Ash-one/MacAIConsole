@@ -18,6 +18,10 @@ pub struct RunnerManifest {
     pub capabilities: Vec<String>,
     pub entrypoint: Entrypoint,
     pub runtime: RunnerRuntime,
+    /// 可选的引擎预编译产物（cpp 引擎 Runner 化）。声明后 install 流程
+    /// 在环境同步之外还要下载并校验该产物。
+    #[serde(default)]
+    pub engine: Option<EngineAsset>,
     pub capacity: Capacity,
     pub timeouts: Timeouts,
     pub security: Security,
@@ -45,6 +49,21 @@ pub struct RunnerRuntime {
     /// 完成后、提升为最终目录前执行，见 runner-manifest-v1 的 probe 契约。
     #[serde(default)]
     pub probe: Vec<String>,
+    /// 无 `[[models]]` 的引擎（ad-hoc 绑定型，如 llama.cpp）声明的默认
+    /// adapter 名。注册任意模型时构造 ad-hoc Model Profile 使用它。
+    #[serde(default)]
+    pub default_adapter: Option<String>,
+}
+
+/// 引擎预编译产物声明（可选）：install 时由 daemon 下载并解压到受管
+/// Engines 目录。checksum 强制——产物内容变更即拒绝。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineAsset {
+    pub download_url: String,
+    pub sha256: String,
+    /// 压缩包内要执行的可执行文件相对路径。
+    pub binary: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -210,14 +229,17 @@ impl RunnerManifest {
                 "runner timeout values must be positive".to_string(),
             ));
         }
-        if self
-            .security
-            .inherit_environment
-            .iter()
-            .any(|name| !matches!(name.as_str(), "HTTP_PROXY" | "HTTPS_PROXY" | "NO_PROXY"))
-        {
+        // 环境继承白名单：代理变量（install/runtime 联网）+ HOME（受管
+        // 引擎产物定位 `~/Library/Application Support/MacAIConsole/Engines/`）。
+        // HOME 只读不改写，泄露面可控；其余变量仍拒绝。
+        if self.security.inherit_environment.iter().any(|name| {
+            !matches!(
+                name.as_str(),
+                "HOME" | "HTTP_PROXY" | "HTTPS_PROXY" | "NO_PROXY"
+            )
+        }) {
             return Err(ManifestError(
-                "runner may inherit only HTTP_PROXY, HTTPS_PROXY and NO_PROXY".to_string(),
+                "runner may inherit only HOME, HTTP_PROXY, HTTPS_PROXY and NO_PROXY".to_string(),
             ));
         }
         for model in &self.models {
@@ -231,6 +253,9 @@ impl RunnerManifest {
         Ok(())
     }
 
+    /// 校验 Runner 包根目录的实际内容。`[[models]]` 指向的 profile 文件必须
+    /// 存在；无 `[[models]]` 的引擎（如 llama.cpp：任意 GGUF 注册时构造
+    /// ad-hoc 绑定，无 bundled catalog）跳过 profile 检查。
     pub fn validate_package(&self, package_root: &Path) -> Result<(), ManifestError> {
         let root = package_root.canonicalize().map_err(|error| {
             ManifestError(format!(

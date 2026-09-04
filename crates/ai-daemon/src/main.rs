@@ -4,7 +4,6 @@
 //! load/unload。默认只绑定 127.0.0.1:11435。
 
 mod audio;
-mod process_memory;
 mod providers;
 mod pull;
 mod registry;
@@ -395,14 +394,72 @@ async fn install_runner_environment(
         .ensure_environment(&manifest, &entry.root)
         .await
     {
-        Ok(status) => (
-            StatusCode::OK,
-            Json(json!({
-                "environment_id": manifest.runtime.id,
-                "phase": status.phase.as_str(),
-            })),
-        )
-            .into_response(),
+        Ok(status) => {
+            // 引擎预编译产物（cpp 引擎 Runner 化）：环境就绪后下载并校验。
+            // 失败不掩盖环境安装结果——产物失败在响应中显式报告。
+            let engine_result: Option<
+                Result<std::path::PathBuf, ai_daemon::runners::EngineInstallError>,
+            > = match manifest.engine.as_ref() {
+                Some(asset) => {
+                    let Some(app_support) = std::env::var_os("HOME").map(|home| {
+                        PathBuf::from(home).join("Library/Application Support/MacAIConsole")
+                    }) else {
+                        return (
+                            StatusCode::CONFLICT,
+                            Json(json!({ "error": { "code": "engine_asset_failed", "message": "cannot resolve HOME for engine install" } })),
+                        )
+                            .into_response();
+                    };
+                    let client = match crate::pull::build_client() {
+                        Ok(client) => client,
+                        Err(error) => {
+                            return (
+                                StatusCode::CONFLICT,
+                                Json(json!({ "error": { "code": "engine_asset_failed", "message": error } })),
+                            )
+                                .into_response();
+                        }
+                    };
+                    Some(
+                        ai_daemon::runners::ensure_engine_asset(
+                            &app_support,
+                            &manifest.id,
+                            asset,
+                            &client,
+                        )
+                        .await,
+                    )
+                }
+                None => None,
+            };
+            match engine_result {
+                Some(Ok(binary)) => {
+                    tracing::info!(runner = %manifest.id, binary = %binary.display(), "engine asset installed");
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "environment_id": manifest.runtime.id,
+                            "phase": status.phase.as_str(),
+                            "engine_binary": binary.display().to_string(),
+                        })),
+                    )
+                        .into_response()
+                }
+                Some(Err(error)) => (
+                    StatusCode::CONFLICT,
+                    Json(json!({ "error": { "code": "engine_asset_failed", "message": error.to_string() } })),
+                )
+                    .into_response(),
+                None => (
+                    StatusCode::OK,
+                    Json(json!({
+                        "environment_id": manifest.runtime.id,
+                        "phase": status.phase.as_str(),
+                    })),
+                )
+                    .into_response(),
+            }
+        }
         Err(error) => (
             StatusCode::CONFLICT,
             Json(json!({ "error": { "code": "environment_not_ready", "message": format!("{error:?}") } })),
@@ -494,18 +551,20 @@ async fn register_and_load_model(
         }
     };
     let requested_provider = request.provider.as_deref().map(str::trim);
+    // 缺省与重定向：llm 一律走 llama.cpp Runner（2026-09-03 用户拍板「直接切
+    // runner provider」）。显式 provider 统一按 descriptor 能力判定。
     let provider: std::borrow::Cow<'_, str> = match (model_type, requested_provider) {
-        // 缺省 provider：每种类型只有一个静态缺省，显式写在这里。
-        ("llm", None | Some("llama.cpp")) => "llama.cpp".into(),
-        ("stt", None | Some("whisper.cpp")) => "whisper.cpp".into(),
+        ("llm", None | Some("llama.cpp") | Some("org.macai.llama.cpp")) => {
+            "org.macai.llama.cpp".into()
+        }
         (other_type, None) => {
             return api_error(
                 AIError::InvalidRequest,
                 format!("no default provider is defined for model type '{other_type}'"),
             );
         }
-        // 显式 provider（静态装配或 Runner 装配的 org.macai.*）：统一按
-        // descriptor 能力判定。加新引擎不再需要在此处登记白名单。
+        // 显式 provider（Runner 装配的 org.macai.*）：统一按 descriptor 能力
+        // 判定。加新引擎不再需要在此处登记白名单。
         (_, Some(other)) => {
             let capability = match model_type {
                 "tts" => ai_core::provider::Capability::TextToSpeech,
@@ -522,14 +581,24 @@ async fn register_and_load_model(
         }
     };
     let provider = provider.as_ref();
-    // 目录/扩展名契约校验：文件型 provider 校验扩展名，目录型 provider 要求目录。
-    // 深度内容校验（如 sherpa-onnx 的必需文件清单）仍由 provider 自己拥有。
+    // 注册形态校验：llm 是 .gguf 文件（Runner 侧聚合成目录），目录型 provider
+    // 要求目录。深度内容校验仍由 provider 自己拥有。
     match provider {
-        "llama.cpp" if path.extension().and_then(|value| value.to_str()) != Some("gguf") => {
+        p if p == "org.macai.llama.cpp" && !path.is_file() => {
             return api_error(
                 AIError::InvalidRequest,
                 format!(
-                    "expected a .gguf model for provider 'llama.cpp', got '{}'",
+                    "expected a .gguf model file for provider '{p}', got '{}'",
+                    path.display()
+                ),
+            );
+        }
+        // llama.cpp Runner 接受单文件；其余 Runner 引擎（目录型 artifact）要求目录。
+        p if p.starts_with("org.macai.") && p != "org.macai.llama.cpp" && !path.is_dir() => {
+            return api_error(
+                AIError::InvalidRequest,
+                format!(
+                    "expected a model directory for provider '{p}', got '{}'",
                     path.display()
                 ),
             );
@@ -539,15 +608,6 @@ async fn register_and_load_model(
                 AIError::InvalidRequest,
                 format!(
                     "expected a .bin model for provider 'whisper.cpp', got '{}'",
-                    path.display()
-                ),
-            );
-        }
-        p if !path.is_dir() => {
-            return api_error(
-                AIError::InvalidRequest,
-                format!(
-                    "expected a model directory for provider '{p}', got '{}'",
                     path.display()
                 ),
             );
@@ -572,7 +632,8 @@ async fn register_and_load_model(
         }
     };
     let (format, keep_alive_default, memory_estimate) = match provider {
-        "llama.cpp" => (Some("gguf"), Some("5m"), Some(size_bytes)),
+        // llama.cpp Runner：ad-hoc 绑定 keep_alive 语义与 legacy 一致（LLM 5m）。
+        "org.macai.llama.cpp" => (Some("gguf"), Some("5m"), Some(size_bytes)),
         "whisper.cpp" => (Some("bin"), Some("always"), Some(size_bytes)),
         _ => (None, Some("always"), Some(size_bytes)),
     };
@@ -592,6 +653,35 @@ async fn register_and_load_model(
         context_length: request.context_length.or(Some(4096)),
         default_voice: None,
     };
+
+    // ad-hoc 绑定：无 catalog Profile 的 Runner（如 llama.cpp）在注册路径上
+    // 建立内存绑定。adapter 名来自 manifest 的 default_adapter；重复注册幂等。
+    if provider.starts_with("org.macai.") {
+        let manifest = state.runtime.runner_instances().and_then(|manager| {
+            manager
+                .discovered()
+                .into_iter()
+                .find(|entry| {
+                    entry
+                        .manifest
+                        .as_ref()
+                        .is_some_and(|manifest| manifest.id == provider)
+                })
+                .and_then(|entry| entry.manifest.clone())
+        });
+        if let Some(adapter) = manifest
+            .as_ref()
+            .and_then(|m| m.runtime.default_adapter.as_deref())
+        {
+            if let Err(error) = state
+                .runtime
+                .bind_adhoc_runner_model(provider, &id, &path, adapter)
+                .await
+            {
+                return api_error(AIError::ProviderUnavailable, error);
+            }
+        }
+    }
 
     match state.runtime.register_and_load(spec).await {
         Ok(handle) => Json(json!({

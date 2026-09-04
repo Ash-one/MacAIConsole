@@ -5,7 +5,7 @@
 //! Runner-backed 模型，lease、busy guard、LRU、keep-alive 与任务历史全部
 //! 走既有裁决路径。生产代码不含任何 Runner ID 或模型专属分支。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,7 +21,10 @@ use ai_core::request::SpeechRequest;
 use ai_core::response::SpeechResponse;
 use ai_core::AIError;
 
-use crate::runners::{ModelProfile, RunnerInstanceError, RunnerInstanceManager};
+use crate::runners::{
+    ModelProfile, ProfileArtifacts, ProfileCompatibility, ProfileDefaults, ProfileResources,
+    ProfileSource, RunnerInstanceError, RunnerInstanceManager,
+};
 
 /// 单个 Runner-backed 模型的桥接配置。
 #[derive(Clone)]
@@ -74,12 +77,91 @@ impl RunnerProvider {
         }
     }
 
+    /// ad-hoc 绑定的默认 environment：instance manager 里该 Runner 的
+    /// 唯一环境（manifest `runtime.id`）。manager 未装配时返回占位，
+    /// 让后续 ensure 阶段给出结构化错误。
+    pub async fn default_environment_id(&self) -> String {
+        for entry in self.instances.discovered() {
+            if let Some(manifest) = &entry.manifest {
+                if manifest.id == self.runner_id {
+                    return manifest.runtime.id.clone();
+                }
+            }
+        }
+        self.runner_id.clone()
+    }
+
     /// Runtime 注册 Runner-backed 模型时调用：保存 Profile 快照绑定。
     pub async fn bind_model(&self, binding: RunnerModelBinding) {
         self.bindings.write().await.retain(|existing| {
             existing.profile.id != binding.profile.id && existing.model_id != binding.model_id
         });
         self.bindings.write().await.push(binding);
+    }
+
+    /// 注册任意模型的 ad-hoc 绑定（无 bundled catalog 的引擎用，如 llama.cpp）：
+    /// 以模型注册 ID 与注册目录在内存中构造 Model Profile。它不持久化
+    /// snapshot、不参与 catalog digest——模型注册记录（models.db）本身才是
+    /// 这个模型的持久身份；目录或文件变化经已注册模型的 path 校验拒绝。
+    /// 模型已绑定（如重复注册）时刷新绑定并返回 false。
+    pub async fn bind_adhoc_model(
+        &self,
+        model_id: &str,
+        model_dir: &Path,
+        adapter: &str,
+    ) -> Result<bool, String> {
+        if self
+            .bindings
+            .read()
+            .await
+            .iter()
+            .any(|binding| binding.model_id == model_id)
+        {
+            return Ok(false);
+        }
+        let directory = model_dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .ok_or_else(|| format!("model path has no directory name: {}", model_dir.display()))?;
+        let profile = ModelProfile {
+            schema: "macai.model.v1".to_string(),
+            id: model_id.to_string(),
+            name: model_id.to_string(),
+            capabilities: self
+                .capabilities
+                .iter()
+                .map(|capability| capability.profile_name().to_string())
+                .collect(),
+            runner: self.runner_id.clone(),
+            adapter: adapter.to_string(),
+            format: "gguf".to_string(),
+            source: ProfileSource {
+                source_type: "local".to_string(),
+                repo: String::new(),
+                revision: String::new(),
+            },
+            artifacts: ProfileArtifacts {
+                directory,
+                files: Vec::new(),
+            },
+            defaults: ProfileDefaults::default(),
+            resources: ProfileResources::default(),
+            compatibility: ProfileCompatibility {
+                runner: ">=0.1,<2".to_string(),
+            },
+        };
+        profile
+            .validate()
+            .map_err(|error| format!("ad-hoc profile for '{model_id}' is invalid: {error}"))?;
+        let environment_id = self.default_environment_id().await;
+        self.bind_model(RunnerModelBinding {
+            model_id: model_id.to_string(),
+            profile,
+            environment_id,
+            artifact_root: model_dir.to_path_buf(),
+        })
+        .await;
+        Ok(true)
     }
 
     pub async fn unbind_model(&self, model_id: &str) {

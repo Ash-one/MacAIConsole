@@ -42,6 +42,17 @@ impl Capability {
             Capability::ImageGeneration => "image_generation",
         }
     }
+
+    /// 版本化 capability 契约名（Model Profile / Runner manifest 使用，
+    /// 如 `chat.v1`）。与 `as_str` 的区别：这是跨进程协商的协议名。
+    pub fn profile_name(&self) -> &'static str {
+        match self {
+            Capability::Chat => "chat.v1",
+            Capability::SpeechToText => "stt.v1",
+            Capability::TextToSpeech => "tts.v1",
+            other => other.as_str(),
+        }
+    }
 }
 
 /// Provider 的故障隔离边界。
