@@ -5,14 +5,12 @@ struct MacAIConsoleApp: App {
     @State private var router = AppRouter()
     @AppStorage(AppSettings.appearanceKey) private var appearance = AppearanceMode.system.rawValue
     private let controller = DaemonController()
-    @State private var engineEnvironments = EngineEnvironmentManager()
 
     var body: some Scene {
         WindowGroup(id: "main") {
             RootView()
                 .environment(controller)
                 .environment(router)
-                .environment(engineEnvironments)
                 .frame(minWidth: 780, minHeight: 520)
                 .tint(Theme.accent)
                 .preferredColorScheme(preferredColorScheme)

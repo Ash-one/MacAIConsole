@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ModelsView: View {
     @Environment(DaemonController.self) private var controller
-    @Environment(EngineEnvironmentManager.self) private var pythonEnvironments
+    @Environment(AppRouter.self) private var router
     @State private var repoModels: [RepoModel] = []
     @State private var showingAddSheet = false
 
@@ -120,8 +120,7 @@ struct ModelsView: View {
                         isLoaded: loadedIDs.contains(model.id),
                         providerAvailable: controller.providerIsAvailable(model.provider),
                         providerMissing: diagnostics.missing,
-                        unavailableReason: diagnostics.reason,
-                        engineSpec: diagnostics.spec
+                        unavailableReason: diagnostics.reason
                     ) {
                         Task {
                             if await controller.installRecommended(model) {
@@ -137,19 +136,19 @@ struct ModelsView: View {
         }
     }
 
-    /// 推荐模型行的 Provider 诊断：区分「未装配」（如 Provider 未注册）与
-    /// 「环境未就绪」（缺 Python venv），并给出对应的 Python 环境规格。
+    /// 推荐模型行的 Provider 诊断：区分「未装配」（Provider 未注册，如重启前
+    /// 旧二进制）与「环境未就绪」（daemon 返回的 reason / install_hint）。
+    /// 引擎安装引导统一指向设置页的「运行环境」区块（daemon /api/runners）。
     private func providerDiagnostics(for model: RecommendedModel)
-        -> (missing: Bool, reason: String?, spec: EngineEnvironmentSpec?)
+        -> (missing: Bool, reason: String?)
     {
-        let spec = EngineEnvironmentSpec.spec(forProvider: model.provider)
         guard let entry = controller.providers.first(where: { $0.descriptor.id == model.provider }) else {
-            return (true, "Provider 未装配：重启 aiworkd 后重试", spec)
+            return (true, "Provider 未装配：重启 aiworkd 后重试")
         }
         if !entry.status.available {
-            return (false, entry.status.reason ?? entry.status.installHint, spec)
+            return (false, entry.status.reason ?? entry.status.installHint)
         }
-        return (false, nil, spec)
+        return (false, nil)
     }
 
     private var registeredSection: some View {
@@ -720,18 +719,15 @@ struct RepoModelRow: View {
 
 struct RecommendedModelRow: View {
     @Environment(DaemonController.self) private var controller
-    @Environment(EngineEnvironmentManager.self) private var pythonEnvironments
+    @Environment(AppRouter.self) private var router
     let model: RecommendedModel
     let isRegistered: Bool
     let isLoaded: Bool
     let providerAvailable: Bool
-    /// true 表示 daemon 未装配该 Provider（如 Qwen3-ASR 开关未开），需先去设置启用。
+    /// true 表示 daemon 未装配该 Provider（如重启前旧二进制），需先重启 aiworkd。
     let providerMissing: Bool
     /// Provider 不可用的具体原因，来自 daemon 的 reason / install_hint。
     let unavailableReason: String?
-    /// 对应的引擎环境规格；nil 表示该 Provider 无 GUI 侧安装项（whisper.cpp
-    /// 与全部 org.macai.* Runner）。
-    let engineSpec: EngineEnvironmentSpec?
     let action: () -> Void
 
     private var isBusy: Bool {
@@ -799,7 +795,8 @@ struct RecommendedModelRow: View {
         .hoverableRow()
     }
 
-    /// Provider 不可用时的引导：缺失说明去设置启用；缺引擎环境就提供就地安装。
+    /// Provider 不可用时的引导：统一指向设置页「运行环境」区块——引擎安装
+    /// （含 llama.cpp 与全部 Runner）由 daemon /api/runners 统一管理。
     @ViewBuilder
     private var providerGuidance: some View {
         HStack(spacing: 8) {
@@ -810,36 +807,11 @@ struct RecommendedModelRow: View {
             .font(.caption2)
             .foregroundStyle(Theme.warning)
 
-            if let spec = engineSpec, !providerMissing {
-                envInstallControls(for: spec)
+            Button("去设置安装引擎") {
+                router.goToSettings()
             }
-        }
-    }
-
-    @ViewBuilder
-    private func envInstallControls(for spec: EngineEnvironmentSpec) -> some View {
-        let state = pythonEnvironments.state(for: spec)
-        switch state.phase {
-        case .installing:
-            ProgressView().controlSize(.small)
-            Text(state.stepText)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Button("取消") { pythonEnvironments.cancel(spec) }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-        case .failed:
-            Button("重试安装环境") { pythonEnvironments.install(spec) }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help(state.errorMessage ?? "")
-        case .idle:
-            if !pythonEnvironments.isInstalled(spec) {
-                Button("安装运行环境") { pythonEnvironments.install(spec) }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("执行仓库脚本克隆源码并编译 llama-server 到 .build/llama.cpp/bin/")
-            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
         }
     }
 }
