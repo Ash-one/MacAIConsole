@@ -88,7 +88,9 @@ enum ModelRepository {
                     continue
                 }
                 let size = (try? item.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(UInt64.init) ?? 0
-                let provider = type == "llm" ? "llama.cpp" : "whisper.cpp"
+                // LLM 引擎已迁移 Runner 架构：注册直接指向 org.macai.llama.cpp，
+                // daemon 缺省裁决一致（llm → Runner）。
+                let provider = type == "llm" ? "org.macai.llama.cpp" : "whisper.cpp"
                 var ggufMetadata: GGUFMetadata?
                 var detectionError: String?
                 if type == "llm" {
