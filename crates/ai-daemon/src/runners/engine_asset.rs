@@ -1,8 +1,9 @@
-//! 引擎预编译产物安装（cpp 引擎 Runner 化）。
+//! 原生引擎产物安装（cpp 引擎 Runner 化）。
 //!
 //! manifest `[engine]` 声明的产物由 daemon 在 Runner install 流程中下载：
-//! sha256 强制校验 → 系统 `tar -xzf` 解压到 staging → 提交产物内二进制存在
-//! → 原子 rename 到受管 Engines 目录。GUI「运行环境」区块与 CLI 均经
+//! sha256 强制校验 → 系统 `tar -xzf` 解压到 staging → 可选 CMake 构建
+//! → 提交产物内二进制存在 → 原子 rename 到受管 Engines 目录。GUI
+//! 「运行环境」区块与 CLI 均经
 //! `POST /api/runners/{id}/install` 触达；适配器经
 //! `~/Library/Application Support/MacAIConsole/Engines/<runner-id>/` 定位。
 //!
@@ -41,6 +42,7 @@ pub enum EngineInstallError {
         source: std::io::Error,
     },
     Extract(String),
+    Build(String),
     BinaryMissing {
         path: PathBuf,
     },
@@ -58,6 +60,7 @@ impl std::fmt::Display for EngineInstallError {
             Self::Extract(message) => {
                 write!(formatter, "engine asset extraction failed: {message}")
             }
+            Self::Build(message) => write!(formatter, "engine source build failed: {message}"),
             Self::BinaryMissing { path } => {
                 write!(
                     formatter,
@@ -154,6 +157,10 @@ async fn install_into_staging(
     }
     let _ = std::fs::remove_file(&archive_path);
 
+    if let Some(build) = &asset.build {
+        run_cmake_build(staging, build)?;
+    }
+
     let binary = engine_binary_path(app_support, runner_id, &asset.binary);
     // staging 期间的 binary 路径要以 staging 为根计算。
     let relative = asset.binary.as_str();
@@ -182,6 +189,72 @@ async fn install_into_staging(
         source: error,
     })?;
     Ok(binary)
+}
+
+fn run_cmake_build(
+    staging: &Path,
+    build: &crate::runners::CmakeBuild,
+) -> Result<(), EngineInstallError> {
+    let source = staging.join(&build.source_directory);
+    if !source.is_dir() {
+        return Err(EngineInstallError::Build(format!(
+            "source directory '{}' is missing",
+            source.display()
+        )));
+    }
+    let build_dir = staging.join("build");
+    let cmake = resolve_cmake().ok_or_else(|| {
+        EngineInstallError::Build(
+            "cmake executable was not found in PATH, /opt/homebrew/bin or /usr/local/bin"
+                .to_string(),
+        )
+    })?;
+    let mut configure = Command::new(&cmake);
+    configure.arg("-S").arg(&source).arg("-B").arg(&build_dir);
+    for definition in &build.definitions {
+        configure.arg(format!("-D{definition}"));
+    }
+    run_build_command(configure, "cmake configure")?;
+
+    let jobs = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(4)
+        .to_string();
+    let mut compile = Command::new(&cmake);
+    compile
+        .arg("--build")
+        .arg(&build_dir)
+        .arg("--target")
+        .arg(&build.target)
+        .arg("-j")
+        .arg(jobs);
+    run_build_command(compile, "cmake build")
+}
+
+fn run_build_command(mut command: Command, operation: &str) -> Result<(), EngineInstallError> {
+    let output = command.output().map_err(|error| EngineInstallError::Io {
+        context: format!("cannot run {operation}"),
+        source: error,
+    })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(EngineInstallError::Build(format!(
+        "{operation} exited with {}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim()
+    )))
+}
+
+fn resolve_cmake() -> Option<PathBuf> {
+    let mut candidates = vec![
+        PathBuf::from("/opt/homebrew/bin/cmake"),
+        PathBuf::from("/usr/local/bin/cmake"),
+    ];
+    if let Some(path) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&path).map(|dir| dir.join("cmake")));
+    }
+    candidates.into_iter().find(|path| path.is_file())
 }
 
 async fn download_to(
@@ -226,4 +299,47 @@ fn verify_checksum(path: &Path, expected: &str) -> Result<(), EngineInstallError
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn whisper_source_engine_installs_when_smoke_is_enabled() {
+        if std::env::var("MACAI_WHISPER_ENGINE_INSTALL_SMOKE").as_deref() != Ok("1") {
+            return;
+        }
+        let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runners/whisper.cpp");
+        let manifest = crate::runners::RunnerManifest::load(&package.join("runner.toml")).unwrap();
+        let asset = manifest
+            .engine
+            .expect("whisper Runner declares engine source");
+        let explicit_root = std::env::var_os("MACAI_WHISPER_ENGINE_SMOKE_ROOT");
+        let root = explicit_root
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir()
+                    .join(format!("macai-whisper-engine-smoke-{}", std::process::id()))
+            });
+        let _ = std::fs::remove_dir_all(&root);
+        let client = reqwest::Client::builder().build().unwrap();
+        let binary = ensure_engine_asset(&root, &manifest.id, &asset, &client)
+            .await
+            .expect("official source archive must build whisper-server");
+        assert!(binary.is_file());
+        let output = Command::new(&binary).arg("--help").output().unwrap();
+        let help = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(help.contains("usage:"), "unexpected --help output: {help}");
+        if explicit_root.is_some() {
+            println!("[whisper-engine] preserved at {}", root.display());
+        } else {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
 }

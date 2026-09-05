@@ -11,6 +11,10 @@ pub struct ModelEntry {
     pub object: String, // "model"
     pub created: u64,
     pub owned_by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_selection_reason: Option<String>,
     #[serde(rename = "type")]
     pub model_type: String,
     /// 注册时的模型文件路径（OpenAI 兼容扩展字段）。GUI 用它推导原始/默认 ID。
@@ -238,6 +242,10 @@ pub struct RuntimeInfo {
 pub struct LoadedModelInfo {
     pub id: String,
     pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_selection_reason: Option<String>,
     pub state: String,
     pub memory_estimate: Option<u64>,
     /// worker 当前 resident memory（字节）；没有常驻 worker 时为空。

@@ -483,7 +483,7 @@
           <div class="ln t-cmd"><span class="ps">$</span> ./target/release/aiworkd</div>
           <div class="ln t-ok">● aiworkd listening on http://127.0.0.1:11435</div>
           <div class="ln t-cmd"><span class="ps">$</span> ./target/release/macai load ./model.gguf --id local-model --type llm --keep-alive 5m</div>
-          <div class="ln t-out">registered <span class="t-ok">local-model</span> · provider llama.cpp · Metal</div>
+          <div class="ln t-out">registered <span class="t-ok">local-model</span> · provider org.macai.llama.cpp · Metal</div>
           <div class="ln t-cmd"><span class="ps">$</span> ./target/release/macai chat local-model "用一句话介绍你自己"</div>
           <div class="ln t-out" id="term-answer"><span id="answer-text"></span><span class="cursor"></span></div>
           <div class="ln t-dim" id="term-stats">stream complete · 33 output tokens · 24.6 tok/s</div>
@@ -498,13 +498,13 @@
     <div class="sec-head center reveal">
       <div class="overline">隐私优先 · Local-first</div>
       <h2>所有处理都发生在你的 Mac 上</h2>
-      <p class="sec-sub">没有云端推理，也没有遥测上报。模型、任务数据和日志都收在这台机器里——整条链路从头到尾不碰第三方服务器。</p>
+      <p class="sec-sub">没有云端推理，也没有遥测上报。模型、任务数据和日志都收在这台机器里；只有用户显式触发的模型、Runner 环境或引擎下载会访问配置的下载源。</p>
     </div>
     <div class="privacy-grid">
       <div class="card reveal">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2.5"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg></div>
         <h3>推理全在本地</h3>
-        <p>LLM、语音识别、语音合成，全由本机的 Metal、MLX 和 CPU 执行。代码里没有云端调用路径——想上传也找不到地方。</p>
+        <p>LLM、语音识别、语音合成，全由本机的 Metal、MLX 和 CPU 执行。推理请求没有云端转发路径。</p>
       </div>
       <div class="card reveal">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19v1"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M5 13a10 10 0 0 1 14 0"/><path d="M2 9.5a15 15 0 0 1 20 0"/><path d="m3 3 18 18"/></svg></div>
@@ -593,9 +593,9 @@
       </div>
       <div class="arch-link r"><svg viewBox="0 0 34 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1 7h29m0 0-5-5m5 5-5 5"/></svg></div>
       <div class="arch-col">
-        <div class="arch-node provider"><b>llama.cpp</b><span>LLM · GGUF</span><span class="tag">Metal / Accelerate</span></div>
-        <div class="arch-node provider"><b>mlx-lm</b><span>LLM · MLX safetensors</span><span class="tag">MLX / GPU</span></div>
-        <div class="arch-node provider"><b>whisper.cpp</b><span>STT · .bin</span><span class="tag">Core ML → Metal</span></div>
+        <div class="arch-node provider"><b>llama.cpp Runner</b><span>LLM · GGUF</span><span class="tag">Metal / Accelerate</span></div>
+        <div class="arch-node provider"><b>mlx-lm Runner</b><span>LLM · MLX safetensors</span><span class="tag">MLX / GPU</span></div>
+        <div class="arch-node provider"><b>whisper.cpp Runner</b><span>STT · .bin</span><span class="tag">Core ML → Metal</span></div>
         <div class="arch-node provider"><b>Kokoro MLX</b><span>TTS</span><span class="tag">MLX / GPU</span></div>
         <div class="arch-node provider"><b>Qwen3-ASR 0.6B</b><span>STT</span><span class="tag">MLX 8-bit / MPS</span></div>
       </div>
@@ -763,11 +763,12 @@ curl http://127.0.0.1:11435/v1/chat/completions <span class="arg">\</span>
         <div class="step-no">4</div>
         <div>
           <h3>打开原生控制台（可选）</h3>
-          <p class="step-desc">whisper.cpp / Kokoro / Qwen3-ASR 的准备步骤，README「快速开始」里写得全。</p>
+          <p class="step-desc">通过 daemon 或 GUI「设置 → 运行环境」安装 llama.cpp、whisper.cpp 和其他 Runner；原生引擎与 Python 环境共享同一管理面。</p>
           <div class="codeblock">
             <button class="copy-btn" data-copy>复制</button>
-            <pre>./scripts/build-llama-server.sh <span class="cm"># 固定经过验证的 revision</span>
-./scripts/build-whisper-cli.sh
+            <pre>curl -X POST http://127.0.0.1:11435/api/runners/org.macai.llama.cpp/install
+
+curl -X POST http://127.0.0.1:11435/api/runners/org.macai.whisper.cpp/install
 ./scripts/download-whisper-model.sh base
 
 <span class="cm"># GUI 控制台</span>
@@ -780,10 +781,10 @@ open build/MacAIConsole.app</pre>
     </div>
     <div class="req-row reveal">
       <span class="lbl">构建脚本内置：</span>
-      <span class="pill">llama.cpp（固定 revision）</span>
-      <span class="pill">whisper.cpp（固定 revision）</span>
+      <span class="pill">llama.cpp Runner（固定产物 + sha256）</span>
+      <span class="pill">whisper.cpp Runner（官方 source + sha256）</span>
       <span class="pill">whisper 模型下载</span>
-      <span class="pill">Kokoro / Qwen3-ASR / mlx-lm venv 一键安装</span>
+      <span class="pill">七个 Runner 的 uv 受管环境一键安装</span>
     </div>
   </div>
 </section>

@@ -1,10 +1,14 @@
 # 模型下载链路缺陷修复（TLS/UA/错误映射/Profile revision）
 
-Status: landed（2026-09-02；真实 STT 链路证据见 roadmap，待模型落盘后补）
+Status: implemented
 
-## 问题（独立于任何实现）
+Class: behavior
 
-从 GUI 推荐页下载 ModelScope 的 Qwen3-ASR 模型连续失败：截图报
+Owner: this file
+
+## Problem
+
+修复前，从 GUI 推荐页下载 ModelScope 的 Qwen3-ASR 模型连续失败：截图报
 HTTP 500 / “error sending request”，日志显示 ModelScope LFS CDN 403。
 问题在移除任何“直连绕过/关代理”建议后依然存在，说明是客户端能力缺陷
 而非网络策略。
@@ -22,7 +26,7 @@ HTTP 500 / “error sending request”，日志显示 ModelScope LFS CDN 403。
 4. **Profile 缺 immutable revision**：parser 要求 40/64-hex commit；qwen3-asr
    profile 无 revision → daemon 启动拒绝该 Runner。
 
-## 决策
+## Decision
 
 - reqwest 启用明确 TLS backend：`rustls-tls`（macOS 无 openssl 依赖）。
 - 下载 client 设置稳定 UA `MacAI/0.1 aiworkd`；保留 120s 总超时（空转快速失败）。
@@ -33,7 +37,7 @@ HTTP 500 / “error sending request”，日志显示 ModelScope LFS CDN 403。
   完整七文件 artifact 清单。
 - 不再建议“关代理/直连绕过”作为修复（curl 直连成功不能证明 reqwest 可直连）。
 
-## 验证
+## Verification
 
 - `cargo test` 相关（lib + bin discovery 回归）通过；
 - 真实链：ModelScope 无代理拉取 693M 全目录成功 → Runner
@@ -45,4 +49,5 @@ HTTP 500 / “error sending request”，日志显示 ModelScope LFS CDN 403。
 
 ## 关联
 
-- 决策 owner 更新：本记录；roadmap `runner-migration-roadmap.md` 阻塞行解除。
+- 下载行为理由由本记录拥有；Model Profile 精确契约由
+  [`model-profile-v1.md`](../specs/model-profile-v1.md) 拥有。

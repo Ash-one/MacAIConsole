@@ -95,6 +95,10 @@ daemon 拥有：
 | `resources` | 可选的模型级资源估算，字段见下表 |
 | `compatibility.runner` | 可接受 Runner version range |
 
+`source.type` 当前接受两种值：catalog Profile 使用 `huggingface`，并提供 repo 与
+immutable revision；daemon 为显式本地路径构造的 ad-hoc 绑定使用 `local`，其 repo 与
+revision 必须为空。`local` 是内部注册快照形态，当前没有通用的用户 Profile 导入 API。
+
 ## Defaults and resources schema
 
 `[defaults]` 与 `[resources]` 都是可选 section；出现的字段必须使用下面的类型，空字符串
@@ -112,7 +116,7 @@ daemon 自行猜测默认值。
 
 1. daemon 解析并验证 Profile；
 2. 定位满足 ID、version、trust 和 capability 的已安装 Runner；
-3. 选择结果记录 requested/selected/reason；
+3. 选择结果记录 requested/selected/reason；缺省请求以 `requested = "auto"` 记录；
 4. 没有匹配 Runner 时模型保持已注册但不可加载，并返回明确安装提示；
 5. daemon 不选择 Profile 未允许的 fallback Runner；
 6. 用户显式选择 Runner 时，它必须满足 Profile compatibility，否则失败。
@@ -127,13 +131,14 @@ daemon 自行猜测默认值。
 
 - Hugging Face source 必须固定 immutable commit revision；
 - 文件列表必须完整，不能只列代表性 shard；
-- 每个文件最终需要 size 和 digest；
+- Profile 的 canonical JSON 使用 sha256 digest 固定注册快照；v1 artifact schema
+  只声明文件路径，不包含逐文件 size/digest；
 - 下载使用临时文件、断点续传和完成后的原子 rename；
 - artifact path 必须位于 daemon 管理的 Models root；
 - Profile 不得包含 executable、Python module 或自动运行 hook。
 
-大型 voice collection 可引用经过版本化和 digest 固定的 artifact group；该机制在
-真实 profile 确实过大时再设计，v1 不预设第二套清单 owner。
+大型 voice collection 的分组或逐文件完整性元数据需要扩展 schema 和唯一 owner；
+v1 不预设这套尚未实现的机制。
 
 ## Defaults and user overrides
 
@@ -150,10 +155,14 @@ override 作为独立状态保存。后续 Runner package 更新、移除或重�
 已注册模型的 artifact、默认值或 Runner compatibility；load 时以已注册 snapshot
 重新解析当前可信 Runner，并记录 requested、selected 和 reason。
 
-旧 `ModelSpec.provider` 注册路径在迁移期对剩余 legacy（qwen3-tts / sherpa-onnx /
-mlx-lm）继续工作。Runner-backed 模型通过通用注册路径引用 Profile identity/snapshot，
-不把 Runner ID 填入新的 provider 白名单，也不为每个 Runner 增加新的持久化字段；
+catalog Runner 模型通过通用注册路径引用 Profile identity/snapshot；显式本地 GGUF
+和 Whisper `.bin` 注册由 daemon 分别为 llama.cpp / whisper.cpp Runner 构造 `local`
+ad-hoc Profile。两种路径都把
+requested provider、最终 selected provider 与 selection reason 存入模型注册表；
 `/api/models/load` 对 `org.macai.*` provider 按 descriptor 能力判定。
+
+早于选择审计字段的数据库行在 schema 迁移时写入 `requested = "unknown"` 和明确的
+历史原因；daemon 不从最终 Provider 反推当时的调用者意图。
 
 SQLite 使用两个 owner：`model_profiles` 保存当前可发现 catalog；
 `registered_model_profiles` 按 model ID 保存注册时的 snapshot/digest。删除模型同步删除
@@ -161,8 +170,10 @@ SQLite 使用两个 owner：`model_profiles` 保存当前可发现 catalog；
 
 ## Local profiles
 
-用户可以导入本地 Model Profile 或由 daemon 为已存在 artifact 生成草稿。生成只基于
-文件和可安全解析的 metadata，不执行模型代码。用户确认 Runner/adapter 后才注册。
+当前公共入口不接受用户提供的 Model Profile，也不生成可编辑草稿。本地文件注册仅支持
+daemon 已知的 ad-hoc 形态：当前为 llama.cpp GGUF；daemon 从受控注册参数构造
+`source.type = "local"` 的 Profile snapshot，不执行模型文件中的代码。新增本地模型
+家族需要先扩展显式注册契约，不能把任意 Profile 当作可执行配置导入。
 
 ## Required evidence
 
@@ -170,11 +181,15 @@ SQLite 使用两个 owner：`model_profiles` 保存当前可发现 catalog；
 
 - parse、required fields、defaults/resources、version range 和 path safety 单测
   （`cargo test -p ai-daemon profile::`）；
-- 完整 artifact list 与 digest 校验（`ModelProfile::digest` 确定性 + registry
-  roundtrip）；
+- catalog artifact list 路径校验与 Profile snapshot digest（`ModelProfile::digest`
+  确定性 + registry roundtrip）；
 - Runner 缺失、版本不匹配和未信任错误（discovery/trust 拒绝路径）；
 - no-silent-fallback（SemVer ambiguity 结构化失败）；
 - daemon 重启后恢复同一 Profile snapshot/digest（registry 重开恢复测试）；
+- ad-hoc Runner 绑定在同 ID 路径刷新、rename 与 unregister 后保持一致
+  （`adhoc_runner_binding_tracks_refresh_rename_and_unregister`）；
+- requested / selected / reason 经 registry roundtrip，并由 `/v1/models` 与
+  `/api/runtime` 暴露；
 - fake Runner 经注册 Profile 完成 load/infer（`runner_plugin_composition`）；
-- Kokoro profile 经推荐下载、注册、真实 TTS 路径验证（kokoro-runner-reference
-  证据表）。
+- Kokoro profile 经推荐下载、注册、真实 TTS 路径验证（见
+  [`Kokoro Runner 验证参考`](../reference/kokoro-runner-verification.md)）。

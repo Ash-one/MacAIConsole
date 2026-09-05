@@ -137,6 +137,32 @@ fn assert_startup_child_reaped(root: &std::path::Path, mode: &str) {
     );
 }
 
+fn wait_for_pid_file(path: &std::path::Path) -> String {
+    for _ in 0..100 {
+        if let Ok(pid) = std::fs::read_to_string(path) {
+            return pid;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("PID file was not created: {}", path.display());
+}
+
+fn assert_process_reaped(pid: &str, label: &str) {
+    for _ in 0..100 {
+        if !Command::new("/bin/kill")
+            .args(["-0", pid.trim()])
+            .output()
+            .unwrap()
+            .status
+            .success()
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("{label} PID {} remained alive", pid.trim());
+}
+
 #[tokio::test]
 async fn trusted_fake_runner_completes_discover_handshake_load_infer_and_unload() {
     let root = test_root("composition");
@@ -224,6 +250,43 @@ async fn startup_protocol_failure_kills_and_reaps_the_child() {
     let (root, error) = startup_failure("protocol").await;
     assert!(matches!(error, SupervisorError::Protocol(_)));
     assert_startup_child_reaped(&root, "protocol");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn dropping_exited_runner_kills_its_descendant_process_group() {
+    let root = test_root("process-group-drop");
+    let package = root.join("fake");
+    write_package(
+        &package,
+        "[\"fake-runner-startup-failure\", \"{runtime.temp_root}\", \"crash\"]",
+        5,
+    );
+    std::fs::copy(
+        env!("CARGO_BIN_EXE_fake-runner-startup-failure"),
+        package.join("fake-runner-startup-failure"),
+    )
+    .unwrap();
+    let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+    let mut process =
+        RunnerProcess::spawn(trusted_runner(&registry), &package.join("unused"), &root)
+            .await
+            .expect("valid Runner handshake");
+    let descendant = wait_for_pid_file(&root.join("startup-failure-descendant.pid"));
+    for _ in 0..100 {
+        if process.try_wait().unwrap().is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        process.try_wait().unwrap().is_some(),
+        "Runner leader must exit before the process-group cleanup"
+    );
+
+    drop(process);
+
+    assert_process_reaped(&descendant, "Runner descendant");
     let _ = std::fs::remove_dir_all(root);
 }
 

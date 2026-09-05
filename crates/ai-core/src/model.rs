@@ -10,8 +10,15 @@ pub struct ModelSpec {
     /// llm / stt / tts / embedding ...
     #[serde(rename = "type")]
     pub model_type: String,
-    /// 期望使用的 provider：auto / mlx / llama.cpp / mock ...
+    /// daemon 裁决后的 provider ID。
     pub provider: String,
+    /// 调用者注册时请求的 provider；`auto` 表示使用 daemon 缺省裁决。
+    /// None 仅用于读取早于选择审计字段的外部序列化数据。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_provider: Option<String>,
+    /// daemon 为何选择 `provider` 的稳定、可审计说明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_selection_reason: Option<String>,
     pub source: Option<String>,
     pub path: Option<String>,
     pub format: Option<String>,

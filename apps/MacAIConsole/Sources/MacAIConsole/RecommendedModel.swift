@@ -198,7 +198,7 @@ struct RecommendedModel: Identifiable, Hashable {
             title: "Whisper Large v3 Turbo · Q5",
             summary: "多语言语音识别，质量与体积均衡，使用 whisper.cpp",
             modelType: "stt",
-            provider: "whisper.cpp",
+            provider: "org.macai.whisper.cpp",
             repository: "ggerganov/whisper.cpp",
             files: ["ggml-large-v3-turbo-q5_0.bin"],
             directoryName: nil,

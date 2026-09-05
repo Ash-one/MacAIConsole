@@ -27,3 +27,4 @@ symphonia = { version = "0.5.4", features = ["aac", "adpcm", "alac", "flac", "is
 toml = "0.8"
 sha2 = "0.10"
 semver = "1"
+libc = "0.2"

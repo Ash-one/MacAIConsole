@@ -25,7 +25,7 @@ pub use instance::{
     shutdown_all_instances, InferEvent, RunnerInstanceError, RunnerInstanceManager,
     RunnerInstanceSnapshot,
 };
-pub use manifest::{EngineAsset, ManifestError, RunnerManifest, RunnerRuntime};
+pub use manifest::{CmakeBuild, EngineAsset, ManifestError, RunnerManifest, RunnerRuntime};
 pub use profile::{
     ModelProfile, ProfileArtifacts, ProfileCompatibility, ProfileDefaults, ProfileError,
     ProfileResources, ProfileSource,

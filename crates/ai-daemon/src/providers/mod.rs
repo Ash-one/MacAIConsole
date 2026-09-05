@@ -3,8 +3,6 @@
 
 pub mod macos_say;
 pub mod mock;
-pub mod whisper_cpp;
 
 pub use macos_say::MacOSSayProvider;
 pub use mock::MockProvider;
-pub use whisper_cpp::WhisperCppProvider;

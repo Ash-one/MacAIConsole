@@ -35,10 +35,13 @@
 ## 当前决策记录
 
 - [Runner 插件架构](2026-09-02-runner-plugin-architecture.md)——`implemented`
-  （Phase 1–3 与 Kokoro / qwen3-asr 已落地；剩余迁移与 cancel/Plugins 见其 Migration）
+  （七个 built-in Runner、通用协议、Runtime/GUI 管理面与选择审计已落地；第三方
+  Plugins、并发/cancel 和 OS 沙箱仍是独立后续边界）
 - [uv 管理全部 Python 环境](2026-09-02-uv-python-environments.md)——`implemented`
-  （daemon-owned uv environment manager 已落地；legacy venv 逐引擎退役中）
-- [模型下载链路修复](2026-09-02-download-link-fixes.md)——已落地修复记录
+  （daemon-owned uv environment manager、七个独立 lock 与 GUI API 消费已落地）
+- [whisper.cpp Runner 迁移](2026-09-05-whisper-runner-migration.md)——`implemented`
+  （官方 source build、常驻 server、兼容别名和静态 Provider 删除已落地）
+- [模型下载链路修复](2026-09-02-download-link-fixes.md)——`implemented`
 
-当前实施顺序与迁移状态由
-[`docs/plans/runner-migration-roadmap.md`](../plans/runner-migration-roadmap.md) 追踪。
+已完成的 Kokoro 证据保存在
+[`docs/reference/kokoro-runner-verification.md`](../reference/kokoro-runner-verification.md)。

@@ -75,7 +75,7 @@ struct LoadModelRequest {
     name: Option<String>,
     /// llm（默认）/ stt / tts。
     model_type: Option<String>,
-    /// 显式推理后端。STT 支持 whisper.cpp（默认）与 sherpa-onnx；
+    /// 显式推理后端。STT 默认使用 org.macai.whisper.cpp；
     /// TTS 支持 qwen3-tts；Python 引擎（Kokoro / Qwen3-ASR）由 Runner 装配，
     /// 显式指定其 runner provider id（org.macai.*）走 descriptor 能力判定。
     provider: Option<String>,
@@ -96,8 +96,8 @@ async fn main() {
         })
         .unwrap_or_else(|_| std::path::PathBuf::from("models.db"));
     let mut runtime = Runtime::with_store(&db_path);
-    // Phase 4：装配仓库随附 built-in Runner（无 Runner/模型时静默跳过，
-    // 保留纯内置 Provider 路径）。
+    // 装配仓库随附 built-in Runner（无 Runner/模型时静默跳过；生产 Provider
+    // 全部从此边界进入，测试 provider 只由 Runtime::new 注入）。
     bootstrap_runners(&mut runtime).await;
     let runtime = Arc::new(runtime);
     runtime.spawn_idle_reaper();
@@ -251,6 +251,8 @@ async fn list_models(State(state): State<AppState>) -> Json<Value> {
             object: "model".to_string(),
             created: entry.loaded_at.unwrap_or(0),
             owned_by: format!("aiworkd/{}", entry.spec.provider),
+            requested_provider: entry.spec.requested_provider,
+            provider_selection_reason: entry.spec.provider_selection_reason,
             model_type: entry.spec.model_type,
             path: entry.spec.path,
         })
@@ -297,7 +299,7 @@ async fn provider_statuses(State(state): State<AppState>) -> Json<Value> {
     Json(json!({"data": providers}))
 }
 
-/// Runner 管理面状态（Phase 4）：已发现/受信任 Runner + python 环境 phase +
+/// Runner 管理面状态：已发现/受信任 Runner + python 环境 phase +
 /// bundled Model Profile。UI 只消费 daemon 数据，不自行推断。
 async fn runner_statuses(State(state): State<AppState>) -> Json<Value> {
     let Some(manager) = state.runtime.runner_instances() else {
@@ -313,11 +315,26 @@ async fn runner_statuses(State(state): State<AppState>) -> Json<Value> {
             continue;
         }
         let environment_id = manifest.runtime.id.clone();
-        let phase = statuses
+        let environment_phase = statuses
             .iter()
             .find(|status| status.environment_id == environment_id)
             .map(|status| status.phase.as_str().to_string())
             .unwrap_or_else(|| "missing".to_string());
+        let engine_binary = manifest.engine.as_ref().and_then(|asset| {
+            std::env::var_os("HOME").map(|home| {
+                ai_daemon::runners::engine_binary_path(
+                    &PathBuf::from(home).join("Library/Application Support/MacAIConsole"),
+                    &manifest.id,
+                    &asset.binary,
+                )
+            })
+        });
+        let engine_ready = engine_binary.as_ref().is_none_or(|path| path.is_file());
+        let phase = if environment_phase == "ready" && !engine_ready {
+            "missing".to_string()
+        } else {
+            environment_phase
+        };
         let environment = statuses
             .iter()
             .find(|status| status.environment_id == environment_id)
@@ -346,6 +363,8 @@ async fn runner_statuses(State(state): State<AppState>) -> Json<Value> {
             },
             "environment_id": environment_id,
             "phase": phase,
+            "engine_ready": engine_ready,
+            "engine_binary": engine_binary.map(|path| path.display().to_string()),
             "environment": environment,
             "instance": instance,
             "models": models,
@@ -395,7 +414,8 @@ async fn install_runner_environment(
         .await
     {
         Ok(status) => {
-            // 引擎预编译产物（cpp 引擎 Runner 化）：环境就绪后下载并校验。
+            // 原生引擎产物（cpp 引擎 Runner 化）：环境就绪后下载、校验，
+            // manifest 声明 build 时再从 source archive 构建。
             // 失败不掩盖环境安装结果——产物失败在响应中显式报告。
             let engine_result: Option<
                 Result<std::path::PathBuf, ai_daemon::runners::EngineInstallError>,
@@ -551,35 +571,14 @@ async fn register_and_load_model(
         }
     };
     let requested_provider = request.provider.as_deref().map(str::trim);
-    // 缺省与重定向：llm 一律走 llama.cpp Runner（2026-09-03 用户拍板「直接切
-    // runner provider」）。显式 provider 统一按 descriptor 能力判定。
-    let provider: std::borrow::Cow<'_, str> = match (model_type, requested_provider) {
-        ("llm", None | Some("llama.cpp") | Some("org.macai.llama.cpp")) => {
-            "org.macai.llama.cpp".into()
-        }
-        (other_type, None) => {
-            return api_error(
-                AIError::InvalidRequest,
-                format!("no default provider is defined for model type '{other_type}'"),
-            );
-        }
-        // 显式 provider（Runner 装配的 org.macai.*）：统一按 descriptor 能力
-        // 判定。加新引擎不再需要在此处登记白名单。
-        (_, Some(other)) => {
-            let capability = match model_type {
-                "tts" => ai_core::provider::Capability::TextToSpeech,
-                "stt" => ai_core::provider::Capability::SpeechToText,
-                _ => ai_core::provider::Capability::Chat,
-            };
-            if !state.runtime.provider_has_capability(other, capability) {
-                return api_error(
-                    AIError::InvalidRequest,
-                    format!("provider '{other}' does not support model type '{model_type}'"),
-                );
-            }
-            other.to_string().into()
-        }
-    };
+    let requested_provider_audit = requested_provider.unwrap_or("auto");
+    let (provider, provider_selection_reason) =
+        match select_provider(model_type, requested_provider, |provider, capability| {
+            state.runtime.provider_has_capability(provider, capability)
+        }) {
+            Ok(selection) => selection,
+            Err(message) => return api_error(AIError::InvalidRequest, message),
+        };
     let provider = provider.as_ref();
     // 注册形态校验：llm 是 .gguf 文件（Runner 侧聚合成目录），目录型 provider
     // 要求目录。深度内容校验仍由 provider 自己拥有。
@@ -593,8 +592,11 @@ async fn register_and_load_model(
                 ),
             );
         }
-        // llama.cpp Runner 接受单文件；其余 Runner 引擎（目录型 artifact）要求目录。
-        p if p.starts_with("org.macai.") && p != "org.macai.llama.cpp" && !path.is_dir() => {
+        // 两个 cpp Runner 接受单文件；其余 Runner 引擎要求目录型 artifact。
+        p if p.starts_with("org.macai.")
+            && !matches!(p, "org.macai.llama.cpp" | "org.macai.whisper.cpp")
+            && !path.is_dir() =>
+        {
             return api_error(
                 AIError::InvalidRequest,
                 format!(
@@ -603,11 +605,13 @@ async fn register_and_load_model(
                 ),
             );
         }
-        "whisper.cpp" if path.extension().and_then(|value| value.to_str()) != Some("bin") => {
+        "org.macai.whisper.cpp"
+            if path.extension().and_then(|value| value.to_str()) != Some("bin") =>
+        {
             return api_error(
                 AIError::InvalidRequest,
                 format!(
-                    "expected a .bin model for provider 'whisper.cpp', got '{}'",
+                    "expected a .bin model for provider 'org.macai.whisper.cpp', got '{}'",
                     path.display()
                 ),
             );
@@ -632,9 +636,9 @@ async fn register_and_load_model(
         }
     };
     let (format, keep_alive_default, memory_estimate) = match provider {
-        // llama.cpp Runner：ad-hoc 绑定 keep_alive 语义与 legacy 一致（LLM 5m）。
+        // llama.cpp Runner 的本地 GGUF 注册默认驻留 5 分钟。
         "org.macai.llama.cpp" => (Some("gguf"), Some("5m"), Some(size_bytes)),
-        "whisper.cpp" => (Some("bin"), Some("always"), Some(size_bytes)),
+        "org.macai.whisper.cpp" => (Some("bin"), Some("always"), Some(size_bytes)),
         _ => (None, Some("always"), Some(size_bytes)),
     };
     let spec = ai_core::model::ModelSpec {
@@ -642,6 +646,8 @@ async fn register_and_load_model(
         name: request.name.unwrap_or_else(|| id.clone()),
         model_type: model_type.to_string(),
         provider: provider.to_string(),
+        requested_provider: Some(requested_provider_audit.to_string()),
+        provider_selection_reason: Some(provider_selection_reason.to_string()),
         source: None,
         path: Some(path.to_string_lossy().into_owned()),
         format: format.map(String::from),
@@ -675,7 +681,13 @@ async fn register_and_load_model(
         {
             if let Err(error) = state
                 .runtime
-                .bind_adhoc_runner_model(provider, &id, &path, adapter)
+                .bind_adhoc_runner_model(
+                    provider,
+                    &id,
+                    &path,
+                    adapter,
+                    format.unwrap_or("directory"),
+                )
                 .await
             {
                 return api_error(AIError::ProviderUnavailable, error);
@@ -687,6 +699,8 @@ async fn register_and_load_model(
         Ok(handle) => Json(json!({
             "id": handle.model_id,
             "provider": handle.provider_id,
+            "requested_provider": requested_provider_audit,
+            "provider_selection_reason": provider_selection_reason,
             "state": "ready"
         }))
         .into_response(),
@@ -1172,6 +1186,52 @@ fn valid_model_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+/// Provider 裁决的单一入口。返回最终 provider 与可持久化的审计原因；显式选择
+/// 始终经过当前 descriptor 的 capability 校验。
+fn select_provider<'a>(
+    model_type: &str,
+    requested: Option<&'a str>,
+    supports: impl Fn(&str, ai_core::provider::Capability) -> bool,
+) -> Result<(std::borrow::Cow<'a, str>, &'static str), String> {
+    match (model_type, requested) {
+        ("llm", None) => Ok((
+            "org.macai.llama.cpp".into(),
+            "default provider for model type 'llm'",
+        )),
+        ("llm", Some("llama.cpp")) => Ok((
+            "org.macai.llama.cpp".into(),
+            "legacy provider alias 'llama.cpp' resolved to Runner",
+        )),
+        ("llm", Some("org.macai.llama.cpp")) => {
+            Ok(("org.macai.llama.cpp".into(), "explicit provider selection"))
+        }
+        ("stt", None) => Ok((
+            "org.macai.whisper.cpp".into(),
+            "default provider for model type 'stt'",
+        )),
+        ("stt", Some("whisper.cpp")) => Ok((
+            "org.macai.whisper.cpp".into(),
+            "legacy provider alias 'whisper.cpp' resolved to Runner",
+        )),
+        (other_type, None) => Err(format!(
+            "no default provider is defined for model type '{other_type}'"
+        )),
+        (_, Some(provider)) => {
+            let capability = match model_type {
+                "tts" => ai_core::provider::Capability::TextToSpeech,
+                "stt" => ai_core::provider::Capability::SpeechToText,
+                _ => ai_core::provider::Capability::Chat,
+            };
+            if !supports(provider, capability) {
+                return Err(format!(
+                    "provider '{provider}' does not support model type '{model_type}'"
+                ));
+            }
+            Ok((provider.to_string().into(), "explicit provider selection"))
+        }
+    }
+}
+
 fn provider_error(error: ProviderError) -> Response {
     api_error(error.kind, error.message)
 }
@@ -1182,7 +1242,7 @@ fn api_error(error: AIError, message: impl Into<String>) -> Response {
     (status, Json(ApiErrorBody::new(error, message))).into_response()
 }
 
-/// Phase 4：装配仓库随附 built-in Runner。
+/// 装配仓库随附 built-in Runner。
 ///
 /// 流程：定位 Runner 目录（`MACAI_RUNNERS_DIR` → cwd `runners`/`../runners`）
 /// → discovery（built-in root 直接信任）→ 逐 manifest 读取 bundled Model
@@ -1380,6 +1440,35 @@ async fn bootstrap_runners_from_root(
                 "runner model bound"
             );
         }
+        if let Some(adapter) = manifest.runtime.default_adapter.as_deref() {
+            for registered in runtime
+                .list_models()
+                .await
+                .into_iter()
+                .filter(|entry| entry.profile.is_none() && entry.spec.provider == runner_id)
+            {
+                let Some(path) = registered.spec.path.as_deref() else {
+                    continue;
+                };
+                let format = registered.spec.format.as_deref().unwrap_or("directory");
+                if let Err(error) = provider
+                    .bind_adhoc_model(
+                        &registered.spec.id,
+                        std::path::Path::new(path),
+                        adapter,
+                        format,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        runner = %runner_id,
+                        model = %registered.spec.id,
+                        %error,
+                        "cannot restore ad-hoc Runner binding"
+                    );
+                }
+            }
+        }
     }
 
     for (runner_id, provider) in providers {
@@ -1397,6 +1486,39 @@ mod tests {
         assert!(valid_model_id("SmolLM2-135M.Q4_K_M"));
         assert!(!valid_model_id("../model"));
         assert!(!valid_model_id("model name"));
+    }
+
+    #[test]
+    fn provider_selection_records_default_alias_and_explicit_reasons() {
+        let default = select_provider("llm", None, |_, _| false).unwrap();
+        assert_eq!(default.0, "org.macai.llama.cpp");
+        assert_eq!(default.1, "default provider for model type 'llm'");
+
+        let alias = select_provider("llm", Some("llama.cpp"), |_, _| false).unwrap();
+        assert_eq!(alias.0, "org.macai.llama.cpp");
+        assert_eq!(
+            alias.1,
+            "legacy provider alias 'llama.cpp' resolved to Runner"
+        );
+
+        let explicit = select_provider("tts", Some("org.macai.kokoro"), |id, capability| {
+            id == "org.macai.kokoro" && capability == ai_core::provider::Capability::TextToSpeech
+        })
+        .unwrap();
+        assert_eq!(explicit.0, "org.macai.kokoro");
+        assert_eq!(explicit.1, "explicit provider selection");
+
+        let stt_default = select_provider("stt", None, |_, _| false).unwrap();
+        assert_eq!(stt_default.0, "org.macai.whisper.cpp");
+        assert_eq!(stt_default.1, "default provider for model type 'stt'");
+        let stt_alias = select_provider("stt", Some("whisper.cpp"), |_, _| false).unwrap();
+        assert_eq!(stt_alias.0, "org.macai.whisper.cpp");
+        assert!(stt_alias.1.contains("legacy provider alias"));
+        assert!(
+            select_provider("tts", Some("org.macai.mlx-lm"), |_, _| false)
+                .unwrap_err()
+                .contains("does not support")
+        );
     }
 
     #[test]
@@ -1429,6 +1551,8 @@ mod tests {
             name: "Mock task model".to_string(),
             model_type: "llm".to_string(),
             provider: "mock".to_string(),
+            requested_provider: Some("mock".to_string()),
+            provider_selection_reason: Some("test provider selection".to_string()),
             source: None,
             path: None,
             format: Some("mock".to_string()),
@@ -1450,12 +1574,28 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn model_list_exposes_provider_selection_audit_fields() {
+        let runtime = Arc::new(Runtime::new());
+        runtime.register(mock_model()).await;
+        let Json(body) = list_models(State(app_state(runtime))).await;
+        let model = &body["data"][0];
+        assert_eq!(model["requested_provider"], "mock");
+        assert_eq!(
+            model["provider_selection_reason"],
+            "test provider selection"
+        );
+        assert_eq!(model["owned_by"], "aiworkd/mock");
+    }
+
     fn qwen_tts_model() -> ai_core::model::ModelSpec {
         ai_core::model::ModelSpec {
             id: "qwen-tts".to_string(),
             name: "Qwen3-TTS".to_string(),
             model_type: "tts".to_string(),
             provider: "org.macai.qwen3-tts".to_string(),
+            requested_provider: Some("org.macai.qwen3-tts".to_string()),
+            provider_selection_reason: Some("test provider selection".to_string()),
             source: None,
             path: None,
             format: Some("qwen3-tts".to_string()),
@@ -1666,6 +1806,7 @@ project = "."
 lock = "uv.lock"
 python = ">=3.12,<3.13"
 probe = ["{environment.python}", "-c", "print('ok')"]
+default_adapter = "fresh-ad-hoc"
 [capacity]
 max_instances = 1
 max_concurrency_per_instance = 1
@@ -1717,6 +1858,26 @@ runner = ">=0.1,<0.2"
 
         let app_support = root.join("Application Support/MacAIConsole");
         let mut runtime = Runtime::new();
+        let ad_hoc_model = root.join("existing.bin");
+        std::fs::write(&ad_hoc_model, b"model").unwrap();
+        runtime
+            .register(ai_core::model::ModelSpec {
+                id: "fresh-ad-hoc".to_string(),
+                name: "Fresh ad-hoc".to_string(),
+                model_type: "tts".to_string(),
+                provider: "org.example.fresh".to_string(),
+                requested_provider: Some("org.example.fresh".to_string()),
+                provider_selection_reason: Some("test restart restore".to_string()),
+                source: None,
+                path: Some(ad_hoc_model.display().to_string()),
+                format: Some("bin".to_string()),
+                size_bytes: Some(5),
+                memory_estimate: Some(5),
+                keep_alive: Some("always".to_string()),
+                context_length: None,
+                default_voice: None,
+            })
+            .await;
         bootstrap_runners_from_root(&mut runtime, root.join("runners"), app_support.clone()).await;
 
         assert!(runtime.provider_has_capability(
@@ -1730,6 +1891,12 @@ runner = ">=0.1,<0.2"
         assert_eq!(body["data"][0]["id"], "org.example.fresh");
         assert_eq!(body["data"][0]["capabilities"], json!(["tts.v1"]));
         assert_eq!(body["data"][0]["instance"], Value::Null);
+        // bootstrap 必须从已注册 ModelSpec 恢复 ad-hoc binding。删除 artifact 后
+        // load 应命中该 binding 的 artifact 校验，而非报告 "not bound"。
+        std::fs::remove_file(&ad_hoc_model).unwrap();
+        let error = runtime.load_model("fresh-ad-hoc").await.unwrap_err();
+        assert!(error.message.contains("artifact"), "{error}");
+        assert!(!error.message.contains("not bound"), "{error}");
         runtime.shutdown_all().await;
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1777,6 +1944,25 @@ runner = ">=0.1,<0.2"
             .expect("repo built-in mlx-lm runner must be discovered");
         assert_eq!(mlx_lm.state, ai_daemon::runners::RunnerState::Trusted);
         assert_eq!(mlx_lm.reason, None);
+
+        let whisper = registry
+            .entries()
+            .iter()
+            .find(|entry| {
+                entry
+                    .manifest
+                    .as_ref()
+                    .is_some_and(|manifest| manifest.id == "org.macai.whisper.cpp")
+            })
+            .expect("repo built-in whisper runner must be discovered");
+        assert_eq!(whisper.state, ai_daemon::runners::RunnerState::Trusted);
+        assert_eq!(whisper.reason, None);
+        let engine = whisper
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.engine.as_ref())
+            .expect("whisper Runner must declare its managed engine");
+        assert!(engine.build.is_some(), "whisper engine comes from source");
     }
 
     #[tokio::test]

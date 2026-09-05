@@ -10,7 +10,7 @@ MacAIConsole 是 MacAI 的原生 macOS 控制台。应用只通过本地 HTTP AP
 - 日志：查看 GUI 与 daemon 最近日志，默认显示 Info，可启用 Debug，并按日志级别着色；"在访达中显示"可打开日志目录
 - 设置：应用外观（跟随系统 / 明亮 / 暗黑）、自动拉起守护进程开关、内存预算、运行环境、网络代理和模型下载源
   - 模型下载源可切换 Hugging Face 官方源、`hf-mirror.com` 或自定义 Hugging Face 兼容源；修改后重启 aiworkd 生效
-  - 运行环境：全部引擎（llama.cpp / whisper.cpp / 各 org.macai.* Runner）统一由 daemon `/api/runners` 管理安装与状态，GUI 不再保留本地脚本安装
+  - 运行环境：七个 built-in Runner（llama.cpp / whisper.cpp / mlx-lm / Kokoro / Qwen3-ASR / Qwen3-TTS / sherpa-onnx）由 daemon `/api/runners` 管理安装与状态，GUI 不保留本地脚本安装；whisper.cpp 安装时由 daemon 校验官方 source archive 并构建常驻 server
 - 模型管理中的推荐模型在 Provider 环境未就绪时，行内会显示 daemon 上报的具体原因，并提供「去设置安装引擎」跳转入口
 
 运行状态中的模型条目可进入详细设置页，调整 keep-alive、LLM 上下文长度和 TTS 默认音色。
@@ -83,6 +83,10 @@ POST /api/models/{id}/unload
 GET  /api/runners
 POST /api/runners/{id}/install
 ```
+
+`/v1/models` 与 `/api/runtime` 会返回 daemon 记录的 Provider 选择结果：
+`requested_provider`、实际 `provider`、`provider_selection_reason` 及已加载模型的
+`effective_device`。
 
 ## 本地数据
 
