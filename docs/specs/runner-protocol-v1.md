@@ -1,6 +1,6 @@
 # Runner Protocol v1
 
-Status: current（已实现并被 Kokoro / qwen3-asr Runner 消费；v1 是单实例、
+Status: current（已实现并被七个 built-in Runner 消费；v1 是单实例、
 single-flight 协议）
 
 Contract owner: this file
@@ -12,7 +12,8 @@ Decision owner: [`2026-09-02-runner-plugin-architecture.md`](../decisions/2026-0
 `supervisor` 实现受监督子进程，`instance` 实现 handshake / load / infer / unload /
 shutdown 的组合语义与结构化错误映射（含 `tts.v1` 输出路径校验与清理；`stt.v1`
 经同一通道承载）。组合证据：`tests/runner_runtime_composition.rs`（fake Runner
-全链路）与真实 Kokoro / qwen3-asr 接线测试。多并发与 daemon→Runner cancel 需要
+全链路）、七个 adapter 测试与真实 Kokoro / Qwen3-ASR / whisper.cpp 接线测试。多并发与
+daemon→Runner cancel 需要
 进程 actor/dispatcher，未进入 v1 current contract。
 
 ## Goals
@@ -129,6 +130,8 @@ daemon 发送规范化 Model Profile、只读 model root、adapter、capability 
 - `limits`，如 `max_concurrency`。
 
 收到 `loaded` 前，daemon 不得把模型报告为 ready。
+Runner 无法加载模型时可以对同一 request ID 返回 `error`；supervisor 保留其
+`code` / `message`，由 Provider bridge 映射为公共错误，而非归类为协议崩溃。
 
 ### unload
 
@@ -232,6 +235,7 @@ Kokoro adapter 的文本切分、G2P 和 voice 选择属于 Runner 行为；公�
 v1 允许的稳定 code：
 
 - `invalid_request`；
+- `invalid_audio`（STT 专用，公共 API 映射为 `invalid_request`）；
 - `model_not_found`；
 - `model_load_failed`；
 - `provider_unavailable`；

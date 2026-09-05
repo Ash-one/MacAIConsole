@@ -18,8 +18,9 @@ pub struct RunnerManifest {
     pub capabilities: Vec<String>,
     pub entrypoint: Entrypoint,
     pub runtime: RunnerRuntime,
-    /// 可选的引擎预编译产物（cpp 引擎 Runner 化）。声明后 install 流程
-    /// 在环境同步之外还要下载并校验该产物。
+    /// 可选的原生引擎产物（cpp 引擎 Runner 化）。声明后 install 流程
+    /// 在环境同步之外还要下载并校验该产物；`engine.build` 存在时从固定
+    /// source archive 构建目标二进制。
     #[serde(default)]
     pub engine: Option<EngineAsset>,
     pub capacity: Capacity,
@@ -55,8 +56,8 @@ pub struct RunnerRuntime {
     pub default_adapter: Option<String>,
 }
 
-/// 引擎预编译产物声明（可选）：install 时由 daemon 下载并解压到受管
-/// Engines 目录。checksum 强制——产物内容变更即拒绝。
+/// 引擎产物声明（可选）：install 时由 daemon 下载并解压到受管 Engines
+/// 目录。checksum 强制——产物内容变更即拒绝。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EngineAsset {
@@ -64,6 +65,19 @@ pub struct EngineAsset {
     pub sha256: String,
     /// 压缩包内要执行的可执行文件相对路径。
     pub binary: String,
+    /// 官方没有目标平台预编译产物时，从固定 source archive 构建。
+    #[serde(default)]
+    pub build: Option<CmakeBuild>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CmakeBuild {
+    pub source_directory: String,
+    pub target: String,
+    /// 不含 `-D` 前缀的 CMake cache definitions。
+    #[serde(default)]
+    pub definitions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -230,16 +244,22 @@ impl RunnerManifest {
             ));
         }
         // 环境继承白名单：代理变量（install/runtime 联网）+ HOME（受管
-        // 引擎产物定位 `~/Library/Application Support/MacAIConsole/Engines/`）。
+        // 引擎产物定位）+ 两个显式 engine override（开发/诊断）。
         // HOME 只读不改写，泄露面可控；其余变量仍拒绝。
         if self.security.inherit_environment.iter().any(|name| {
             !matches!(
                 name.as_str(),
-                "HOME" | "HTTP_PROXY" | "HTTPS_PROXY" | "NO_PROXY"
+                "HOME"
+                    | "HTTP_PROXY"
+                    | "HTTPS_PROXY"
+                    | "NO_PROXY"
+                    | "MACAI_LLAMA_SERVER"
+                    | "MACAI_WHISPER_SERVER"
             )
         }) {
             return Err(ManifestError(
-                "runner may inherit only HOME, HTTP_PROXY, HTTPS_PROXY and NO_PROXY".to_string(),
+                "runner may inherit only HOME, proxy variables, and approved engine overrides"
+                    .to_string(),
             ));
         }
         for model in &self.models {
@@ -248,6 +268,30 @@ impl RunnerManifest {
                 return Err(ManifestError(
                     "models.adapter must not be empty".to_string(),
                 ));
+            }
+        }
+        if let Some(engine) = &self.engine {
+            if !(engine.download_url.starts_with("https://")
+                && engine.sha256.len() == 64
+                && engine.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            {
+                return Err(ManifestError(
+                    "engine requires an HTTPS URL and a 64-character sha256".to_string(),
+                ));
+            }
+            validate_relative_path("engine.binary", &engine.binary)?;
+            if let Some(build) = &engine.build {
+                validate_relative_path("engine.build.source_directory", &build.source_directory)?;
+                if !valid_build_token(&build.target)
+                    || build
+                        .definitions
+                        .iter()
+                        .any(|value| !value.contains('=') || !valid_build_definition(value))
+                {
+                    return Err(ManifestError(
+                        "engine CMake target or definitions contain unsafe characters".to_string(),
+                    ));
+                }
             }
         }
         Ok(())
@@ -435,6 +479,20 @@ fn valid_capability(value: &str) -> bool {
     let mut parts = value.rsplitn(2, '.');
     matches!(parts.next(), Some(version) if version.len() > 1 && version.starts_with('v') && version[1..].chars().all(|c| c.is_ascii_digit()))
         && matches!(parts.next(), Some(name) if !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'-'))
+}
+
+fn valid_build_token(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn valid_build_definition(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-' | b'/' | b'=')
+        })
 }
 
 #[cfg(test)]

@@ -15,8 +15,8 @@ MacAI 是一个跑在你 Mac 上的本地 AI Runtime。它的核心只有一个�
 
 ```text
 macai CLI ────────────┐
-MacAIConsole (SwiftUI) ├── HTTP ──> aiworkd ──┬── whisper.cpp ─> Core ML / Metal
-OpenAI-compatible SDK ┘                      └── Runners (uv Python) ─> Kokoro TTS / Qwen3-ASR STT / Qwen3-TTS / sherpa-onnx STT / mlx-lm LLM / llama.cpp LLM (GGUF / Metal)
+MacAIConsole (SwiftUI) ├── HTTP ──> aiworkd ──> Runners ─┬── whisper.cpp / llama.cpp（受管原生引擎）
+OpenAI-compatible SDK ┘                                  └── MLX / Kokoro / Qwen3 / sherpa-onnx
 
                                              ├── SQLite model registry
                                              ├── memory budget / LRU / keep-alive
@@ -47,13 +47,17 @@ OpenAI-compatible SDK ┘                      └── Runners (uv Python) ─
 | --- | --- | --- | --- |
 | LLM | org.macai.llama.cpp（Runner） | GGUF | Metal / Accelerate |
 | LLM | org.macai.mlx-lm（Runner） | MLX 模型目录（safetensors） | MLX / Metal |
-| STT | whisper.cpp | `.bin` + PCM WAV | Core ML 优先，Metal 回退 |
+| STT | org.macai.whisper.cpp（Runner） | `.bin` + PCM WAV | Core ML 优先，Metal 回退 |
 | STT | org.macai.sherpa-onnx（Runner） | zh-int8-2025 model directory + PCM WAV | CPU |
 | STT | org.macai.qwen3-asr（Runner） | Qwen3-ASR MLX 模型目录 + PCM WAV | MLX / Metal GPU |
 | TTS | org.macai.qwen3-tts（Runner） | Qwen3-TTS CustomVoice 模型目录 | MLX / Metal GPU |
 | TTS | org.macai.kokoro（Runner） | Kokoro 模型目录 | MLX / Metal GPU |
 
-Python worker 类引擎已全部迁移到 [Runner 架构](docs/decisions/2026-09-02-runner-plugin-architecture.md)：五个引擎由 daemon 自动发现 `runners/` 下的 Runner 包并预先装配为动态 provider（`org.macai.*`），因此模型下载后无需重启 daemon。Python 环境由 uv 受管，GUI「设置 → 运行环境」一键安装；注册模型冻结当时的 Model Profile snapshot，后续 catalog 更新不会静默改写它。
+生产推理引擎已全部收敛到 [Runner 架构](docs/decisions/2026-09-02-runner-plugin-architecture.md)：七个引擎由 daemon 自动发现 `runners/` 下的 Runner 包并预先装配为动态 provider（`org.macai.*`），因此模型下载后无需重启 daemon。Python 环境由 uv 受管，原生引擎由同一安装接口管理；注册模型冻结当时的 Model Profile snapshot，后续 catalog 更新不会静默改写它。
+
+`/api/models/load` 将调用者请求的 provider、daemon 选定的 provider 与裁决理由一同持久化；
+`/v1/models` 和 `/api/runtime` 返回 `requested_provider` / `provider` /
+`provider_selection_reason` / `effective_device`，便于审计缺省选择和兼容别名。
 
 当前 Runner Protocol v1 是单实例、单活动推理。显式信任 Runner 等同信任本地代码以
 aiworkd 用户权限运行；digest、环境变量 allowlist 和输出路径校验不构成 OS 沙箱。
@@ -156,25 +160,30 @@ export MACAI_LLAMA_SERVER=/absolute/path/to/llama-server
 
 几个常用的后续操作：已注册但没在跑的模型用 `macai start <model>` 重新加载；`macai keep-alive <model> 30m` 调整空闲驻留时间；`macai rename` 改模型 ID，运行中的会先停；`macai remove` 删注册记录。TTS 模型可以用 `macai voice <model>` 看音色，`macai voice <model> <voice>` 设默认音色。
 
-### 4. 构建 whisper.cpp worker
+### 4. 安装 whisper.cpp 引擎（Runner）
 
 ```bash
-./scripts/build-whisper-cli.sh
+curl -X POST http://127.0.0.1:11435/api/runners/org.macai.whisper.cpp/install
 ./scripts/download-whisper-model.sh base
 ```
 
-产物：
+install 会同步轻量适配器环境，校验 manifest 固定的 whisper.cpp 官方 source
+archive，并在 staging 中构建静态链接的常驻 `whisper-server`，随后原子提升到：
 
 ```text
-.build/whisper.cpp/bin/whisper-cli
+~/Library/Application Support/MacAIConsole/Engines/org.macai.whisper.cpp/build/bin/whisper-server
 .build/models/ggml-base.bin
 ```
 
-路径可以用环境变量覆盖：
+本机已有对应版本的 server 时可显式覆盖：
 
 ```bash
-export AIWORK_WHISPER_CLI=/absolute/path/to/whisper-cli
+export MACAI_WHISPER_SERVER=/absolute/path/to/whisper-server
 ```
+
+注册 `.bin` STT 模型时省略 provider 会缺省选择
+`org.macai.whisper.cpp`；旧别名 `whisper.cpp` 仍会被规范化并记录选择原因。
+Runner 的常驻 server 在 load 时加载一次模型，后续转写复用该实例。
 
 Core ML encoder 是可选项，有它更快。把编译好的 `.mlmodelc` 目录放到 `.bin` 同目录、保持对应名称：
 
@@ -456,7 +465,7 @@ POST /api/models/{id}/voice
 | Hermes 能力 | MacAI endpoint | MacAI Provider |
 | --- | --- | --- |
 | TTS（文字转语音） | `POST /v1/audio/speech` | Kokoro（org.macai.kokoro Runner） |
-| STT（语音转文字） | `POST /v1/audio/transcriptions` | whisper.cpp |
+| STT（语音转文字） | `POST /v1/audio/transcriptions` | org.macai.whisper.cpp Runner |
 
 接入后的数据流：
 
@@ -687,10 +696,10 @@ crates/
 apps/
 └── MacAIConsole/  # 原生 SwiftUI 控制台
 
-scripts/           # llama.cpp、whisper.cpp 构建脚本
-runners/           # daemon 自动发现的 Runner 包（Kokoro TTS、Qwen3-ASR STT、Qwen3-TTS、sherpa-onnx STT、mlx-lm LLM）
+scripts/           # 模型下载、可选开发构建与真实 Runner smoke
+runners/           # daemon 自动发现的七个 Runner 包（含 llama.cpp 与 whisper.cpp）
 samples/           # 第三方集成示例（含 Hermes TTS/STT 适配器）
-docs/              # 当前工作提案、决策、契约草案与实施计划
+docs/              # 当前工作提案、已落地决策、精确契约与验证参考
 ```
 
 ## 路线图
@@ -699,6 +708,7 @@ docs/              # 当前工作提案、决策、契约草案与实施计划
 
 - [Runner 插件架构决策](docs/decisions/2026-09-02-runner-plugin-architecture.md)：把新模型接入从 daemon/GUI 硬编码迁到可发现 Runner 与数据化 Model Profile。
 - [uv Python 环境决策](docs/decisions/2026-09-02-uv-python-environments.md)：所有 Python Runner 使用可复现、可探测的 `uv` 环境。
-- [Kokoro 首个完整 Runner 计划](docs/plans/kokoro-runner-reference.md)：验证插件发现、环境安装、常驻 worker、TTS、故障隔离和真实模型路径。
+- [Kokoro Runner 验证参考](docs/reference/kokoro-runner-verification.md)：保留首个真实 Runner 的可重复证据路径。
+- [whisper.cpp Runner 迁移决策](docs/decisions/2026-09-05-whisper-runner-migration.md)：官方 source build、常驻 server、兼容别名与验证证据。
 - readiness / deep-health、启动进度与完整可观测性
 - Homebrew、正式签名、公证与安装包

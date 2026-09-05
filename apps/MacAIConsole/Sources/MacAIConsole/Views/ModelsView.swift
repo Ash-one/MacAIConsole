@@ -329,6 +329,13 @@ struct RegisteredModelRow: View {
                 Text(entry.ownedBy)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                if let requested = entry.requestedProvider,
+                   requested != entry.ownedBy.split(separator: "/").last.map(String.init) {
+                    Text("请求 \(requested) → \(entry.ownedBy)")
+                        .font(.caption2)
+                        .foregroundStyle(Color.secondary)
+                        .help(entry.providerSelectionReason ?? "daemon Provider 裁决")
+                }
             }
             Spacer(minLength: 12)
             if isLoaded {

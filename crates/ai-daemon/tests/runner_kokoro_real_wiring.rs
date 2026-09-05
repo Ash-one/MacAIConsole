@@ -154,6 +154,8 @@ async fn kokoro_runner_real_composition_load_infer_unload() {
         name: "Kokoro 82M zh".to_string(),
         model_type: "tts".to_string(),
         provider: RUNNER_ID.to_string(),
+        requested_provider: Some(RUNNER_ID.to_string()),
+        provider_selection_reason: Some("explicit provider selection".to_string()),
         source: None,
         path: Some(model_root.display().to_string()),
         format: Some("directory".to_string()),

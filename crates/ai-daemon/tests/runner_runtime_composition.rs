@@ -156,6 +156,8 @@ fn model_spec() -> ModelSpec {
         name: "Fake".to_string(),
         model_type: "tts".to_string(),
         provider: "org.example.fake".to_string(),
+        requested_provider: Some("org.example.fake".to_string()),
+        provider_selection_reason: Some("explicit provider selection".to_string()),
         source: None,
         path: None,
         format: Some("directory".to_string()),

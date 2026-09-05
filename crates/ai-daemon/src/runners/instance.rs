@@ -130,7 +130,12 @@ impl std::error::Error for RunnerInstanceError {}
 
 impl From<SupervisorError> for RunnerInstanceError {
     fn from(error: SupervisorError) -> Self {
-        Self::Supervisor(error)
+        match error {
+            SupervisorError::RunnerReported { code, message } => {
+                Self::RunnerReportedError { code, message }
+            }
+            error => Self::Supervisor(error),
+        }
     }
 }
 
@@ -572,6 +577,17 @@ impl RunnerInstanceManager {
                     "delta" => on_event(InferEvent::Delta(event.payload)),
                     "metrics" => on_event(InferEvent::Metrics(event.payload)),
                     "result" => {
+                        if let Some(device) = event
+                            .payload
+                            .get("device")
+                            .or_else(|| event.payload.get("effective_device"))
+                            .and_then(Value::as_str)
+                            .filter(|value| !value.trim().is_empty())
+                        {
+                            instance.update_state(|state| {
+                                state.effective_device = Some(device.to_string())
+                            });
+                        }
                         on_event(InferEvent::Result(event.payload.clone()));
                         return Ok(event.payload);
                     }

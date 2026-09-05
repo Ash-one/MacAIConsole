@@ -15,7 +15,7 @@ struct AddModelSheet: View {
     @State private var errorMessage: String?
     @State private var idEdited = false
 
-    /// llm → .gguf（llama.cpp），stt → .bin（whisper.cpp）；目录模型（Kokoro /
+    /// llm → .gguf（llama.cpp Runner），stt → .bin（whisper.cpp Runner）；目录模型（Kokoro /
     /// Qwen3-ASR / Qwen3-TTS / sherpa-onnx）由 ModelRepository 扫描并绑定
     /// org.macai.* Runner。mock 与 macos-say 仅测试/CLI 兜底，无 GUI 注册入口。
     private let types: [(id: String, label: String, ext: String)] = [

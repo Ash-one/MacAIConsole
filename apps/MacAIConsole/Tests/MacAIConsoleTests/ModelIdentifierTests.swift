@@ -3,6 +3,14 @@ import XCTest
 @testable import MacAIConsole
 
 final class ModelIdentifierTests: XCTestCase {
+    func testModelEntryDecodesProviderSelectionAuditFields() throws {
+        let data = Data(#"{"id":"local","owned_by":"aiworkd/org.macai.llama.cpp","type":"llm","requested_provider":"llama.cpp","provider_selection_reason":"legacy alias"}"#.utf8)
+        let model = try JSONDecoder().decode(ModelEntry.self, from: data)
+
+        XCTAssertEqual(model.requestedProvider, "llama.cpp")
+        XCTAssertEqual(model.providerSelectionReason, "legacy alias")
+    }
+
     func testFileModelIDRemovesOnlyLastExtensionAndDirectoryIDIsPreserved() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("macai-model-id-\(UUID().uuidString)", isDirectory: true)
@@ -14,7 +22,7 @@ final class ModelIdentifierTests: XCTestCase {
         let fileModel = RepoModel(
             fileName: file.lastPathComponent,
             modelType: "stt",
-            provider: "whisper.cpp",
+            provider: "org.macai.whisper.cpp",
             path: file.path,
             sizeBytes: 0
         )

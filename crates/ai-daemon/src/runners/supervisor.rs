@@ -25,6 +25,7 @@ pub enum SupervisorError {
     MissingPipe(&'static str),
     Deadline(&'static str),
     Identity(String),
+    RunnerReported { code: String, message: String },
     UnexpectedMessage { expected: String, actual: String },
 }
 
@@ -41,6 +42,9 @@ impl fmt::Display for SupervisorError {
             Self::Deadline(phase) => write!(formatter, "Runner exceeded {phase} deadline"),
             Self::Identity(message) => {
                 write!(formatter, "Runner handshake identity mismatch: {message}")
+            }
+            Self::RunnerReported { code, message } => {
+                write!(formatter, "Runner reported {code}: {message}")
             }
             Self::UnexpectedMessage { expected, actual } => {
                 write!(
@@ -74,6 +78,7 @@ impl From<ProtocolError> for SupervisorError {
 
 pub struct RunnerProcess {
     child: Child,
+    process_group_id: Option<i32>,
     stdin: ChildStdin,
     stdout: ChildStdout,
     stderr_task: Option<JoinHandle<Vec<u8>>>,
@@ -87,6 +92,23 @@ struct StartupGuard {
     stderr_task: Option<JoinHandle<Vec<u8>>>,
 }
 
+#[cfg(unix)]
+fn kill_process_group(child: &mut Child, process_group_id: Option<i32>) {
+    if let Some(process_group_id) = process_group_id {
+        // Runner processes start as process-group leaders. A negative PID targets
+        // the whole group, including engine subprocesses owned by the Runner.
+        unsafe {
+            libc::kill(-process_group_id, libc::SIGKILL);
+        }
+    }
+    let _ = child.start_kill();
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(child: &mut Child, _process_group_id: Option<i32>) {
+    let _ = child.start_kill();
+}
+
 impl StartupGuard {
     fn child_mut(&mut self) -> &mut Child {
         self.child
@@ -96,7 +118,8 @@ impl StartupGuard {
 
     async fn cleanup(mut self) {
         if let Some(mut child) = self.child.take() {
-            let _ = child.start_kill();
+            let process_group_id = child.id().map(|pid| pid as i32);
+            kill_process_group(&mut child, process_group_id);
             let _ = child.wait().await;
         }
         if let Some(stderr_task) = self.stderr_task.take() {
@@ -176,6 +199,8 @@ impl RunnerProcess {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .env_clear();
+        #[cfg(unix)]
+        process.process_group(0);
         for name in &manifest.security.inherit_environment {
             if let Some(value) = std::env::var_os(name) {
                 process.env(name, value);
@@ -188,6 +213,10 @@ impl RunnerProcess {
                 return Err(SupervisorError::Spawn(error));
             }
         };
+        #[cfg(unix)]
+        let process_group_id = child.id().map(|pid| pid as i32);
+        #[cfg(not(unix))]
+        let process_group_id = None;
         let mut startup = StartupGuard {
             child: Some(child),
             stderr_task: None,
@@ -241,6 +270,7 @@ impl RunnerProcess {
                     .child
                     .take()
                     .expect("startup child remains after hello"),
+                process_group_id,
                 stdin,
                 stdout,
                 stderr_task: startup.stderr_task.take(),
@@ -278,6 +308,22 @@ impl RunnerProcess {
     ) -> Result<Envelope, SupervisorError> {
         self.send(&Envelope::new(message_type, id, payload)).await?;
         let reply = self.receive(deadline).await?;
+        if reply.id == id && reply.message_type == "error" {
+            return Err(SupervisorError::RunnerReported {
+                code: reply
+                    .payload
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .unwrap_or("internal")
+                    .to_string(),
+                message: reply
+                    .payload
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Runner returned an error without a message")
+                    .to_string(),
+            });
+        }
         if reply.id != id || reply.message_type != expected_reply {
             return Err(SupervisorError::UnexpectedMessage {
                 expected: format!("{expected_reply} for {id}"),
@@ -318,7 +364,7 @@ impl RunnerProcess {
             Ok(Ok(_)) => Ok(()),
             Ok(Err(error)) => Err(SupervisorError::Spawn(error)),
             Err(_) => {
-                let _ = self.child.start_kill();
+                kill_process_group(&mut self.child, self.process_group_id);
                 let _ = self.child.wait().await;
                 Err(SupervisorError::Deadline("shutdown"))
             }
@@ -332,13 +378,17 @@ impl RunnerProcess {
         let _ = std::fs::remove_dir_all(&self.package_staging);
         request_result?;
         wait_result?;
+        // A confirmed protocol shutdown has already let the Runner clean up its
+        // descendants. Disarm Drop so a rapidly reused process-group ID cannot
+        // be signalled after the leader has been reaped.
+        self.process_group_id = None;
         Ok(String::from_utf8_lossy(&stderr).into_owned())
     }
 }
 
 impl Drop for RunnerProcess {
     fn drop(&mut self) {
-        let _ = self.child.start_kill();
+        kill_process_group(&mut self.child, self.process_group_id);
         if let Some(stderr_task) = &self.stderr_task {
             stderr_task.abort();
         }

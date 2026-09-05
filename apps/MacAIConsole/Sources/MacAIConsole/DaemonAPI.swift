@@ -40,6 +40,8 @@ struct RuntimeInfo: Decodable {
 struct LoadedModel: Decodable, Identifiable, Hashable {
     var id: String
     var provider: String
+    var requestedProvider: String?
+    var providerSelectionReason: String?
     var state: String
     var memoryEstimate: UInt64?
     var memoryUsageBytes: UInt64?
@@ -54,6 +56,8 @@ struct LoadedModel: Decodable, Identifiable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, provider, state
+        case requestedProvider = "requested_provider"
+        case providerSelectionReason = "provider_selection_reason"
         case memoryEstimate = "memory_estimate"
         case memoryUsageBytes = "memory_usage_bytes"
         case keepAlive = "keep_alive"
@@ -79,6 +83,8 @@ struct VoiceResponse: Decodable {
 struct ModelEntry: Decodable, Identifiable, Hashable {
     var id: String
     var ownedBy: String
+    var requestedProvider: String? = nil
+    var providerSelectionReason: String? = nil
     var modelType: String
     /// 注册时的模型文件路径。改名不影响它——GUI 用它推导原始/默认 ID。
     var path: String?
@@ -86,6 +92,8 @@ struct ModelEntry: Decodable, Identifiable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id
         case ownedBy = "owned_by"
+        case requestedProvider = "requested_provider"
+        case providerSelectionReason = "provider_selection_reason"
         // /v1/models 实际返回的字段名是 "type"（OpenAI 兼容格式）。
         case modelType = "type"
         case path
@@ -133,7 +141,7 @@ struct ProviderEntry: Decodable, Identifiable {
     var id: String { descriptor.id }
 }
 
-// MARK: Runner 管理面模型（Phase 4，实验性）
+// MARK: Runner 管理面模型
 
 struct RunnerModel: Decodable, Hashable {
     var profile: String
@@ -451,7 +459,7 @@ struct DaemonAPI {
         return try JSONDecoder().decode(Wrapper.self, from: try await get("api/providers")).data
     }
 
-    // MARK: Runner 管理面（Phase 4，实验性）
+    // MARK: Runner 管理面
 
     /// GET /api/runners —— 已发现/受信任 Runner + python 环境 phase。
     func runners() async throws -> [RunnerEntry] {

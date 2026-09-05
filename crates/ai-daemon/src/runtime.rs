@@ -1,7 +1,7 @@
 //! Runtime — daemon 唯一的模型与 Provider Authority。
 //!
-//! Milestone 1 使用内存模型注册表；Provider 已支持 Mock 与隔离的 llama.cpp
-//! worker。SQLite、内存预算和 LRU 在后续 milestone 接入，不改变这里的调用边界。
+//! 内存 HashMap 是唯一读路径；SQLite 持久化注册，scheduler 统一处理内存预算、
+//! lease、LRU 与 keep-alive。生产后端全部通过受监督 Runner 进程接入。
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,7 +22,7 @@ use ai_core::response::{
 };
 use ai_core::AIError;
 
-use crate::providers::{MacOSSayProvider, MockProvider, WhisperCppProvider};
+use crate::providers::{MacOSSayProvider, MockProvider};
 use crate::registry::{RegistryStore, StoredProfile};
 use crate::scheduler;
 use crate::tasks::{TaskHandle, TaskRegistry};
@@ -32,7 +32,8 @@ use ai_daemon::runners::RunnerInstanceManager;
 #[derive(Debug, Clone)]
 pub struct RegistryEntry {
     pub spec: ModelSpec,
-    /// Runner-backed 模型注册当时的 immutable Profile snapshot；legacy 模型为 None。
+    /// catalog Runner 模型注册当时的 immutable Profile snapshot；ad-hoc Runner
+    /// 模型为 None。
     pub profile: Option<StoredProfile>,
     pub state: String,
     pub loaded_at: Option<u64>,
@@ -52,7 +53,7 @@ pub struct Runtime {
     handles: RwLock<HashMap<String, ModelHandle>>,
     model_leases: StdMutex<HashMap<String, u64>>,
     lifecycle_lock: Mutex<()>,
-    /// Runner-backed 模型的进程/协议通道（Phase 1C）。None = 未配置 Runner。
+    /// Runner-backed 模型的进程/协议通道。None = 未配置 Runner。
     runner_instances: Option<Arc<RunnerInstanceManager>>,
     /// ad-hoc 绑定通道：attach 过的 RunnerProvider 按 runner id 索引。
     /// 注册路径据此为无 catalog Profile 的模型建立内存绑定。
@@ -142,19 +143,11 @@ impl Runtime {
         if let Some(budget) = memory_budget {
             tracing::info!(budget_gb = budget / (1024 * 1024 * 1024), "memory budget");
         }
-        // 生产构造只装配 whisper.cpp（llama.cpp 已迁 Runner org.macai.llama.cpp，
-        // 2026-09-03 用户拍板 cpp 引擎 Runner 化）；mock / macos-say 是测试能力，
-        // 由 new() 的 inject_test_providers 注入，不进生产 providers 表。
-        let whisper = Arc::new(WhisperCppProvider::from_env());
-
-        let mut providers: HashMap<String, Arc<dyn Provider>> = HashMap::new();
-        providers.insert("whisper.cpp".to_string(), whisper.clone());
-
-        let mut chat_providers: HashMap<String, Arc<dyn ChatProvider>> = HashMap::new();
-
-        let mut stt_providers: HashMap<String, Arc<dyn STTProvider>> = HashMap::new();
-        stt_providers.insert("whisper.cpp".to_string(), whisper);
-
+        // 生产后端全部由 bootstrap_runners 动态装配；mock / macos-say 只由
+        // new() 的测试构造注入，不进入生产 Provider 表。
+        let providers: HashMap<String, Arc<dyn Provider>> = HashMap::new();
+        let chat_providers: HashMap<String, Arc<dyn ChatProvider>> = HashMap::new();
+        let stt_providers: HashMap<String, Arc<dyn STTProvider>> = HashMap::new();
         let tts_providers: HashMap<String, Arc<dyn TTSProvider>> = HashMap::new();
         Self {
             registry: RwLock::new(seed_entries(seed, registered_profiles)),
@@ -191,7 +184,7 @@ impl Runtime {
             .is_some_and(|provider| provider.descriptor().capabilities.contains(&capability))
     }
 
-    /// Runner-backed Provider 装配（Phase 4）。main 构造 Runtime 后、Arc 包装前
+    /// Runner-backed Provider 装配。main 构造 Runtime 后、Arc 包装前
     /// 调用：按 descriptor 注册进 providers 与 capability 表，并挂上 instance
     /// manager 供 `shutdown_all` 收口。一个 Runner 一个 RunnerProvider。
     pub fn attach_runner(
@@ -227,8 +220,8 @@ impl Runtime {
         self.runner_instances = Some(instances);
     }
 
-    /// 持久化 Model Profile snapshot 到 models.db `model_profiles` 表
-    /// （Phase 4 注册路径）。返回内容 digest；内存模式（无 store）返回 Ok(None)。
+    /// 持久化 Model Profile snapshot 到 models.db `model_profiles` 表。
+    /// 返回内容 digest；内存模式（无 store）返回 Ok(None)。
     pub fn register_runner_profile(
         &self,
         profile: &ai_daemon::runners::ModelProfile,
@@ -413,6 +406,37 @@ impl Runtime {
         ) {
             self.unload_model(id).await?;
         }
+        let adhoc_runner_provider = {
+            let registry = self.registry.read().await;
+            registry.get(id).and_then(|entry| {
+                (entry.profile.is_none() && entry.spec.provider.starts_with("org.macai."))
+                    .then(|| entry.spec.provider.clone())
+            })
+        };
+        if let Some(provider_id) = adhoc_runner_provider {
+            let provider = self
+                .runner_providers
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(&provider_id)
+                .cloned()
+                .ok_or_else(|| {
+                    ProviderError::new(
+                        AIError::ProviderUnavailable,
+                        format!("Runner provider '{provider_id}' is not attached"),
+                    )
+                })?;
+            let renamed = provider
+                .rename_bound_model(id, new_id)
+                .await
+                .map_err(|message| ProviderError::new(AIError::InvalidRequest, message))?;
+            if !renamed {
+                return Err(ProviderError::new(
+                    AIError::ModelNotFound,
+                    format!("Runner model binding '{id}' not found"),
+                ));
+            }
+        }
         let mut entry = {
             let mut registry = self.registry.write().await;
             registry.remove(id)
@@ -438,12 +462,16 @@ impl Runtime {
     /// 从注册表中删除一个模型。已加载的模型会先卸载（终止 worker）。
     /// 返回 Err 表示模型不存在或卸载失败。
     pub async fn unregister_model(&self, id: &str) -> Result<(), ProviderError> {
-        if self.registry.read().await.get(id).is_none() {
+        let adhoc_runner_provider = self.registry.read().await.get(id).map(|entry| {
+            (entry.profile.is_none() && entry.spec.provider.starts_with("org.macai."))
+                .then(|| entry.spec.provider.clone())
+        });
+        let Some(adhoc_runner_provider) = adhoc_runner_provider else {
             return Err(ProviderError::new(
                 AIError::ModelNotFound,
                 format!("model '{id}' not found"),
             ));
-        }
+        };
         // 已加载则先卸载，避免孤儿 worker。读守卫必须在 unload 前释放，理由同
         // rename_model：if let 的 scrutinee 临时值会在 unload 期间占住读锁，
         // 与 unload_model -> set_state 的写锁互等死锁。
@@ -460,6 +488,18 @@ impl Runtime {
         self.registry.write().await.remove(id);
         if let Some(store) = &self.store {
             store.remove(id);
+        }
+        if let Some(provider_id) = adhoc_runner_provider {
+            let provider = {
+                self.runner_providers
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .get(&provider_id)
+                    .cloned()
+            };
+            if let Some(provider) = provider {
+                provider.unbind_model(id).await;
+            }
         }
         Ok(())
     }
@@ -528,6 +568,7 @@ impl Runtime {
         model_id: &str,
         model_path: &std::path::Path,
         adapter: &str,
+        format: &str,
     ) -> Result<bool, String> {
         // 只把「有 catalog Profile snapshot」视为已绑定。spec.provider 匹配
         // 不能算：daemon 重启后注册记录从 SQLite 恢复，但 RunnerProvider 的
@@ -553,7 +594,7 @@ impl Runtime {
             .cloned()
             .ok_or_else(|| format!("runner provider '{provider_id}' is not attached"))?;
         provider
-            .bind_adhoc_model(model_id, model_path, adapter)
+            .bind_adhoc_model(model_id, model_path, adapter, format)
             .await
     }
 
@@ -563,7 +604,7 @@ impl Runtime {
             ProviderError::new(AIError::ModelNotFound, format!("model '{id}' not found"))
         })?;
 
-        // 内存预算检查（handoff §24）：预算不足先 LRU 逐出，仍不足则拒绝。
+        // 内存预算不足时先按 scheduler 规则 LRU 逐出，仍不足则拒绝。
         // 无 estimate 的小模型（mock 等）按 0 计，不受预算约束。
         if self.memory_budget.is_some() {
             let requested = spec.memory_estimate.unwrap_or(0);
@@ -932,7 +973,7 @@ impl Runtime {
             .sum()
     }
 
-    /// LRU 逐出（handoff §24）：预算不足时按 last_used 升序逐出无 lease 的
+    /// LRU 逐出：预算不足时按 last_used 升序逐出无 lease 的
     /// 常驻模型，直到腾出 requested 字节。keep_alive=always 的不逐。
     /// 必须在 lifecycle_lock 内调用。返回 true 表示已腾出足够空间。
     async fn evict_for_memory(&self, requested: u64, exclude_id: Option<&str>) -> bool {
@@ -995,7 +1036,7 @@ impl Runtime {
         freed >= need
     }
 
-    /// keep-alive reaper 的单次扫描（handoff §25）：卸载空闲超过 keep_alive
+    /// keep-alive reaper 的单次扫描：卸载空闲超过 keep_alive
     /// 且无活跃 lease 的常驻模型。"always" 与无法解析的值永不自动卸载。
     pub async fn reap_idle_models(&self) {
         let now = unix_now();
@@ -1067,6 +1108,8 @@ impl Runtime {
             loaded_models.push(LoadedModelInfo {
                 id: entry.spec.id,
                 provider: entry.spec.provider,
+                requested_provider: entry.spec.requested_provider,
+                provider_selection_reason: entry.spec.provider_selection_reason,
                 state: entry.state,
                 memory_estimate: entry.spec.memory_estimate,
                 memory_usage_bytes,
@@ -1157,6 +1200,8 @@ mod tests {
             name: "Mock".to_string(),
             model_type: "llm".to_string(),
             provider: "mock".to_string(),
+            requested_provider: Some("mock".to_string()),
+            provider_selection_reason: Some("test provider selection".to_string()),
             source: None,
             path: None,
             format: Some("mock".to_string()),
@@ -1257,6 +1302,14 @@ mod tests {
         let info = runtime.runtime_info("test").await;
         assert_eq!(info.loaded_models.len(), 1);
         assert_eq!(info.loaded_models[0].state, "ready");
+        assert_eq!(
+            info.loaded_models[0].requested_provider.as_deref(),
+            Some("mock")
+        );
+        assert_eq!(
+            info.loaded_models[0].provider_selection_reason.as_deref(),
+            Some("test provider selection")
+        );
         runtime.unload_model("mock-test").await.unwrap();
         assert!(runtime.runtime_info("test").await.loaded_models.is_empty());
     }
@@ -1269,7 +1322,7 @@ mod tests {
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect();
-        assert_eq!(ids, vec!["macos-say", "mock", "whisper.cpp"]);
+        assert_eq!(ids, vec!["macos-say", "mock"]);
     }
 
     #[tokio::test]
@@ -1336,6 +1389,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn adhoc_runner_binding_tracks_refresh_rename_and_unregister() {
+        use std::collections::HashSet;
+
+        use ai_daemon::runners::{
+            EnvironmentManager, EnvironmentManagerConfig, RunnerInstanceManager, RunnerProvider,
+            RunnerRegistry,
+        };
+
+        let root = std::env::temp_dir().join(format!(
+            "macai-runtime-adhoc-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let first_path = root.join("first.gguf");
+        let second_path = root.join("second.gguf");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&first_path, b"first").unwrap();
+        std::fs::write(&second_path, b"second").unwrap();
+
+        let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+        let environments = EnvironmentManager::new(EnvironmentManagerConfig {
+            runtime_root: root.join("Runtimes/python"),
+        });
+        let instances = Arc::new(RunnerInstanceManager::new(
+            registry,
+            environments,
+            root.join("temp"),
+        ));
+        let provider = Arc::new(RunnerProvider::new(
+            "org.macai.test-runner".to_string(),
+            &["chat.v1".to_string()],
+            instances.clone(),
+            root.join("temp"),
+        ));
+        let mut runtime = Runtime::new();
+        runtime.attach_runner(provider.clone(), instances);
+
+        assert!(runtime
+            .bind_adhoc_runner_model(
+                "org.macai.test-runner",
+                "local-model",
+                &first_path,
+                "test-adapter",
+                "gguf",
+            )
+            .await
+            .unwrap());
+        assert!(!runtime
+            .bind_adhoc_runner_model(
+                "org.macai.test-runner",
+                "local-model",
+                &second_path,
+                "test-adapter",
+                "gguf",
+            )
+            .await
+            .unwrap());
+
+        let mut spec = mock_spec();
+        spec.id = "local-model".to_string();
+        spec.provider = "org.macai.test-runner".to_string();
+        spec.requested_provider = Some("org.macai.test-runner".to_string());
+        spec.path = Some(second_path.display().to_string());
+        runtime.register(spec.clone()).await;
+
+        let refresh_error = provider.load(&spec).await.unwrap_err();
+        assert!(!refresh_error.message.contains("not bound"));
+        assert!(!refresh_error.message.contains("does not match Profile"));
+
+        runtime
+            .rename_model("local-model", "renamed-model")
+            .await
+            .unwrap();
+        spec.id = "renamed-model".to_string();
+        let rename_error = provider.load(&spec).await.unwrap_err();
+        assert!(!rename_error.message.contains("not bound"));
+
+        runtime.unregister_model("renamed-model").await.unwrap();
+        let removed_error = provider.load(&spec).await.unwrap_err();
+        assert_eq!(removed_error.kind, AIError::ModelNotFound);
+        assert!(removed_error.message.contains("not bound"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn registered_runner_model_restores_its_immutable_profile_snapshot() {
         let path = std::env::temp_dir().join(format!(
             "macai-runtime-profile-{}-{}.db",
@@ -1382,6 +1523,8 @@ runner = ">=0.1,<0.2"
             name: profile.name.clone(),
             model_type: "tts".to_string(),
             provider: profile.runner.clone(),
+            requested_provider: Some(profile.runner.clone()),
+            provider_selection_reason: Some("explicit provider selection".to_string()),
             source: None,
             path: Some("/Models/tts/kokoro-82m-zh".to_string()),
             format: Some(profile.format.clone()),
@@ -1398,7 +1541,7 @@ runner = ">=0.1,<0.2"
         assert!(runtime
             .freeze_existing_runner_profile(&profile)
             .await
-            .expect("legacy registration migration"));
+            .expect("existing registration snapshot migration"));
         assert!(!runtime
             .freeze_existing_runner_profile(&profile)
             .await

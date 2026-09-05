@@ -153,7 +153,7 @@ struct SettingsView: View {
     }
 
     private var runnerEnvironmentsDescription: String {
-        "引擎环境由 daemon 的 Runner 管理（llama.cpp / whisper.cpp / 全部 org.macai.* 引擎）。状态来自 daemon /api/runners；安装 = daemon 定位并准备引擎（Python 引擎用 uv 同步受管环境，首次需联网下载依赖）。安装完成后刷新状态即可，重启 aiworkd 生效。"
+        "七个 org.macai.* Runner 的环境由 daemon 管理，状态来自 /api/runners；安装时 daemon 准备引擎，Python 适配器通过 uv 同步受管环境，首次通常需要联网。llama.cpp 下载固定预编译产物，whisper.cpp 从固定官方源码构建。完成后立即生效。"
     }
 
     private var settingsAreValid: Bool {

@@ -93,32 +93,25 @@ impl RunnerProvider {
 
     /// Runtime 注册 Runner-backed 模型时调用：保存 Profile 快照绑定。
     pub async fn bind_model(&self, binding: RunnerModelBinding) {
-        self.bindings.write().await.retain(|existing| {
+        let mut bindings = self.bindings.write().await;
+        bindings.retain(|existing| {
             existing.profile.id != binding.profile.id && existing.model_id != binding.model_id
         });
-        self.bindings.write().await.push(binding);
+        bindings.push(binding);
     }
 
     /// 注册任意模型的 ad-hoc 绑定（无 bundled catalog 的引擎用，如 llama.cpp）：
     /// 以模型注册 ID 与注册目录在内存中构造 Model Profile。它不持久化
     /// snapshot、不参与 catalog digest——模型注册记录（models.db）本身才是
-    /// 这个模型的持久身份；目录或文件变化经已注册模型的 path 校验拒绝。
-    /// 模型已绑定（如重复注册）时刷新绑定并返回 false。
+    /// 这个模型的持久身份。同 ID 重新注册时原子替换 path/profile 绑定，保证它与
+    /// 即将写入的 ModelSpec 一致，并返回 false。
     pub async fn bind_adhoc_model(
         &self,
         model_id: &str,
         model_dir: &Path,
         adapter: &str,
+        format: &str,
     ) -> Result<bool, String> {
-        if self
-            .bindings
-            .read()
-            .await
-            .iter()
-            .any(|binding| binding.model_id == model_id)
-        {
-            return Ok(false);
-        }
         let directory = model_dir
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -134,7 +127,7 @@ impl RunnerProvider {
                 .collect(),
             runner: self.runner_id.clone(),
             adapter: adapter.to_string(),
-            format: "gguf".to_string(),
+            format: format.to_string(),
             source: ProfileSource {
                 source_type: "local".to_string(),
                 repo: String::new(),
@@ -154,13 +147,41 @@ impl RunnerProvider {
             .validate()
             .map_err(|error| format!("ad-hoc profile for '{model_id}' is invalid: {error}"))?;
         let environment_id = self.default_environment_id().await;
-        self.bind_model(RunnerModelBinding {
+        let binding = RunnerModelBinding {
             model_id: model_id.to_string(),
             profile,
             environment_id,
             artifact_root: model_dir.to_path_buf(),
-        })
-        .await;
+        };
+        let mut bindings = self.bindings.write().await;
+        let existed = bindings
+            .iter()
+            .any(|existing| existing.model_id == model_id);
+        bindings.retain(|existing| {
+            existing.profile.id != binding.profile.id && existing.model_id != binding.model_id
+        });
+        bindings.push(binding);
+        Ok(!existed)
+    }
+
+    /// 同步注册表的 ad-hoc 模型改名；catalog Profile ID 不走此路径。
+    pub async fn rename_bound_model(&self, old_id: &str, new_id: &str) -> Result<bool, String> {
+        let mut bindings = self.bindings.write().await;
+        if bindings
+            .iter()
+            .any(|binding| binding.model_id == new_id && binding.model_id != old_id)
+        {
+            return Err(format!("Runner model binding '{new_id}' already exists"));
+        }
+        let Some(binding) = bindings
+            .iter_mut()
+            .find(|binding| binding.model_id == old_id)
+        else {
+            return Ok(false);
+        };
+        binding.model_id = new_id.to_string();
+        binding.profile.id = new_id.to_string();
+        binding.profile.name = new_id.to_string();
         Ok(true)
     }
 
@@ -239,7 +260,7 @@ impl RunnerProvider {
             }
             RunnerInstanceError::RunnerReportedError { code, message } => {
                 let kind = match code.as_str() {
-                    "invalid_request" => AIError::InvalidRequest,
+                    "invalid_request" | "invalid_audio" => AIError::InvalidRequest,
                     "model_not_found" => AIError::ModelNotFound,
                     "model_load_failed" => AIError::ModelLoadFailed,
                     "provider_unavailable" => AIError::ProviderUnavailable,
@@ -788,4 +809,26 @@ fn uuid_like() -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("{}-{}-{}", std::process::id(), t, n)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runner_reported_load_and_audio_errors_keep_public_semantics() {
+        let load = RunnerProvider::map_error(RunnerInstanceError::RunnerReportedError {
+            code: "model_load_failed".to_string(),
+            message: "cannot load model".to_string(),
+        });
+        assert_eq!(load.kind, AIError::ModelLoadFailed);
+        assert_eq!(load.message, "cannot load model");
+
+        let audio = RunnerProvider::map_error(RunnerInstanceError::RunnerReportedError {
+            code: "invalid_audio".to_string(),
+            message: "audio is not PCM WAV".to_string(),
+        });
+        assert_eq!(audio.kind, AIError::InvalidRequest);
+        assert_eq!(audio.message, "audio is not PCM WAV");
+    }
 }

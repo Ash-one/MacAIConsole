@@ -1,0 +1,53 @@
+schema = "macai.runner.v1"
+id = "org.macai.whisper.cpp"
+version = "0.1.0"
+protocols = ["macai.runner.v1"]
+capabilities = ["stt.v1"]
+
+[entrypoint]
+command = ["{environment.python}", "-m", "macai_whisper_cpp_runner"]
+working_directory = "package"
+
+[runtime]
+type = "python-uv"
+id = "org.macai.whisper.cpp-python"
+project = "."
+lock = "uv.lock"
+python = ">=3.12,<3.13"
+probe = ["{environment.python}", "-c", "import macai_whisper_cpp_runner"]
+default_adapter = "whisper-cpp-server"
+
+[capacity]
+max_instances = 1
+max_concurrency_per_instance = 1
+
+[timeouts]
+boot_seconds = 30
+load_seconds = 600
+inference_seconds = 300
+shutdown_seconds = 10
+
+[security]
+network_during_install = true
+network_during_runtime = false
+inherit_environment = ["HOME", "MACAI_WHISPER_SERVER"]
+
+[engine]
+download_url = "https://github.com/ggml-org/whisper.cpp/archive/371b5a7561823ab2bb32142d2751e35e7534727b.tar.gz"
+sha256 = "89051d8fca516a3ad1f5c2f8f9d2fccb089afbaec338fca3f8731999babc6f81"
+binary = "build/bin/whisper-server"
+
+[engine.build]
+source_directory = "whisper.cpp-371b5a7561823ab2bb32142d2751e35e7534727b"
+target = "whisper-server"
+definitions = [
+  "CMAKE_BUILD_TYPE=Release",
+  "BUILD_SHARED_LIBS=OFF",
+  "WHISPER_BUILD_TESTS=OFF",
+  "WHISPER_BUILD_EXAMPLES=ON",
+  "WHISPER_BUILD_SERVER=ON",
+  "GGML_METAL=ON",
+  "GGML_ACCELERATE=ON",
+  "WHISPER_COREML=ON",
+  "WHISPER_COREML_ALLOW_FALLBACK=ON",
+]

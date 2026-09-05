@@ -1,6 +1,7 @@
-//! SQLite 持久化模型注册表（handoff §19）。
+//! SQLite 持久化模型注册表。
 //!
-//! 数据库位于应用支持目录 `models.db`，schema 按 handoff 推荐定义。
+//! 数据库位于应用支持目录 `models.db`；当前字段契约由 ModelSpec、Model Profile v1
+//! 与 Runner 插件架构决策共同拥有。
 //! Runtime 启动时全量加载到内存 HashMap；此后每次 register / unregister /
 //! 状态变更 / touch 都同步写库，内存 HashMap 仍是唯一读路径（单机 daemon，
 //! 无并发进程访问该库）。
@@ -16,13 +17,15 @@ pub struct RegistryStore {
     conn: Mutex<Connection>,
 }
 
-/// 表结构与 ModelSpec 字段一一对应；context_length/keep_alive 存 parameters JSON。
+/// 表结构与 ModelSpec 字段一一对应；Profile catalog 与 per-model snapshot 分表保存。
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS models (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     type TEXT NOT NULL,
     provider TEXT NOT NULL,
+    requested_provider TEXT,
+    provider_selection_reason TEXT,
     source TEXT,
     path TEXT,
     format TEXT,
@@ -32,7 +35,8 @@ CREATE TABLE IF NOT EXISTS models (
     context_length INTEGER,
     state TEXT NOT NULL DEFAULT 'unloaded',
     installed_at INTEGER NOT NULL,
-    last_used_at INTEGER
+    last_used_at INTEGER,
+    default_voice TEXT
 );
 CREATE TABLE IF NOT EXISTS model_profiles (
     profile_id TEXT PRIMARY KEY,
@@ -56,7 +60,6 @@ CREATE TABLE IF NOT EXISTS registered_model_profiles (
 /// 持久化的 Runner Model Profile snapshot。`digest` 是 profile 规范 JSON 的
 /// sha256（`ModelProfile::digest`）；`snapshot` 是规范 JSON 本身，重启后可恢复
 /// 解析，不与任何单个模型实例绑定。
-#[allow(dead_code)] // Phase 4 main.rs 注册/装配路径接入后移除
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredProfile {
     pub profile_id: String,
@@ -79,6 +82,25 @@ impl RegistryStore {
             .map_err(|error| format!("cannot init registry schema: {error}"))?;
         // 旧库迁移：default_voice 列后加，缺列时补上。
         let _ = conn.execute_batch("ALTER TABLE models ADD COLUMN default_voice TEXT;");
+        let _ = conn.execute_batch("ALTER TABLE models ADD COLUMN requested_provider TEXT;");
+        let _ = conn.execute_batch("ALTER TABLE models ADD COLUMN provider_selection_reason TEXT;");
+        let _ = conn.execute(
+            "UPDATE models SET requested_provider = 'unknown'
+             WHERE requested_provider IS NULL",
+            [],
+        );
+        let _ = conn.execute(
+            "UPDATE models SET provider_selection_reason =
+                'registration predates provider selection audit metadata'
+             WHERE provider_selection_reason IS NULL",
+            [],
+        );
+        let _ = conn.execute(
+            "UPDATE models SET provider = 'org.macai.whisper.cpp',
+                provider_selection_reason = 'legacy provider alias ''whisper.cpp'' migrated to Runner'
+             WHERE provider = 'whisper.cpp'",
+            [],
+        );
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -91,8 +113,9 @@ impl RegistryStore {
             return vec![];
         };
         let mut stmt = match conn.prepare(
-            "SELECT id, name, type, provider, source, path, format, size_bytes,
-                    memory_estimate, keep_alive, context_length, last_used_at, default_voice
+            "SELECT id, name, type, provider, requested_provider, provider_selection_reason,
+                    source, path, format, size_bytes, memory_estimate, keep_alive,
+                    context_length, last_used_at, default_voice
              FROM models ORDER BY id",
         ) {
             Ok(stmt) => stmt,
@@ -107,12 +130,14 @@ impl RegistryStore {
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, Option<String>>(5)?,
                 row.get::<_, Option<String>>(6)?,
-                row.get::<_, Option<i64>>(7)?,
-                row.get::<_, Option<i64>>(8)?,
-                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<i64>>(9)?,
                 row.get::<_, Option<i64>>(10)?,
-                row.get::<_, Option<i64>>(11)?,
-                row.get::<_, Option<String>>(12)?,
+                row.get::<_, Option<String>>(11)?,
+                row.get::<_, Option<i64>>(12)?,
+                row.get::<_, Option<i64>>(13)?,
+                row.get::<_, Option<String>>(14)?,
             ))
         });
         let mut result = Vec::new();
@@ -123,16 +148,18 @@ impl RegistryStore {
                     name: row.1,
                     model_type: row.2,
                     provider: row.3,
-                    source: row.4,
-                    path: row.5,
-                    format: row.6,
-                    size_bytes: row.7.map(|v| v.max(0) as u64),
-                    memory_estimate: row.8.map(|v| v.max(0) as u64),
-                    keep_alive: row.9,
-                    context_length: row.10.map(|v| v.max(0) as u64),
-                    default_voice: row.12,
+                    requested_provider: row.4,
+                    provider_selection_reason: row.5,
+                    source: row.6,
+                    path: row.7,
+                    format: row.8,
+                    size_bytes: row.9.map(|v| v.max(0) as u64),
+                    memory_estimate: row.10.map(|v| v.max(0) as u64),
+                    keep_alive: row.11,
+                    context_length: row.12.map(|v| v.max(0) as u64),
+                    default_voice: row.14,
                 };
-                result.push((spec, row.11.map(|v| v.max(0) as u64)));
+                result.push((spec, row.13.map(|v| v.max(0) as u64)));
             }
         }
         // 重启后全部视为 unloaded，清掉陈旧的 loaded 时间戳语义由调用方处理。
@@ -145,19 +172,24 @@ impl RegistryStore {
             return;
         };
         let _ = conn.execute(
-            "INSERT INTO models (id, name, type, provider, source, path, format,
-                                 size_bytes, memory_estimate, keep_alive, context_length,
-                                 state, installed_at, last_used_at, default_voice)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'unloaded', ?12, ?13, ?14)
+            "INSERT INTO models (id, name, type, provider, requested_provider,
+                                 provider_selection_reason, source, path, format, size_bytes,
+                                 memory_estimate, keep_alive, context_length, state,
+                                 installed_at, last_used_at, default_voice)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                     'unloaded', ?14, ?15, ?16)
              ON CONFLICT(id) DO UPDATE SET
-                name = ?2, type = ?3, provider = ?4, source = ?5, path = ?6,
-                format = ?7, size_bytes = ?8, memory_estimate = ?9,
-                keep_alive = ?10, context_length = ?11",
+                name = ?2, type = ?3, provider = ?4, requested_provider = ?5,
+                provider_selection_reason = ?6, source = ?7, path = ?8,
+                format = ?9, size_bytes = ?10, memory_estimate = ?11,
+                keep_alive = ?12, context_length = ?13, default_voice = ?16",
             rusqlite::params![
                 spec.id,
                 spec.name,
                 spec.model_type,
                 spec.provider,
+                spec.requested_provider,
+                spec.provider_selection_reason,
                 spec.source,
                 spec.path,
                 spec.format,
@@ -220,7 +252,6 @@ impl RegistryStore {
     /// 持久化一个 Model Profile snapshot。同 profile_id 的新 digest 覆盖旧
     /// snapshot（profile 内容升级路径）；installed_at 属于首次注册时间，upsert
     /// 不覆盖。调用方负责先 `ModelProfile::validate`。
-    #[allow(dead_code)] // Phase 4 main.rs 注册/装配路径接入后移除
     pub fn upsert_profile(
         &self,
         profile_id: &str,
@@ -250,7 +281,7 @@ impl RegistryStore {
         );
     }
 
-    #[allow(dead_code)] // Phase 4 main.rs 注册/装配路径接入后移除
+    #[allow(dead_code)] // 精确的单条 Profile 查询 API；当前生产启动路径使用全量恢复。
     pub fn get_profile(&self, profile_id: &str) -> Option<StoredProfile> {
         let conn = self.conn.lock().ok()?;
         conn.query_row(
@@ -272,7 +303,7 @@ impl RegistryStore {
     }
 
     /// 启动时全量加载持久化 profiles（重启恢复路径）。
-    #[allow(dead_code)] // Phase 4 main.rs 注册/装配路径接入后移除
+    #[allow(dead_code)] // 当前供验证 catalog 持久化；生产组合直接维护内存 catalog。
     pub fn load_profiles(&self) -> Vec<StoredProfile> {
         let Ok(conn) = self.conn.lock() else {
             return vec![];
@@ -378,6 +409,8 @@ mod tests {
             name: format!("{id} name"),
             model_type: "llm".to_string(),
             provider: "llama.cpp".to_string(),
+            requested_provider: Some("llama.cpp".to_string()),
+            provider_selection_reason: Some("explicit provider selection".to_string()),
             source: Some("hf:test/repo".to_string()),
             path: Some(format!("/Models/llm/{id}.gguf")),
             format: Some("gguf".to_string()),
@@ -420,6 +453,11 @@ mod tests {
         assert_eq!(loaded_spec.name, "qwen3 name");
         assert_eq!(loaded_spec.model_type, "llm");
         assert_eq!(loaded_spec.provider, "llama.cpp");
+        assert_eq!(loaded_spec.requested_provider.as_deref(), Some("llama.cpp"));
+        assert_eq!(
+            loaded_spec.provider_selection_reason.as_deref(),
+            Some("explicit provider selection")
+        );
         assert_eq!(loaded_spec.source.as_deref(), Some("hf:test/repo"));
         assert_eq!(loaded_spec.path.as_deref(), Some("/Models/llm/qwen3.gguf"));
         assert_eq!(loaded_spec.format.as_deref(), Some("gguf"));
@@ -429,6 +467,53 @@ mod tests {
         assert_eq!(loaded_spec.context_length, Some(4096));
         assert_eq!(loaded_spec.default_voice.as_deref(), Some("zf_001"));
         assert_eq!(*last_used_at, Some(222));
+        drop(store);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn opening_legacy_database_marks_selection_history_unknown() {
+        let path = temp_db("selection-migration");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE models (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                source TEXT,
+                path TEXT,
+                format TEXT,
+                size_bytes INTEGER,
+                memory_estimate INTEGER,
+                keep_alive TEXT,
+                context_length INTEGER,
+                state TEXT NOT NULL DEFAULT 'unloaded',
+                installed_at INTEGER NOT NULL,
+                last_used_at INTEGER,
+                default_voice TEXT
+             );
+             INSERT INTO models (id, name, type, provider, state, installed_at)
+             VALUES ('legacy', 'Legacy', 'llm', 'llama.cpp', 'unloaded', 1);
+             INSERT INTO models (id, name, type, provider, state, installed_at)
+             VALUES ('whisper', 'Whisper', 'stt', 'whisper.cpp', 'unloaded', 1);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let store = RegistryStore::open(&path).unwrap();
+        let loaded = store.load_all();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].0.requested_provider.as_deref(), Some("unknown"));
+        assert_eq!(
+            loaded[0].0.provider_selection_reason.as_deref(),
+            Some("registration predates provider selection audit metadata")
+        );
+        assert_eq!(loaded[1].0.provider, "org.macai.whisper.cpp");
+        assert_eq!(
+            loaded[1].0.provider_selection_reason.as_deref(),
+            Some("legacy provider alias 'whisper.cpp' migrated to Runner")
+        );
         drop(store);
         cleanup(&path);
     }

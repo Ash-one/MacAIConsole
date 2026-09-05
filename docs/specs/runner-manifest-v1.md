@@ -13,7 +13,8 @@ entrypoint 相同的 argv 安全校验和模板解析）。isolated fake Runner 
 discovery、信任、digest-bound staging、Profile snapshot 和启动握手；真实 uv 的
 环境行为由 `tests/runner_environment_manager.rs` 覆盖。Runtime/scheduler 组合
 路径与生产装配（`main.rs` `bootstrap_runners`、HTTP 管理面、GUI）均已接入；
-Kokoro 与 qwen3-asr 两个 Runner package 经此 schema 运行。
+llama.cpp、whisper.cpp、mlx-lm、Kokoro、Qwen3-ASR、Qwen3-TTS 与 sherpa-onnx 七个 built-in
+Runner package 均经此 schema 运行。
 
 ## Location
 
@@ -88,8 +89,8 @@ adapter = "kokoro-mlx"
 | `timeouts` | yes | 可覆盖的默认 deadline |
 | `security` | yes | 网络和环境变量权限 |
 | `models` | no | 随 Runner 分发的 Model Profile 引用 |
-| `default_adapter` | no | 无 bundled Model Profile 的引擎（如 llama.cpp）的 ad-hoc 绑定默认 adapter；注册路径据此为任意本地模型构造内存绑定 |
-| `engine` | no | 引擎预编译产物声明（cpp 引擎 Runner 化）：`download_url` / `sha256`（强制校验）/ `binary`（压缩包内可执行文件相对路径）。install 流程在环境同步之后下载、校验、解压到 `<app-support>/Engines/<runner-id>/`，指纹写入 `.macai-engine.json`，已就绪时幂等跳过 |
+| `runtime.default_adapter` | no | 无 bundled Model Profile 的引擎（如 llama.cpp、whisper.cpp）的 ad-hoc 绑定默认 adapter；注册路径据此为任意本地模型构造内存绑定 |
+| `engine` | no | 原生引擎产物声明：`download_url` / `sha256`（强制校验）/ `binary`（最终可执行文件相对路径），以及可选 `engine.build` source-build 契约 |
 
 未知顶层字段被拒绝，防止拼写被静默忽略。未来兼容策略在 v1 面向第三方发布前根据
 真实扩展需求确定。
@@ -170,6 +171,28 @@ daemon 用户权限。stdout/stderr 只作为有界诊断输出处理，不进�
 原生 binary runtime 留作后续类型。没有实现的 runtime type 必须将 Runner 报告为
 unavailable，并给出机器可判定 code 和人类可读原因。
 
+## Native engine asset
+
+`[engine]` 让现有 `python-uv` Runner 同时引用受管原生引擎。install 流程在环境同步
+之后下载、校验并解压到 daemon-owned staging，验证最终 `binary` 后写入
+`.macai-engine.json`，再原子提升到 `<app-support>/Engines/<runner-id>/`。相同 SHA-256
+且目标二进制存在时幂等跳过。
+
+官方提供目标平台预编译 archive 时，`binary` 指向 archive 内路径。官方只提供 source
+archive 时可声明：
+
+```toml
+[engine.build]
+source_directory = "whisper.cpp-<commit>"
+target = "whisper-server"
+definitions = ["CMAKE_BUILD_TYPE=Release", "BUILD_SHARED_LIBS=OFF"]
+```
+
+daemon 使用 argv 直接执行 CMake configure/build，不经过 shell。`source_directory` 必须
+是安全相对路径；`target` 和 `definitions` 只允许受限 build token，禁止 shell 元字符。
+配置、编译或目标二进制缺失均使 install 失败并清理 staging。source build 的版本升级
+必须同时更新 immutable URL、SHA-256 与构建选项。
+
 ## Capacity
 
 - v1 当前只接受 `max_instances = 1` 与 `max_concurrency_per_instance = 1`；
@@ -188,7 +211,8 @@ manifest timeout 是 Runner 作者建议值，daemon 可以施加更严格的系
 - `network_during_runtime` 声明 Runner 的运行期网络需求；Kokoro/qwen3-asr 声明 false；
 - `inherit_environment` 是 allowlist，daemon 默认不传递 token、credential 或完整父
   进程环境。v1 允许的完整白名单：`HOME`（受管引擎产物定位 `Engines/`）、
-  `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`；
+  `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`、`MACAI_LLAMA_SERVER` 与
+  `MACAI_WHISPER_SERVER`（显式开发/诊断引擎覆盖）；
 - daemon 只把规范化 model root 和 request directory 写入协议，并拒绝消费越界输出；
 - 安装来源、Runner package 和 lockfile digest 进入信任记录。
 
@@ -244,6 +268,8 @@ descriptor 是 GUI/CLI 的状态 owner；客户端不自行重新解析 `runner.
 - 同 ID 多版本 SemVer 选择及 no-silent-fallback（ambiguity 结构化失败）；
 - `project = "."`、Profile defaults/resources、SemVer compatibility 解析；
 - `python-uv` 缺少 probe、probe 绝对 executable、probe 超时/非零退出时拒绝 ready；
+- engine URL/checksum/binary/source directory/build target/definition 的拒绝路径；
+- 固定官方 whisper.cpp source archive 的下载、checksum、CMake 构建和原子提升 opt-in smoke；
 - discovery 后 package 被修改时，从 digest 校验的 daemon-owned staging 副本执行
   （`PACKAGE_EXCLUDED_DIRS` 排除 `.venv` 等本地产物）；
 - discovery 后修改 bundled Profile 不改变已解析的选择结果；

@@ -43,6 +43,7 @@ dependencies = [
  "axum",
  "clap",
  "futures",
+ "libc",
  "reqwest",
  "rusqlite",
  "semver",

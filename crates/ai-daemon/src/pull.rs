@@ -1,4 +1,4 @@
-//! HF 模型拉取（handoff §20）。
+//! Hugging Face / ModelScope 模型拉取。
 //!
 //! `POST /api/models/pull`：下载 HuggingFace 单文件或目录模型清单到模型仓库，
 //! 可在完成后立即注册加载。支持断点续传（.part 临时文件 + Range）。

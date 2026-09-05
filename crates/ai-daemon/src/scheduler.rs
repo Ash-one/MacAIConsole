@@ -1,4 +1,4 @@
-//! 内存预算与模型调度（handoff §22–§26）。
+//! 内存预算与模型调度。
 //!
 //! - Budget：`min(ram * 0.75, ram - 8GB)`，`AIWORKD_MEMORY_BUDGET` 可覆盖（字节）。
 //! - LRU：加载前检查预算，不足时按 last_used 升序逐出无 lease 的 idle 模型。
@@ -47,7 +47,7 @@ pub fn used_memory_bytes() -> Option<u64> {
     (used > 0).then_some(used)
 }
 
-/// AI 内存预算（handoff §23）。环境变量 `AIWORKD_MEMORY_BUDGET`（字节）优先。
+/// AI 内存预算。环境变量 `AIWORKD_MEMORY_BUDGET`（字节）优先。
 pub fn memory_budget() -> Option<u64> {
     if let Ok(raw) = std::env::var("AIWORKD_MEMORY_BUDGET") {
         if let Ok(bytes) = raw.trim().parse::<u64>() {
