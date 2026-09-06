@@ -4,6 +4,7 @@ struct ModelsView: View {
     @Environment(DaemonController.self) private var controller
     @Environment(AppRouter.self) private var router
     @State private var repoModels: [RepoModel] = []
+    @State private var inspections: [String: LocalInspection] = [:]
     @State private var showingAddSheet = false
 
     var body: some View {
@@ -55,6 +56,8 @@ struct ModelsView: View {
     /// 每次都重新扫描仓库目录：放入文件的即刻可见。扫描在后台执行，结果回主线程赋值。
     private func rescanRepo() async {
         repoModels = await ModelRepository.scanInBackground()
+        let directories = repoModels.filter(\.isDirectory).map(\.path)
+        inspections = Dictionary(uniqueKeysWithValues: (try? await controller.api.inspectModels(paths: directories))?.map { ($0.path, $0) } ?? [])
     }
 
     private var loadedIDs: Set<String> {
@@ -71,8 +74,8 @@ struct ModelsView: View {
         Set(controller.registeredModels.compactMap(\.path))
     }
 
-    private var pendingRecommendations: [RecommendedModel] {
-        RecommendedModel.builtIns.filter { !$0.isDownloaded }
+    private var pendingRecommendations: [ModelProfile] {
+        controller.modelProfiles.filter { !$0.isDownloaded }
     }
 
     /// 按类型分组展示顺序：llm → stt → tts，其余未知类型按字母序殿后。
@@ -114,11 +117,11 @@ struct ModelsView: View {
             VStack(spacing: 0) {
                 ForEach(pendingRecommendations) { model in
                     let diagnostics = providerDiagnostics(for: model)
-                    RecommendedModelRow(
+                    ProfileModelRow(
                         model: model,
                         isRegistered: registeredIDs.contains(model.id),
                         isLoaded: loadedIDs.contains(model.id),
-                        providerAvailable: controller.providerIsAvailable(model.provider),
+                        providerAvailable: controller.providerIsAvailable(model.runner),
                         providerMissing: diagnostics.missing,
                         unavailableReason: diagnostics.reason
                     ) {
@@ -136,14 +139,14 @@ struct ModelsView: View {
         }
     }
 
-    /// 推荐模型行的 Provider 诊断：区分「未装配」（Provider 未注册，如重启前
-    /// 旧二进制）与「环境未就绪」（daemon 返回的 reason / install_hint）。
-    /// 引擎安装引导统一指向设置页的「运行环境」区块（daemon /api/runners）。
-    private func providerDiagnostics(for model: RecommendedModel)
+    /// 推荐模型行的 Provider 诊断：区分「未装配」与「环境未就绪」
+    /// （daemon 返回的 reason / install_hint）。
+    /// 引擎安装引导统一指向设置页的「引擎」区块（daemon /api/runners）。
+    private func providerDiagnostics(for model: ModelProfile)
         -> (missing: Bool, reason: String?)
     {
-        guard let entry = controller.providers.first(where: { $0.descriptor.id == model.provider }) else {
-            return (true, "Provider 未装配：重启 aiworkd 后重试")
+        guard let entry = controller.providers.first(where: { $0.descriptor.id == model.runner }) else {
+            return (true, "Profile 指定的 Runner 当前未装配")
         }
         if !entry.status.available {
             return (false, entry.status.reason ?? entry.status.installHint)
@@ -216,11 +219,12 @@ struct ModelsView: View {
                                     ForEach(entries) { model in
                                         RepoModelRow(
                                             model: model,
+                                            inspection: inspections[model.path],
                                             // 仓库行只关心「是否已注册」，不同步展示运行时加载状态。
                                             isLoaded: false,
                                             isRegistered: registeredPaths.contains(model.path),
-                                            isRecommended: RecommendedModel.builtIns.contains {
-                                                $0.matches(repositoryModel: model)
+                                            isRecommended: controller.modelProfiles.contains {
+                                                $0.localURL.standardizedFileURL == URL(fileURLWithPath: model.path).standardizedFileURL
                                             }
                                         )
                                         if model.id != entries.last?.id { HairlineDivider() }
@@ -467,6 +471,7 @@ struct RenameModelSheet: View {
 struct RepoModelRow: View {
     @Environment(DaemonController.self) private var controller
     let model: RepoModel
+    let inspection: LocalInspection?
     let isLoaded: Bool
     let isRegistered: Bool
     let isRecommended: Bool
@@ -480,6 +485,10 @@ struct RepoModelRow: View {
     /// daemon busyModelIDs 只覆盖注册表里已有的 id；仓库行自己再补一个重载中状态。
     private var busy: Bool {
         controller.busyModelIDs.contains(model.modelID) || isReloading
+    }
+
+    private var canRouteDirectory: Bool {
+        !model.isDirectory || (inspection?.status == "recognized" && inspection?.runnerAvailable == true)
     }
 
     var body: some View {
@@ -504,7 +513,7 @@ struct RepoModelRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 12)
-            if isLLM, model.detectionError == nil {
+            if isLLM, !model.isDirectory, model.detectionError == nil {
                 contextEditor
             }
             if isTTS && isLoaded {
@@ -519,7 +528,10 @@ struct RepoModelRow: View {
     }
 
     private var repositorySubtitle: String {
-        var parts = [Format.bytes(model.sizeBytes)]
+        var parts = [model.isDirectory ? "目录" : Format.bytes(model.sizeBytes)]
+        if let inspection {
+            parts.append(inspection.status == "recognized" ? (inspection.matches.first?.reason ?? "已识别") : (inspection.diagnostics.first ?? inspection.status))
+        }
         if let metadata = model.ggufMetadata {
             parts.append(metadata.summary)
         } else if let detectionError = model.detectionError {
@@ -637,7 +649,7 @@ struct RepoModelRow: View {
         if let contextLength = model.ggufMetadata?.contextLength {
             return "模型声明的原生上下文上限为 \(GGUFMetadata.formatTokenCount(contextLength))"
         }
-        return "设置 llama.cpp 的运行上下文长度"
+        return "设置模型运行上下文长度"
     }
 
     private var contextChanged: Bool {
@@ -697,13 +709,19 @@ struct RepoModelRow: View {
             .tint(isRegistered ? Color(nsColor: .secondaryLabelColor) : Theme.accent)
             .font(.callout.weight(isRegistered ? .regular : .medium))
             .help(loadHelp)
-            .disabled(controller.phase != .online || model.detectionError != nil)
+            .disabled(controller.phase != .online || model.detectionError != nil || !canRouteDirectory)
         }
     }
 
     private var loadHelp: String {
         if let detectionError = model.detectionError {
             return "GGUF 检测失败：\(detectionError)"
+        }
+        if model.isDirectory, let inspection, inspection.status != "recognized" {
+            return inspection.status == "ambiguous" ? "多个 Runner 匹配；请使用 CLI 显式指定 provider" : (inspection.diagnostics.first ?? "目录未被已安装 Runner 支持")
+        }
+        if model.isDirectory, inspection?.runnerAvailable == false {
+            return "匹配的 Runner 环境尚未就绪；请先在设置 → 引擎中安装"
         }
         return isRegistered ? "以当前设置重新注册并加载" : "注册到运行时并立即加载"
     }
@@ -715,8 +733,9 @@ struct RepoModelRow: View {
                 id: model.modelID,
                 contextLength: ModelRepository.contextLength(for: model.modelID),
                 keepAlive: nil,
-                modelType: isLLM ? nil : model.modelType,
-                provider: model.provider
+                modelType: model.isDirectory ? nil : (isLLM ? nil : model.modelType),
+                provider: nil,
+                routingToken: inspection?.routingToken
             )
         } catch {
             controller.lastError = "加载失败：\(DaemonController.message(for: error))"
@@ -724,14 +743,14 @@ struct RepoModelRow: View {
     }
 }
 
-struct RecommendedModelRow: View {
+struct ProfileModelRow: View {
     @Environment(DaemonController.self) private var controller
     @Environment(AppRouter.self) private var router
-    let model: RecommendedModel
+    let model: ModelProfile
     let isRegistered: Bool
     let isLoaded: Bool
     let providerAvailable: Bool
-    /// true 表示 daemon 未装配该 Provider（如重启前旧二进制），需先重启 aiworkd。
+    /// true 表示 daemon 当前未装配 Profile 指定的 Runner。
     let providerMissing: Bool
     /// Provider 不可用的具体原因，来自 daemon 的 reason / install_hint。
     let unavailableReason: String?
@@ -754,17 +773,21 @@ struct RecommendedModelRow: View {
             ModelTypeIcon(type: model.modelType)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 7) {
-                    Text(model.title)
+                    Text(model.name)
                         .font(.body.weight(.semibold))
-                    Chip(text: model.provider)
+                    Chip(text: model.runner)
                 }
-                Text(model.summary)
+                Text("由 daemon Model Profile 提供")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 5) {
-                    Text(Format.bytes(model.estimatedSizeBytes))
-                    Text("·")
-                    Link("Hugging Face", destination: model.repositoryURL)
+                    if let estimate = model.memoryEstimateBytes {
+                        Text("预计内存 \(Format.bytes(estimate))")
+                        Text("·")
+                    }
+                    if let repositoryURL = model.repositoryURL {
+                        Link("Hugging Face", destination: repositoryURL)
+                    }
                     if !providerAvailable {
                         Text("· 当前仅下载，无法启动")
                     }
@@ -802,8 +825,8 @@ struct RecommendedModelRow: View {
         .hoverableRow()
     }
 
-    /// Provider 不可用时的引导：统一指向设置页「运行环境」区块——引擎安装
-    /// （含 llama.cpp 与全部 Runner）由 daemon /api/runners 统一管理。
+    /// Provider 不可用时的引导：统一指向设置页「引擎」区块——引擎安装
+    /// 所有 Runner 环境由 daemon /api/runners 统一管理。
     @ViewBuilder
     private var providerGuidance: some View {
         HStack(spacing: 8) {

@@ -31,6 +31,8 @@ Owner: this file
 | Phase 1 completion | fake Runner 组合测试曾被当作 generic foundation 完成证据 | 该测试只证明实验性骨架；完成必须包含启动失败清理、执行时信任绑定、显式版本解析，以及 environment 和 Runtime/scheduler adapter | replace |
 | 2026-09-03 架构复核 | 已把 built-in TTS/STT 切片与 isolated tests 视为完整开放架构 | 首次下载必须无需重启即可加载；注册模型必须绑定 immutable Profile snapshot；status 必须来自真实 Worker Instance；未实现的并发/cancel/capacity 不能宣称 current | replace |
 | Runner 权限模型 | manifest 的 network/filesystem 字段曾被描述为运行时沙箱 | v1 显式信任 Runner 等同授予 daemon 用户权限；MacAI 只强制身份、环境变量、模型/输出路径契约和进程监督。OS 级沙箱需独立安全决策 | replace |
+| GUI 模型目录 | Swift 内置推荐模型、artifact 清单并按目录内容推断 Provider | daemon 从 Model Profile 输出 catalog，并按 Profile ID 拥有下载、Runner 选择与注册；GUI 只传用户意图 | replace |
+| GUI 引擎管理用语 | 设置页同时保留旧「运行环境」与实验性 Runner 区块，运行状态称为「Provider 状态」 | 旧管理器已退役；设置页仅以「引擎」展示 daemon 管理的 Runner，运行状态以「Runner」标示同一生产引擎集合 | replace |
 
 whisper.cpp 的具体 source build、常驻 server 与兼容迁移由
 [`2026-09-05-whisper-runner-migration.md`](2026-09-05-whisper-runner-migration.md) 拥有。
@@ -143,6 +145,7 @@ Worker Instance 是加载某个模型后的实际进程和运行状态。daemon 
 - GUI 不扫描插件目录、不执行 `uv`、不推断 Runner 可用性；
 - 安装进度、可用性、ready/resident、设备和失败原因全部来自 daemon；
 - 通用安装与状态 UI 由 daemon descriptor 驱动；新 Runner 不要求新增 Swift 枚举。
+- 推荐模型、artifact 完整清单和 Runner 绑定由 daemon Model Profile catalog 驱动；新增 bundled Profile 不要求修改 Swift 清单。
 
 ## Discovery and trust
 
@@ -205,6 +208,12 @@ dispatcher 和真实 HTTP/task abort 消费方一起设计。
 `/v1/models` 的 `owned_by` 中。原生引擎的下载、校验、可选 source build 与就绪状态
 也由同一 Runner install/status 管理面拥有。
 
+`GET /api/model-profiles` 提供 GUI 所需的 Profile catalog 投影；
+`POST /api/model-profiles/{id}/pull` 只接收 `auto_load` 用户意图，由 daemon 从可信
+Profile 取 source、artifact、能力和 Runner。GUI 不再展开 pull manifest，也不扫描模型
+目录来推断 Provider。本地单文件注册仍只提交 path、model type 与用户参数，最终选择由
+daemon 的注册契约拥有。
+
 ## Kokoro reference slice
 
 Kokoro 已作为第一个完整 Runner 落地（2026-09-02/03），覆盖 Python 环境、TTS、临时
@@ -220,7 +229,7 @@ WAV、长请求、模型家族 workaround、常驻 worker、RSS、故障隔离�
 
 - built-in Runner 已包含 llama.cpp、whisper.cpp、mlx-lm、Kokoro、Qwen3-ASR、
   Qwen3-TTS 和 sherpa-onnx；它们全部经 `bootstrap_runners` 动态装配；
-- GUI 只通过 `/api/runners` 观察和安装 Runner 环境，不存在本地 venv/脚本安装 manager；
+- GUI 通过 `/api/runners` 观察和安装环境，通过 `/api/model-profiles` 获取推荐目录并按 Profile ID 下载；不存在本地 venv/脚本安装 manager、Swift Profile catalog 或目录到 Provider 推断；
 - mock / macos-say 仅由测试 Runtime 注入，不进入生产 Provider 表；
 - 第三方 Plugins、OS 级沙箱、多实例/多并发和 daemon→Runner 主动 cancel 均未实现；
   它们需要独立的安全或协议决策。
@@ -264,7 +273,7 @@ commit `cadfa31` 收敛了已发现的启动、契约与信任边界：
   main.rs `bootstrap_runners`（built-in discovery → profile 持久化 → 无论 artifact
   是否存在都先 bind/attach，首次下载无需重启）；
 - HTTP 管理面：`GET /api/runners` 与 `POST /api/runners/{runner}/install`；
-- GUI 消费端：设置页「运行环境」区块（`runners()`/`installRunner`）；
+- GUI 消费端：设置页「引擎」区块（`runners()`/`installRunner`）；
 - 七个 built-in Runner 包的 adapter 单测和 lock freshness 进入 CI；
 - ad-hoc Runner 绑定的路径刷新、rename 与 unregister 由 Runtime 组合回归测试固定；
 - Provider 选择的 requested / selected / reason 持久化并出现在管理 API。
@@ -283,6 +292,7 @@ commit `cadfa31` 收敛了已发现的启动、契约与信任边界：
 | status snapshot 不等待 Runner I/O 锁，停止后无 resident | observability concurrency | `status_reflects_environment_phase_without_resident_worker` + crash/reload composition | passed（2026-09-03） |
 | 未信任 Runner 不执行；已信任 Runner 以 daemon 用户权限执行 | trust boundary | discovery/trust 单测 + digest-bound staging；OS 权限边界由文档明确，不宣称沙箱 | passed for declared v1 boundary |
 | GUI 仅根据 daemon descriptor 展示 Runner 与环境状态 | real client composition | MacAIConsole `DaemonAPI` decoding/request tests + `swift test --enable-xctest` | passed |
+| GUI 推荐目录与下载动作完全来自 daemon Profile，未知 Runner/Profile 无需 Swift 分支 | catalog contract、client composition、negative removal | daemon profile projection/pull tests + Swift unknown-Runner decoding/request tests + GUI 源码负向搜索 | passed（2026-09-05） |
 | Kokoro 经新路径产生有效 WAV，并保持当前中文、英文、长文本、voice 和 speed 契约 | real model behavior | `MACAI_KOKORO_SMOKE_MODEL=… scripts/tests/kokoro_runner_smoke.sh` + `MACAI_KOKORO_WIRING_MODEL=… cargo test --test runner_kokoro_real_wiring` | passed（2026-09-02，见 Kokoro 验证参考） |
 | 旧 Kokoro 路径在迁移完成后完全不可达 | source、registration、GUI、docs、tests | 负向搜索（零残留）+ 全套测试绿（legacy 删除 bounded change，2026-09-03） | passed |
 | whisper.cpp 经统一安装、动态 Provider 与常驻 server 完成转写，旧静态路径不可达 | source build、STT composition、migration | [`whisper.cpp Runner 迁移决策`](2026-09-05-whisper-runner-migration.md) 的 install smoke、real wiring、负向搜索与全套测试 | passed（2026-09-05） |

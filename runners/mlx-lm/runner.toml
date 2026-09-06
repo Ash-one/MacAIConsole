@@ -35,3 +35,21 @@ inherit_environment = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
 [[models]]
 profile = "profiles/SmolLM2-135M-Instruct-8bit.toml"
 adapter = "mlx-lm-chat"
+
+[[models]]
+profile = "profiles/qwen3-8b-mlx-4bit.toml"
+adapter = "mlx-lm-chat"
+
+[[local_detectors]]
+id = "mlx-text-directory"
+capability = "chat.v1"
+adapter = "mlx-lm-chat"
+required_files = ["config.json"]
+required_globs = [{ pattern = "*.safetensors", min_matches = 1 }]
+required_absent = ["speech_tokenizer"]
+reason = "MLX text config with top-level safetensors weights"
+
+[[local_detectors.json_predicates]]
+file = "config.json"
+pointer = "/architectures/0"
+equals = "LlamaForCausalLM"

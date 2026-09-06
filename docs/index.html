@@ -675,7 +675,7 @@
           <li>Chat / STT / TTS 任务记录与详情回看</li>
           <li>GUI 与 daemon 双端日志，级别过滤着色</li>
           <li>菜单栏快速查看状态、启停 daemon</li>
-          <li>Python 运行环境一键安装到 <code class="inline-code">.build/</code></li>
+          <li>Runner 引擎一键安装到 <code class="inline-code">.build/</code></li>
         </ul>
       </div>
       <div class="mock reveal">
@@ -763,7 +763,7 @@ curl http://127.0.0.1:11435/v1/chat/completions <span class="arg">\</span>
         <div class="step-no">4</div>
         <div>
           <h3>打开原生控制台（可选）</h3>
-          <p class="step-desc">通过 daemon 或 GUI「设置 → 运行环境」安装 llama.cpp、whisper.cpp 和其他 Runner；原生引擎与 Python 环境共享同一管理面。</p>
+          <p class="step-desc">通过 daemon 或 GUI「设置 → 引擎」安装 llama.cpp、whisper.cpp 和其他 Runner；原生引擎与 Python 环境共享同一管理面。</p>
           <div class="codeblock">
             <button class="copy-btn" data-copy>复制</button>
             <pre>curl -X POST http://127.0.0.1:11435/api/runners/org.macai.llama.cpp/install

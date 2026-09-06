@@ -48,7 +48,7 @@ struct SettingsView: View {
                 RunnerEnvironmentsSection()
             } header: {
                 HStack(spacing: 6) {
-                    Text("运行环境")
+                    Text("引擎")
                     InfoTip(text: runnerEnvironmentsDescription, maxWidth: 320)
                 }
             }
@@ -153,7 +153,7 @@ struct SettingsView: View {
     }
 
     private var runnerEnvironmentsDescription: String {
-        "七个 org.macai.* Runner 的环境由 daemon 管理，状态来自 /api/runners；安装时 daemon 准备引擎，Python 适配器通过 uv 同步受管环境，首次通常需要联网。llama.cpp 下载固定预编译产物，whisper.cpp 从固定官方源码构建。完成后立即生效。"
+        "Runner 环境由 daemon 管理，状态和安装动作来自 /api/runners。首次安装通常需要联网，完成后立即生效。"
     }
 
     private var settingsAreValid: Bool {
@@ -209,7 +209,7 @@ struct SettingsView: View {
     }
 }
 
-/// 「Runner 引擎」区块：状态来自 daemon /api/runners，安装动作
+/// 「引擎」区块：状态来自 daemon /api/runners，安装动作
 /// POST /api/runners/{id}/install（显式、幂等）。UI 只消费 daemon 数据。
 struct RunnerEnvironmentsSection: View {
     @Environment(DaemonController.self) private var controller
@@ -225,7 +225,7 @@ struct RunnerEnvironmentsSection: View {
                     .font(.caption)
                     .foregroundStyle(Theme.danger)
             } else if runners.isEmpty {
-                Text(loadedOnce ? "未发现 Runner（daemon 需以仓库路径启动才会装配 built-in Runner）" : "探测 Runner…")
+                Text(loadedOnce ? "daemon 未报告可管理的 Runner" : "探测 Runner…")
                     .font(.caption)
                     .foregroundStyle(Color.secondary)
             } else {
@@ -263,7 +263,7 @@ struct RunnerEnvironmentsSection: View {
 }
 
 /// Runner 单行：短名 + 环境 phase（missing→未安装 / ready→已就绪 / failed→失败）
-/// + 安装/重试按钮；镜像「运行环境」行的视觉层级。
+/// + 安装/重试按钮；保持设置页的行级视觉层级。
 struct RunnerEnvironmentRow: View {
     let entry: RunnerEntry
     let busy: Bool

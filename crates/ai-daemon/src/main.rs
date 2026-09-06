@@ -11,9 +11,10 @@ mod runtime;
 mod scheduler;
 mod tasks;
 
+use std::collections::HashMap;
 use std::path::{Path as FilePath, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use axum::body::Body;
@@ -26,6 +27,7 @@ use axum::{Json, Router};
 use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::Digest;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -49,6 +51,15 @@ struct AppState {
     runtime: Arc<Runtime>,
     log_filter: LogFilterHandle,
     log_level: Arc<AtomicU8>,
+    routing_tokens: Arc<StdMutex<HashMap<String, RoutingToken>>>,
+}
+
+#[derive(Clone)]
+struct RoutingToken {
+    path: String,
+    fingerprint: String,
+    matched: ai_daemon::runners::DetectorMatch,
+    expires_at: std::time::Instant,
 }
 
 #[derive(Serialize)]
@@ -69,6 +80,16 @@ struct SetLoggingLevelRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct PullModelProfileRequest {
+    #[serde(default = "default_true")]
+    auto_load: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
 struct LoadModelRequest {
     path: String,
     id: Option<String>,
@@ -79,8 +100,14 @@ struct LoadModelRequest {
     /// TTS 支持 qwen3-tts；Python 引擎（Kokoro / Qwen3-ASR）由 Runner 装配，
     /// 显式指定其 runner provider id（org.macai.*）走 descriptor 能力判定。
     provider: Option<String>,
+    routing_token: Option<String>,
     context_length: Option<u64>,
     keep_alive: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InspectModelsRequest {
+    paths: Vec<String>,
 }
 
 #[tokio::main]
@@ -106,6 +133,7 @@ async fn main() {
         runtime: Arc::clone(&runtime),
         log_filter,
         log_level: Arc::new(AtomicU8::new(initial_log_level)),
+        routing_tokens: Arc::new(StdMutex::new(HashMap::new())),
     };
     let app = Router::new()
         .route("/health", get(health))
@@ -119,6 +147,9 @@ async fn main() {
         .route("/api/tasks/{id}", get(task_detail))
         .route("/api/providers", get(provider_statuses))
         .route("/api/runners", get(runner_statuses))
+        .route("/api/models/inspect", post(inspect_models))
+        .route("/api/model-profiles", get(model_profiles))
+        .route("/api/model-profiles/{id}/pull", post(pull_model_profile))
         .route(
             "/api/runners/{runner}/install",
             post(install_runner_environment),
@@ -299,6 +330,115 @@ async fn provider_statuses(State(state): State<AppState>) -> Json<Value> {
     Json(json!({"data": providers}))
 }
 
+fn profile_model_type(profile: &ai_daemon::runners::ModelProfile) -> Result<&'static str, String> {
+    match profile.capabilities.as_slice() {
+        [capability] if capability == "chat.v1" => Ok("llm"),
+        [capability] if capability == "stt.v1" => Ok("stt"),
+        [capability] if capability == "tts.v1" => Ok("tts"),
+        capabilities => Err(format!(
+            "profile '{}' must declare exactly one GUI model capability, got {:?}",
+            profile.id, capabilities
+        )),
+    }
+}
+
+fn model_profile_json(profile: &ai_daemon::runners::ModelProfile) -> Result<Value, String> {
+    let directory = (profile.format == "directory").then_some(&profile.artifacts.directory);
+    Ok(json!({
+        "id": profile.id,
+        "name": profile.name,
+        "model_type": profile_model_type(profile)?,
+        "runner": profile.runner,
+        "source_repo": profile.source.repo,
+        "directory": directory,
+        "files": profile.artifacts.files,
+        "memory_estimate_bytes": profile.resources.memory_estimate_bytes,
+    }))
+}
+
+async fn model_profiles(State(state): State<AppState>) -> Response {
+    let mut data = Vec::new();
+    for profile in state.runtime.runner_profiles() {
+        match model_profile_json(&profile) {
+            Ok(value) => data.push(value),
+            Err(error) => return api_error(AIError::InvalidRequest, error),
+        }
+    }
+    Json(json!({ "data": data })).into_response()
+}
+
+fn pull_request_for_profile(
+    profile: &ai_daemon::runners::ModelProfile,
+    auto_load: bool,
+) -> Result<pull::PullRequest, String> {
+    let model_type = profile_model_type(profile)?.to_string();
+    let (filename, files, directory) = if profile.format == "directory" {
+        (
+            None,
+            profile.artifacts.files.clone(),
+            Some(profile.artifacts.directory.clone()),
+        )
+    } else if profile.artifacts.files.len() == 1 {
+        (Some(profile.artifacts.files[0].clone()), Vec::new(), None)
+    } else {
+        return Err(format!(
+            "file profile '{}' must declare exactly one artifact",
+            profile.id
+        ));
+    };
+    let request = pull::PullRequest {
+        repo: profile.source.repo.clone(),
+        filename,
+        files,
+        directory,
+        model_type,
+        id: Some(profile.id.clone()),
+        provider: Some(profile.runner.clone()),
+        auto_load: Some(auto_load),
+    };
+    pull::validate_pull_request(&request)?;
+    Ok(request)
+}
+
+fn profile_artifact_path(
+    models_root: &FilePath,
+    model_type: &str,
+    profile: &ai_daemon::runners::ModelProfile,
+) -> Result<PathBuf, String> {
+    if profile.format == "directory" {
+        Ok(models_root
+            .join(model_type)
+            .join(&profile.artifacts.directory))
+    } else if profile.artifacts.files.len() == 1 {
+        Ok(models_root
+            .join(model_type)
+            .join(&profile.artifacts.files[0]))
+    } else {
+        Err(format!(
+            "file Profile '{}' must contain exactly one artifact",
+            profile.id
+        ))
+    }
+}
+
+async fn pull_model_profile(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<PullModelProfileRequest>,
+) -> Response {
+    let Some(profile) = state.runtime.runner_profile(&id) else {
+        return api_error(
+            AIError::ModelNotFound,
+            format!("model profile '{id}' not found"),
+        );
+    };
+    let request = match pull_request_for_profile(&profile, body.auto_load) {
+        Ok(request) => request,
+        Err(error) => return api_error(AIError::InvalidRequest, error),
+    };
+    pull_model(State(state), Json(request)).await
+}
+
 /// Runner 管理面状态：已发现/受信任 Runner + python 环境 phase +
 /// bundled Model Profile。UI 只消费 daemon 数据，不自行推断。
 async fn runner_statuses(State(state): State<AppState>) -> Json<Value> {
@@ -345,6 +485,17 @@ async fn runner_statuses(State(state): State<AppState>) -> Json<Value> {
             .iter()
             .map(|model| json!({ "profile": format!("{}", model.profile) }))
             .collect();
+        let local_detectors: Vec<Value> = manifest
+            .local_detectors
+            .iter()
+            .map(|detector| {
+                json!({
+                    "id": detector.id,
+                    "capability": detector.capability,
+                    "adapter": detector.adapter,
+                })
+            })
+            .collect();
         data.push(json!({
             "id": manifest.id,
             "version": manifest.version,
@@ -368,6 +519,7 @@ async fn runner_statuses(State(state): State<AppState>) -> Json<Value> {
             "environment": environment,
             "instance": instance,
             "models": models,
+            "local_detectors": local_detectors,
         }));
     }
     Json(json!({ "data": data }))
@@ -540,10 +692,100 @@ async fn finish_pull(state: AppState, request: pull::PullRequest, dest: PathBuf)
         name: None,
         model_type: Some(request.model_type.clone()),
         provider: request.provider.clone(),
+        routing_token: None,
         context_length: None,
         keep_alive: None,
     };
     register_and_load_model(State(state), Json(load_request)).await
+}
+
+async fn inspect_models(
+    State(state): State<AppState>,
+    Json(request): Json<InspectModelsRequest>,
+) -> Response {
+    if request.paths.is_empty() || request.paths.len() > 64 {
+        return api_error(AIError::InvalidRequest, "inspect requires 1 to 64 paths");
+    }
+    let descriptors = state
+        .runtime
+        .runner_instances()
+        .map(|instances| instances.discovered())
+        .unwrap_or_default();
+    let statuses: HashMap<_, _> = state
+        .runtime
+        .provider_statuses()
+        .await
+        .into_iter()
+        .map(|(descriptor, status)| (descriptor.id, status.available))
+        .collect();
+    let mut data = Vec::new();
+    for path in request.paths {
+        match ai_daemon::runners::inspect_local_directory(FilePath::new(&path), &descriptors) {
+            Ok(inspection) => {
+                let status = match inspection.matches.len() { 0 => "unsupported", 1 => "recognized", _ => "ambiguous" };
+                let token = if inspection.matches.len() == 1 {
+                    let matched = inspection.matches[0].clone();
+                    let raw = format!("{}:{}:{}:{:?}", inspection.canonical_path, inspection.fingerprint, matched.manifest_digest, std::time::SystemTime::now());
+                    let token = format!("{:x}", sha2::Sha256::digest(raw.as_bytes()));
+                    state.routing_tokens.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).retain(|_, token| token.expires_at > std::time::Instant::now());
+                    state.routing_tokens.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(token.clone(), RoutingToken { path: inspection.canonical_path.clone(), fingerprint: inspection.fingerprint.clone(), matched, expires_at: std::time::Instant::now() + Duration::from_secs(300) });
+                    Some(token)
+                } else { None };
+                data.push(json!({
+                    "path": path, "canonical_path": inspection.canonical_path, "size_bytes": inspection.size_bytes,
+                    "status": status, "matches": inspection.matches, "diagnostics": inspection.diagnostics,
+                    "routing_token": token,
+                    "runner_available": inspection.matches.first().and_then(|matched| statuses.get(&matched.runner)).copied().unwrap_or(false),
+                }));
+            }
+            Err(error) => data.push(json!({ "path": path, "status": "unsupported", "diagnostics": [error], "matches": [] })),
+        }
+    }
+    Json(json!({ "data": data })).into_response()
+}
+
+fn capability_model_type(capability: &str) -> Option<&'static str> {
+    match capability {
+        "chat.v1" => Some("llm"),
+        "stt.v1" => Some("stt"),
+        "tts.v1" => Some("tts"),
+        _ => None,
+    }
+}
+
+fn inspected_profile(
+    id: &str,
+    name: &str,
+    matched: &ai_daemon::runners::DetectorMatch,
+) -> ai_daemon::runners::ModelProfile {
+    ai_daemon::runners::ModelProfile {
+        schema: "macai.model.v1".to_string(),
+        id: id.to_string(),
+        name: name.to_string(),
+        capabilities: vec![matched.capability.clone()],
+        runner: matched.runner.clone(),
+        adapter: matched.adapter.clone(),
+        format: "directory".to_string(),
+        source: ai_daemon::runners::ProfileSource {
+            source_type: "local".to_string(),
+            repo: String::new(),
+            revision: String::new(),
+        },
+        artifacts: ai_daemon::runners::ProfileArtifacts {
+            directory: id.to_string(),
+            files: Vec::new(),
+        },
+        defaults: ai_daemon::runners::ProfileDefaults::default(),
+        resources: ai_daemon::runners::ProfileResources::default(),
+        routing: Some(ai_daemon::runners::ProfileRouting {
+            detector_id: matched.detector_id.clone(),
+            manifest_digest: matched.manifest_digest.clone(),
+            reason: matched.reason.clone(),
+        }),
+        compatibility: ai_daemon::runners::ProfileCompatibility {
+            runner: ">=0.1,<2".to_string(),
+        },
+    }
 }
 
 async fn register_and_load_model(
@@ -559,7 +801,58 @@ async fn register_and_load_model(
             )
         }
     };
-    let model_type = match request.model_type.as_deref() {
+    let inspected = match request.routing_token.as_deref() {
+        Some(token) => {
+            if request.provider.is_some() || request.model_type.is_some() {
+                return api_error(
+                    AIError::InvalidRequest,
+                    "routing_token cannot be combined with provider or model_type",
+                );
+            }
+            let token = state
+                .routing_tokens
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(token);
+            let Some(token) = token.filter(|token| {
+                token.expires_at > std::time::Instant::now() && token.path == path.to_string_lossy()
+            }) else {
+                return api_error(
+                    AIError::InvalidRequest,
+                    "routing token expired or does not match this path; inspect again",
+                );
+            };
+            let descriptors = state
+                .runtime
+                .runner_instances()
+                .map(|instances| instances.discovered())
+                .unwrap_or_default();
+            let inspection = match ai_daemon::runners::inspect_local_directory(&path, &descriptors)
+            {
+                Ok(value) => value,
+                Err(error) => return api_error(AIError::InvalidRequest, error),
+            };
+            let matching = inspection.matches.into_iter().find(|matched| {
+                matched.detector_id == token.matched.detector_id
+                    && matched.runner == token.matched.runner
+                    && matched.manifest_digest == token.matched.manifest_digest
+            });
+            let Some(matched) = matching.filter(|_| inspection.fingerprint == token.fingerprint)
+            else {
+                return api_error(
+                    AIError::InvalidRequest,
+                    "model directory or Runner manifest changed; inspect again",
+                );
+            };
+            Some(matched)
+        }
+        None => None,
+    };
+    let model_type = match inspected
+        .as_ref()
+        .and_then(|matched| capability_model_type(&matched.capability))
+        .or(request.model_type.as_deref())
+    {
         Some("llm") | None => "llm",
         Some("stt") => "stt",
         Some("tts") => "tts",
@@ -572,13 +865,19 @@ async fn register_and_load_model(
     };
     let requested_provider = request.provider.as_deref().map(str::trim);
     let requested_provider_audit = requested_provider.unwrap_or("auto");
-    let (provider, provider_selection_reason) =
+    let (provider, provider_selection_reason) = if let Some(matched) = &inspected {
+        (
+            matched.runner.clone(),
+            format!("local detector {}: {}", matched.detector_id, matched.reason),
+        )
+    } else {
         match select_provider(model_type, requested_provider, |provider, capability| {
             state.runtime.provider_has_capability(provider, capability)
         }) {
-            Ok(selection) => selection,
+            Ok((provider, reason)) => (provider.into_owned(), reason.to_string()),
             Err(message) => return api_error(AIError::InvalidRequest, message),
-        };
+        }
+    };
     let provider = provider.as_ref();
     // 注册形态校验：llm 是 .gguf 文件（Runner 侧聚合成目录），目录型 provider
     // 要求目录。深度内容校验仍由 provider 自己拥有。
@@ -662,7 +961,7 @@ async fn register_and_load_model(
 
     // ad-hoc 绑定：无 catalog Profile 的 Runner（如 llama.cpp）在注册路径上
     // 建立内存绑定。adapter 名来自 manifest 的 default_adapter；重复注册幂等。
-    if provider.starts_with("org.macai.") {
+    if inspected.is_none() && provider.starts_with("org.macai.") {
         let manifest = state.runtime.runner_instances().and_then(|manager| {
             manager
                 .discovered()
@@ -695,7 +994,19 @@ async fn register_and_load_model(
         }
     }
 
-    match state.runtime.register_and_load(spec).await {
+    let result = match inspected {
+        Some(matched) => {
+            state
+                .runtime
+                .register_and_load_inspected(
+                    spec.clone(),
+                    inspected_profile(&id, &spec.name, &matched),
+                )
+                .await
+        }
+        None => state.runtime.register_and_load(spec).await,
+    };
+    match result {
         Ok(handle) => Json(json!({
             "id": handle.model_id,
             "provider": handle.provider_id,
@@ -1423,7 +1734,13 @@ async fn bootstrap_runners_from_root(
             } else {
                 "llm"
             };
-            let model_dir = models_root.join(kind).join(&profile.artifacts.directory);
+            let model_dir = match profile_artifact_path(&models_root, kind, &profile) {
+                Ok(path) => path,
+                Err(error) => {
+                    tracing::warn!(profile = %profile.id, %error, "skip invalid Profile artifact path");
+                    continue;
+                }
+            };
             provider
                 .bind_model(RunnerModelBinding {
                     model_id: profile.id.clone(),
@@ -1480,6 +1797,57 @@ async fn bootstrap_runners_from_root(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn future_profile() -> ai_daemon::runners::ModelProfile {
+        ai_daemon::runners::ModelProfile::parse(
+            r#"
+schema = "macai.model.v1"
+id = "future-model"
+name = "Future Model"
+capabilities = ["stt.v1"]
+runner = "org.example.future"
+adapter = "future"
+format = "directory"
+[source]
+type = "huggingface"
+repo = "owner/future"
+revision = "0123456789abcdef0123456789abcdef01234567"
+[artifacts]
+directory = "future-model"
+files = ["config.json", "model.bin"]
+[resources]
+memory_estimate_bytes = 123
+[compatibility]
+runner = ">=1,<2"
+"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn profile_catalog_and_pull_are_derived_from_daemon_profile() {
+        let profile = future_profile();
+        let json = model_profile_json(&profile).unwrap();
+        assert_eq!(json["runner"], "org.example.future");
+        assert_eq!(json["model_type"], "stt");
+
+        let request = pull_request_for_profile(&profile, false).unwrap();
+        assert_eq!(request.repo, "owner/future");
+        assert_eq!(request.provider.as_deref(), Some("org.example.future"));
+        assert_eq!(request.files, ["config.json", "model.bin"]);
+        assert_eq!(request.auto_load, Some(false));
+    }
+
+    #[test]
+    fn file_profile_uses_its_single_artifact_as_runtime_path() {
+        let profile_path = FilePath::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../runners/whisper.cpp/profiles/whisper-large-v3-turbo-q5.toml");
+        let profile = ai_daemon::runners::ModelProfile::load(&profile_path).unwrap();
+        assert_eq!(
+            profile_artifact_path(FilePath::new("/Models"), "stt", &profile).unwrap(),
+            PathBuf::from("/Models/stt/ggml-large-v3-turbo-q5_0.bin")
+        );
+    }
 
     #[test]
     fn validates_model_aliases() {
@@ -1571,6 +1939,7 @@ mod tests {
             runtime,
             log_filter,
             log_level: Arc::new(AtomicU8::new(LOG_LEVEL_INFO)),
+            routing_tokens: Arc::new(StdMutex::new(HashMap::new())),
         }
     }
 

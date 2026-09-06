@@ -16,6 +16,11 @@ immutable commit revision、typed defaults/resources 与 SemVer compatibility）
 `bootstrap_runners` 在 daemon 启动时优先恢复 per-model snapshot，bundled catalog
 更新只影响未来注册。
 
+GUI 通过 `GET /api/model-profiles` 读取 catalog 投影，并通过
+`POST /api/model-profiles/{id}/pull` 提交 `auto_load` 意图。source、artifact 清单、
+model type 与 Runner 选择均由 daemon 从可信 Profile 构造；客户端不得复制或重组
+Profile 下载请求。
+
 ## Example: Kokoro-82M-zh-MLX
 
 ```toml
@@ -94,6 +99,11 @@ daemon 拥有：
 | `defaults` | 可选的模型级默认值，字段见下表 |
 | `resources` | 可选的模型级资源估算，字段见下表 |
 | `compatibility.runner` | 可接受 Runner version range |
+
+`format = "directory"` 时 `artifacts.directory` 是 `Models/<type>/` 下的运行时根目录；
+单文件格式必须只声明一个 `artifacts.files` 项，运行时路径为
+`Models/<type>/<files[0]>`。`artifacts.directory` 仍作为 Profile schema 的稳定下载分组
+字段存在，不参与单文件路径拼接。
 
 `source.type` 当前接受两种值：catalog Profile 使用 `huggingface`，并提供 repo 与
 immutable revision；daemon 为显式本地路径构造的 ad-hoc 绑定使用 `local`，其 repo 与
@@ -174,6 +184,10 @@ SQLite 使用两个 owner：`model_profiles` 保存当前可发现 catalog；
 daemon 已知的 ad-hoc 形态：当前为 llama.cpp GGUF；daemon 从受控注册参数构造
 `source.type = "local"` 的 Profile snapshot，不执行模型文件中的代码。新增本地模型
 家族需要先扩展显式注册契约，不能把任意 Profile 当作可执行配置导入。
+
+自动识别的本地目录 Profile 可带 `routing` snapshot：`detector_id`、64 位
+`manifest_digest` 与 human-readable `reason`。该段仅允许 `source.type = "local"`，随模型
+注册冻结，用于重启恢复与选择审计；bundled catalog Profile 不携带它。
 
 ## Required evidence
 

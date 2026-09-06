@@ -172,6 +172,33 @@ struct RunnerInstallResponse: Decodable {
     }
 }
 
+struct LocalDetectorMatch: Decodable, Hashable {
+    var runner: String
+    var adapter: String
+    var capability: String
+    var detectorID: String
+    var reason: String
+    enum CodingKeys: String, CodingKey { case runner, adapter, capability, reason; case detectorID = "detector_id" }
+}
+
+struct LocalInspection: Decodable, Hashable {
+    var path: String
+    var canonicalPath: String?
+    var sizeBytes: UInt64?
+    var status: String
+    var matches: [LocalDetectorMatch]
+    var diagnostics: [String]
+    var routingToken: String?
+    var runnerAvailable: Bool?
+    enum CodingKeys: String, CodingKey {
+        case path, status, matches, diagnostics
+        case canonicalPath = "canonical_path"
+        case sizeBytes = "size_bytes"
+        case routingToken = "routing_token"
+        case runnerAvailable = "runner_available"
+    }
+}
+
 struct InferenceTaskMessage: Decodable, Hashable {
     var role: String
     var content: String
@@ -459,6 +486,17 @@ struct DaemonAPI {
         return try JSONDecoder().decode(Wrapper.self, from: try await get("api/providers")).data
     }
 
+    /// GET /api/model-profiles —— daemon 拥有的可下载模型目录。
+    func modelProfiles() async throws -> [ModelProfile] {
+        struct Wrapper: Decodable { var data: [ModelProfile] }
+        return try JSONDecoder().decode(Wrapper.self, from: try await get("api/model-profiles")).data
+    }
+
+    func inspectModels(paths: [String]) async throws -> [LocalInspection] {
+        struct Wrapper: Decodable { var data: [LocalInspection] }
+        return try JSONDecoder().decode(Wrapper.self, from: try await postJSON("api/models/inspect", body: ["paths": paths], timeout: 15)).data
+    }
+
     // MARK: Runner 管理面
 
     /// GET /api/runners —— 已发现/受信任 Runner + python 环境 phase。
@@ -506,36 +544,27 @@ struct DaemonAPI {
         return try JSONDecoder().decode(InferenceTaskDetail.self, from: data)
     }
 
-    /// POST /api/models/load —— 注册并加载模型，可为 STT 显式选择 Whisper / Qwen Provider。
-    func registerAndLoad(path: String, id: String?, name: String?, contextLength: Int?, keepAlive: String?, modelType: String? = nil, provider: String? = nil) async throws -> LoadResponse {
+    /// POST /api/models/load —— 注册并加载本地模型；缺省 Runner 选择由 daemon 完成。
+    func registerAndLoad(path: String, id: String?, name: String?, contextLength: Int?, keepAlive: String?, modelType: String? = nil, provider: String? = nil, routingToken: String? = nil) async throws -> LoadResponse {
         var body: [String: Any] = ["path": path]
         if let id { body["id"] = id }
         if let name { body["name"] = name }
         if let modelType { body["model_type"] = modelType }
         if let provider { body["provider"] = provider }
+        if let routingToken { body["routing_token"] = routingToken }
         if let contextLength { body["context_length"] = contextLength }
         if let keepAlive { body["keep_alive"] = keepAlive }
         let data = try await postJSON("api/models/load", body: body, timeout: 180)
         return try JSONDecoder().decode(LoadResponse.self, from: data)
     }
 
-    /// POST /api/models/pull —— 下载推荐模型；目录模型会按内置清单保留子目录结构。
-    func pull(_ model: RecommendedModel, autoLoad: Bool) async throws -> LoadResponse {
-        var body: [String: Any] = [
-            "repo": model.repository,
-            "model_type": model.modelType,
-            "id": model.id,
-            "provider": model.provider,
-            "auto_load": autoLoad,
-        ]
-        if let directoryName = model.directoryName {
-            body["directory"] = directoryName
-            body["files"] = model.files
-        } else {
-            body["filename"] = model.files[0]
-        }
-        // 大模型下载允许长时间运行；daemon 内部以 .part 文件支持中断续传。
-        let data = try await postJSON("api/models/pull", body: body, timeout: 7_200)
+    /// POST /api/model-profiles/{id}/pull —— daemon 根据 Profile 下载并可选加载。
+    func pullProfile(_ id: String, autoLoad: Bool) async throws -> LoadResponse {
+        let data = try await postJSON(
+            "api/model-profiles/\(id)/pull",
+            body: ["auto_load": autoLoad],
+            timeout: 7_200
+        )
         return try JSONDecoder().decode(LoadResponse.self, from: data)
     }
 

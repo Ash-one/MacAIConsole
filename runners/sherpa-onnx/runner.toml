@@ -35,3 +35,10 @@ inherit_environment = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
 [[models]]
 profile = "profiles/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30.toml"
 adapter = "sherpa-onnx-transducer"
+
+[[local_detectors]]
+id = "sherpa-onnx-transducer-directory"
+capability = "stt.v1"
+adapter = "sherpa-onnx-transducer"
+required_files = ["tokens.txt", "encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx"]
+reason = "sherpa-onnx streaming transducer artifact set"

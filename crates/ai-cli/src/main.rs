@@ -94,7 +94,12 @@ enum Commands {
         /// 空闲驻留策略，如 0、5m、2h 或 always。
         #[arg(long)]
         keep_alive: Option<String>,
+        /// 由 `macai inspect` 返回的目录路由令牌；与 --type / --provider 不可组合。
+        #[arg(long)]
+        routing_token: Option<String>,
     },
+    /// 检查本地模型目录并输出 daemon 的 Runner 路由诊断。
+    Inspect { paths: Vec<String> },
     /// 加载注册表中已有的模型。
     Start { model: String },
     /// 停止模型 worker 并释放内存；注册记录仍保留。
@@ -248,6 +253,7 @@ fn main() {
             provider,
             context_length,
             keep_alive,
+            routing_token,
         } => cmd_load(
             &base,
             &path,
@@ -258,9 +264,11 @@ fn main() {
                 provider: provider.as_deref(),
                 context_length,
                 keep_alive: keep_alive.as_deref(),
+                routing_token: routing_token.as_deref(),
             },
         )
         .map(|_| ()),
+        Commands::Inspect { paths } => cmd_inspect(&base, &paths),
         Commands::Start { model } => cmd_start(&base, &model),
         Commands::Unload { model } => cmd_unload(&base, &model),
         Commands::Remove { model } => cmd_remove(&base, &model),
@@ -675,6 +683,7 @@ fn resolve_model_argument(base: &str, model: &str) -> Result<String, String> {
                 provider: None,
                 context_length: 4096,
                 keep_alive: None,
+                routing_token: None,
             },
         )
     } else {
@@ -689,18 +698,26 @@ struct LoadOptions<'a> {
     provider: Option<&'a str>,
     context_length: u64,
     keep_alive: Option<&'a str>,
+    routing_token: Option<&'a str>,
 }
 
 fn cmd_load(base: &str, path: &str, options: LoadOptions<'_>) -> Result<String, String> {
-    let body = json!({
+    if options.routing_token.is_some() && options.provider.is_some() {
+        return Err("--routing-token cannot be combined with --provider".to_string());
+    }
+    let mut body = json!({
         "path": path,
         "id": options.id,
         "name": options.name,
-        "model_type": options.model_type.as_str(),
         "provider": options.provider,
         "context_length": options.context_length,
         "keep_alive": options.keep_alive,
     });
+    if let Some(token) = options.routing_token {
+        body["routing_token"] = json!(token);
+    } else {
+        body["model_type"] = json!(options.model_type.as_str());
+    }
     let (status, response) = post_json(base, "/api/models/load", &body)?;
     if status != 200 {
         return Err(json_response_error(status, &response));
@@ -712,6 +729,19 @@ fn cmd_load(base: &str, path: &str, options: LoadOptions<'_>) -> Result<String, 
     let provider = response["provider"].as_str().unwrap_or("unknown provider");
     println!("Loaded {model_id} with {provider}");
     Ok(model_id)
+}
+
+fn cmd_inspect(base: &str, paths: &[String]) -> Result<(), String> {
+    if paths.is_empty() {
+        return Err("inspect requires at least one directory path".to_string());
+    }
+    let (status, response) = post_json(base, "/api/models/inspect", &json!({ "paths": paths }))?;
+    expect_success(status, &response)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&response).map_err(|error| error.to_string())?
+    );
+    Ok(())
 }
 
 fn cmd_start(base: &str, model: &str) -> Result<(), String> {

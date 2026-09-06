@@ -11,65 +11,27 @@ final class DaemonAPIRequestTests: XCTestCase {
         RecordingURLProtocol.reset()
     }
 
-    func testPullBuildsDirectoryManifestPayload() async throws {
-        let api = try makeAPI(status: 200, body: #"{"id":"kokoro-82m-zh","provider":"org.macai.kokoro"}"#)
+    func testModelProfileCatalogDecodesUnknownRunnerWithoutSwiftCatalog() async throws {
+        let api = try makeAPI(status: 200, body: #"{"data":[{"id":"future","name":"Future Model","model_type":"stt","runner":"org.example.future","source_repo":"owner/model","directory":"future","files":["model.bin"],"memory_estimate_bytes":123}]}"#)
 
-        let kokoro = try XCTUnwrap(RecommendedModel.builtIns.first { $0.id == "kokoro-82m-zh" })
-        _ = try await api.pull(kokoro, autoLoad: true)
+        let profiles = try await api.modelProfiles()
+        let profile = try XCTUnwrap(profiles.first)
+        XCTAssertEqual(profile.id, "future")
+        XCTAssertEqual(profile.runner, "org.example.future")
+        XCTAssertEqual(profile.modelType, "stt")
+        XCTAssertEqual(profile.files, ["model.bin"])
+        XCTAssertEqual(RecordingURLProtocol.recorded.first?.url?.path, "/api/model-profiles")
+    }
+
+    func testProfilePullDoesNotDuplicateProfileFieldsInGUIRequest() async throws {
+        let api = try makeAPI(status: 200, body: #"{"id":"future","state":"downloaded"}"#)
+        _ = try await api.pullProfile("future", autoLoad: false)
 
         let request = try XCTUnwrap(RecordingURLProtocol.recorded.first)
-        XCTAssertEqual(request.url?.path, "/api/models/pull")
+        XCTAssertEqual(request.url?.path, "/api/model-profiles/future/pull")
         let payload = try XCTUnwrap(request.bodyData).jsonDictionary
-        XCTAssertEqual(payload["repo"] as? String, "1038lab/Kokoro-82M-zh-MLX")
-        XCTAssertEqual(payload["model_type"] as? String, "tts")
-        XCTAssertEqual(payload["id"] as? String, "kokoro-82m-zh")
-        XCTAssertEqual(payload["provider"] as? String, "org.macai.kokoro")
-        XCTAssertEqual(payload["auto_load"] as? Bool, true)
-        XCTAssertEqual(payload["directory"] as? String, "kokoro-82m-zh")
-        XCTAssertNil(payload["filename"])
-
-        // 完整音色清单必须随请求下发：3 个具名音色 + 001...100 编号音色。
-        let files = try XCTUnwrap(payload["files"] as? [String])
-        XCTAssertEqual(files.count, 105)
-        XCTAssertEqual(files.first, "config.json")
-        XCTAssertTrue(files.contains("voices/zf_001.safetensors"))
-        XCTAssertTrue(files.contains("voices/zm_010.safetensors"))
-        XCTAssertTrue(files.contains("voices/af_maple.safetensors"))
-        // 下载体积展示的口径也在这里固化（handoff §71：清单唯一固化点）。
-        XCTAssertEqual(kokoro.estimatedSizeBytes, 380_917_492)
-    }
-
-    func testPullBuildsSingleFilePayloadWithoutDirectoryFields() async throws {
-        let api = try makeAPI(status: 200, body: #"{"id":"whisper-large-v3-turbo-q5"}"#)
-
-        let whisper = try XCTUnwrap(RecommendedModel.builtIns.first { $0.id == "whisper-large-v3-turbo-q5" })
-        _ = try await api.pull(whisper, autoLoad: false)
-
-        let payload = try XCTUnwrap(RecordingURLProtocol.recorded.first?.bodyData).jsonDictionary
-        XCTAssertEqual(payload["filename"] as? String, "ggml-large-v3-turbo-q5_0.bin")
         XCTAssertEqual(payload["auto_load"] as? Bool, false)
-        XCTAssertNil(payload["directory"])
-        XCTAssertNil(payload["files"])
-    }
-
-    func testPullBuildsMlxLmPayloadForRecommendedQwen3() async throws {
-        let api = try makeAPI(status: 200, body: #"{"id":"qwen3-8b-mlx-4bit","provider":"org.macai.mlx-lm"}"#)
-
-        let qwen3 = try XCTUnwrap(RecommendedModel.builtIns.first { $0.id == "qwen3-8b-mlx-4bit" })
-        _ = try await api.pull(qwen3, autoLoad: true)
-
-        let payload = try XCTUnwrap(RecordingURLProtocol.recorded.first?.bodyData).jsonDictionary
-        XCTAssertEqual(payload["repo"] as? String, "mlx-community/Qwen3-8B-4bit")
-        XCTAssertEqual(payload["model_type"] as? String, "llm")
-        XCTAssertEqual(payload["provider"] as? String, "org.macai.mlx-lm")
-        XCTAssertEqual(payload["directory"] as? String, "qwen3-8b-mlx-4bit")
-        // worker 只需要权重与 tokenizer；README/.gitattributes 不进清单。
-        let files = try XCTUnwrap(payload["files"] as? [String])
-        XCTAssertEqual(files.count, 9)
-        XCTAssertTrue(files.contains("model.safetensors"))
-        XCTAssertTrue(files.contains("model.safetensors.index.json"))
-        XCTAssertFalse(files.contains("README.md"))
-        XCTAssertEqual(qwen3.estimatedSizeBytes, 4_623_782_544)
+        XCTAssertEqual(payload.count, 1)
     }
 
     func testRegisterAndLoadOmitsUnspecifiedFields() async throws {
@@ -89,6 +51,23 @@ final class DaemonAPIRequestTests: XCTestCase {
         let minimal = try XCTUnwrap(RecordingURLProtocol.recorded.last?.bodyData).jsonDictionary
         XCTAssertEqual(minimal["path"] as? String, "/Models/tts/kokoro")
         XCTAssertEqual(minimal.count, 1)
+    }
+
+    func testDirectoryRoutingUsesDaemonTokenWithoutDuplicatingProviderRules() async throws {
+        let api = try makeAPI(status: 200, body: #"{"id":"qwen","provider":"org.macai.qwen3-asr"}"#)
+        _ = try await api.registerAndLoad(
+            path: "/Models/stt/qwen",
+            id: "qwen",
+            name: nil,
+            contextLength: nil,
+            keepAlive: nil,
+            routingToken: "short-lived-token"
+        )
+
+        let payload = try XCTUnwrap(RecordingURLProtocol.recorded.last?.bodyData).jsonDictionary
+        XCTAssertEqual(payload["routing_token"] as? String, "short-lived-token")
+        XCTAssertNil(payload["provider"])
+        XCTAssertNil(payload["model_type"])
     }
 
     func testServerErrorMessageOverridesGenericFallback() async throws {

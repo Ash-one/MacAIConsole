@@ -6,12 +6,12 @@ MacAIConsole 是 MacAI 的原生 macOS 控制台。应用只通过本地 HTTP AP
 
 - 运行状态：版本、PID、内存预算、系统内存压力、活跃请求和已加载模型
 - 任务：当前运行及最近完成的 Chat / STT / TTS 请求，支持查看输入、输出、耗时和错误
-- 模型管理：按 LLM / STT / TTS 分组显示模型仓库和注册状态，支持加载、卸载、改名与删除注册；GGUF 会读取架构、量化格式与原生上下文，文件头或 metadata 无效时会阻止注册
+- 模型管理：推荐目录来自 daemon `/api/model-profiles`，本地目录经 `/api/models/inspect` 由 daemon 路由；GUI 只提交 Profile ID 或 routing token，按 LLM / STT / TTS 分组显示仓库和注册状态，支持加载、卸载、改名与删除注册；GGUF 会读取展示 metadata
 - 日志：查看 GUI 与 daemon 最近日志，默认显示 Info，可启用 Debug，并按日志级别着色；"在访达中显示"可打开日志目录
-- 设置：应用外观（跟随系统 / 明亮 / 暗黑）、自动拉起守护进程开关、内存预算、运行环境、网络代理和模型下载源
+- 设置：应用外观（跟随系统 / 明亮 / 暗黑）、自动拉起守护进程开关、内存预算、引擎、网络代理和模型下载源
   - 模型下载源可切换 Hugging Face 官方源、`hf-mirror.com` 或自定义 Hugging Face 兼容源；修改后重启 aiworkd 生效
-  - 运行环境：七个 built-in Runner（llama.cpp / whisper.cpp / mlx-lm / Kokoro / Qwen3-ASR / Qwen3-TTS / sherpa-onnx）由 daemon `/api/runners` 管理安装与状态，GUI 不保留本地脚本安装；whisper.cpp 安装时由 daemon 校验官方 source archive 并构建常驻 server
-- 模型管理中的推荐模型在 Provider 环境未就绪时，行内会显示 daemon 上报的具体原因，并提供「去设置安装引擎」跳转入口
+  - 引擎：daemon `/api/runners` 动态提供 Runner 安装与状态，GUI 不保留旧引擎环境管理器、本地引擎清单或本地脚本安装
+- 模型管理中的推荐模型在 Provider 不可用时，行内会显示 daemon 上报的具体原因，并提供「去设置安装引擎」跳转入口
 
 运行状态中的模型条目可进入详细设置页，调整 keep-alive、LLM 上下文长度和 TTS 默认音色。
 
@@ -24,18 +24,12 @@ MacAIConsole 是 MacAI 的原生 macOS 控制台。应用只通过本地 HTTP AP
 
 ## 构建
 
-先在仓库根目录构建 daemon：
-
-```bash
-cargo build --release -p ai-daemon
-```
-
-再构建应用：
-
 ```bash
 cd apps/MacAIConsole
 scripts/build-app.sh release
 ```
+
+该命令会停止旧 GUI 与 `aiworkd`，以相同配置重建两端并启动新的 app；模型与注册表保持不变。
 
 产物：
 
@@ -43,7 +37,7 @@ scripts/build-app.sh release
 build/MacAIConsole.app
 ```
 
-启动：
+仅需单独启动已构建 app 时：
 
 ```bash
 open build/MacAIConsole.app
@@ -77,6 +71,7 @@ GET  /api/logging
 POST /api/logging
 GET  /v1/models
 POST /api/models/pull
+POST /api/models/inspect
 POST /api/models/load
 POST /api/models/{id}/load
 POST /api/models/{id}/unload
@@ -96,8 +91,8 @@ POST /api/runners/{id}/install
 │   ├── llm/
 │   ├── stt/
 │   └── tts/
-├── models.db
 ├── model-settings.json
+├── models.db
 └── logs/
     ├── aiworkd.log
     └── gui.log
