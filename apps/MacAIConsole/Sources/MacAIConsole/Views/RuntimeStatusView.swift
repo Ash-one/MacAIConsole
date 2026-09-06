@@ -92,9 +92,9 @@ struct RuntimeStatusView: View {
     }
 
     private var providerSection: some View {
-        SectionCard(title: "Provider 状态", icon: "square.stack.3d.up") {
+        SectionCard(title: "Runner", icon: "square.stack.3d.up") {
             if controller.providers.isEmpty {
-                EmptyHint(text: "暂无 Provider 数据", systemImage: "square.stack.3d.up")
+                EmptyHint(text: "暂无 Runner 数据", systemImage: "square.stack.3d.up")
             } else {
                 VStack(spacing: 0) {
                     ForEach(controller.providers) { provider in
@@ -189,11 +189,7 @@ struct ModelRow: View {
     let onSelect: () -> Void
 
     private var modelType: String {
-        if let type = model.modelType, !type.isEmpty { return type }
-        if model.provider == "org.macai.whisper.cpp" || model.provider == "org.macai.sherpa-onnx" { return "stt" }
-        if model.provider == "org.macai.qwen3-asr" { return "stt" }
-        if model.provider.hasPrefix("org.macai.") { return "tts" }
-        return "llm"
+        if let type = model.modelType, !type.isEmpty { type } else { "unknown" }
     }
 
     var body: some View {
@@ -338,11 +334,7 @@ struct RunningModelSettingsView: View {
     }
 
     private var modelType: String {
-        if let type = model.modelType, !type.isEmpty { return type }
-        if model.provider == "org.macai.whisper.cpp" || model.provider == "org.macai.sherpa-onnx" { return "stt" }
-        if model.provider == "org.macai.qwen3-asr" { return "stt" }
-        if model.provider.hasPrefix("org.macai.") { return "tts" }
-        return "llm"
+        if let type = model.modelType, !type.isEmpty { type } else { "unknown" }
     }
 
     private var typeLabel: String {
@@ -611,10 +603,12 @@ struct ProviderRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(displayTitle)
+            Text(entry.descriptor.id)
                 .font(.body.weight(.medium))
                 .lineLimit(1)
-            engineTag
+            if entry.descriptor.isolation == "worker" {
+                Chip(text: "WORKER", color: Theme.info)
+            }
             typeTag
             Spacer(minLength: 12)
             HStack(spacing: 5) {
@@ -630,31 +624,6 @@ struct ProviderRow: View {
         }
         .padding(.vertical, 7)
         .padding(.horizontal, 2)
-    }
-
-    /// Runner 装配的 provider id 是反向域名（org.macai.kokoro 等），行内展示
-    /// 缩短名（最后一段 + Runner 标记），完整 id 放帮助提示，避免一排长域名。
-    private var displayTitle: String {
-        let id = entry.descriptor.id
-        if id.hasPrefix("org.macai.") {
-            let short = id.replacingOccurrences(of: "org.macai.", with: "")
-            return short.isEmpty ? id : short
-        }
-        return id
-    }
-
-    /// 引擎 tag：MLX 与 CPP 两种后端用颜色区分；Runner（org.macai.*，daemon
-    /// 动态装配）标 RUNNER；mock/macos-say 不标。
-    @ViewBuilder
-    private var engineTag: some View {
-        let id = entry.descriptor.id.lowercased()
-        if id.hasPrefix("org.macai.") {
-            Chip(text: "RUNNER", color: Theme.info)
-        } else if id.contains("mlx") {
-            Chip(text: "MLX", color: Theme.warning)
-        } else if id.contains(".cpp") {
-            Chip(text: "CPP", color: Theme.info)
-        }
     }
 
     /// 类型 tag：按能力归类为 STT / TTS / LLM，中性灰与引擎 tag 区分。

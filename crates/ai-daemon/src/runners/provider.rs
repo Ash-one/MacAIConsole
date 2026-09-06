@@ -139,6 +139,7 @@ impl RunnerProvider {
             },
             defaults: ProfileDefaults::default(),
             resources: ProfileResources::default(),
+            routing: None,
             compatibility: ProfileCompatibility {
                 runner: ">=0.1,<2".to_string(),
             },

@@ -26,7 +26,7 @@ use crate::providers::{MacOSSayProvider, MockProvider};
 use crate::registry::{RegistryStore, StoredProfile};
 use crate::scheduler;
 use crate::tasks::{TaskHandle, TaskRegistry};
-use ai_daemon::runners::RunnerInstanceManager;
+use ai_daemon::runners::{ModelProfile, RunnerInstanceManager, RunnerModelBinding};
 
 /// 内存版模型注册表条目：模型规格 + 当前状态 + 使用时间。
 #[derive(Debug, Clone)]
@@ -171,6 +171,28 @@ impl Runtime {
 
     pub fn runner_instances(&self) -> Option<Arc<RunnerInstanceManager>> {
         self.runner_instances.clone()
+    }
+
+    /// 当前可信 Runner 提供的 bundled Model Profile catalog。
+    /// 返回克隆快照，避免 HTTP 管理面持有同步锁跨越 await。
+    pub fn runner_profiles(&self) -> Vec<ai_daemon::runners::ModelProfile> {
+        let mut profiles: Vec<_> = self
+            .runner_profiles
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .values()
+            .cloned()
+            .collect();
+        profiles.sort_by(|left, right| left.id.cmp(&right.id));
+        profiles
+    }
+
+    pub fn runner_profile(&self, id: &str) -> Option<ai_daemon::runners::ModelProfile> {
+        self.runner_profiles
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(id)
+            .cloned()
     }
 
     /// 查询 provider（含动态装配的 Runner）是否声明给定能力。注册/管理面校验用。
@@ -548,6 +570,77 @@ impl Runtime {
         let profile =
             existing_profile.or_else(|| self.current_runner_profile(&spec.id, &spec.provider));
         self.register_with_profile(spec.clone(), profile).await;
+        match self.load_model(&spec.id).await {
+            Ok(handle) => Ok(handle),
+            Err(error) => {
+                if !existed_before {
+                    let _ = self.unregister_model(&spec.id).await;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// 目录 inspection 生成的 local Profile 必须随注册冻结；不会进入可变 catalog。
+    pub async fn register_and_load_inspected(
+        &self,
+        spec: ModelSpec,
+        profile: ModelProfile,
+    ) -> Result<ModelHandle, ProviderError> {
+        if profile.id != spec.id || profile.runner != spec.provider {
+            return Err(ProviderError::new(
+                AIError::InvalidRequest,
+                "inspected Profile does not match model registration",
+            ));
+        }
+        profile
+            .validate()
+            .map_err(|error| ProviderError::new(AIError::InvalidRequest, error.to_string()))?;
+        let provider = self
+            .runner_providers
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&spec.provider)
+            .cloned()
+            .ok_or_else(|| {
+                ProviderError::new(
+                    AIError::ProviderUnavailable,
+                    format!("runner provider '{}' is not attached", spec.provider),
+                )
+            })?;
+        let artifact_root = spec.path.as_deref().ok_or_else(|| {
+            ProviderError::new(AIError::InvalidRequest, "inspected model has no path")
+        })?;
+        let environment_id = provider.default_environment_id().await;
+        provider
+            .bind_model(RunnerModelBinding {
+                model_id: spec.id.clone(),
+                profile: profile.clone(),
+                environment_id,
+                artifact_root: artifact_root.into(),
+            })
+            .await;
+        let stored =
+            StoredProfile {
+                profile_id: profile.id.clone(),
+                runner: profile.runner.clone(),
+                compatibility: profile.compatibility.runner.clone(),
+                digest: profile.digest().map_err(|error| {
+                    ProviderError::new(AIError::InvalidRequest, error.to_string())
+                })?,
+                snapshot: String::from_utf8(profile.canonical_json().map_err(|error| {
+                    ProviderError::new(AIError::InvalidRequest, error.to_string())
+                })?)
+                .map_err(|_| {
+                    ProviderError::new(AIError::InvalidRequest, "profile snapshot is not UTF-8")
+                })?,
+                installed_at: unix_now(),
+            };
+        if self.handles.read().await.contains_key(&spec.id) {
+            self.unload_model(&spec.id).await?;
+        }
+        let existed_before = self.get_model(&spec.id).await.is_some();
+        self.register_with_profile(spec.clone(), Some(stored)).await;
         match self.load_model(&spec.id).await {
             Ok(handle) => Ok(handle),
             Err(error) => {

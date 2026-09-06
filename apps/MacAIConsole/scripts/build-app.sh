@@ -1,18 +1,49 @@
 #!/usr/bin/env bash
-# 构建 MacAIConsole.app
-# 用法：scripts/build-app.sh [debug|release]  （默认 release）
+# 停止旧的 MacAIConsole / aiworkd，重建两端并启动新 app。
+# 用法：scripts/build-app.sh [release]（默认 release）
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 CONFIG="${1:-release}"
+if [ "${CONFIG}" != release ]; then
+    echo "用法：$0 [release]" >&2
+    exit 2
+fi
+
+REPO_ROOT="$(cd ../.. && pwd)"
+APP="build/MacAIConsole.app"
+
+# Launch Services 会复用旧 GUI；先退出它和旧 daemon，才能保证两端都使用新产物。
+stop_process() {
+    local name="$1"
+    if pgrep -x "${name}" >/dev/null 2>&1; then
+        echo "==> 停止旧 ${name}"
+        pkill -x "${name}"
+        for _ in {1..50}; do
+            pgrep -x "${name}" >/dev/null 2>&1 || return
+            sleep 0.1
+        done
+        echo "${name} 未在 5 秒内退出" >&2
+        exit 1
+    fi
+}
+
+stop_process MacAIConsole
+stop_process aiworkd
+
+if [ -d /Applications/Xcode.app/Contents/Developer ] && [ -z "${DEVELOPER_DIR:-}" ]; then
+    export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+fi
+
+echo "==> cargo build --release -p ai-daemon"
+cargo build --release -p ai-daemon
 
 echo "==> swift build -c ${CONFIG}"
 swift build -c "${CONFIG}"
 
 BIN_DIR="$(swift build -c "${CONFIG}" --show-bin-path)"
 BIN="${BIN_DIR}/MacAIConsole"
-APP="build/MacAIConsole.app"
 
 echo "==> 组装 ${APP}"
 rm -rf "${APP}"
@@ -57,4 +88,5 @@ PLIST
 
 codesign --force --deep --sign - "${APP}" >/dev/null
 
-echo "==> 完成：${APP}"
+echo "==> 启动新 ${APP}（AIWORKD_PATH=${REPO_ROOT}/target/${CONFIG}/aiworkd）"
+AIWORKD_PATH="${REPO_ROOT}/target/${CONFIG}/aiworkd" open -n "${APP}"

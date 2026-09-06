@@ -53,11 +53,16 @@ OpenAI-compatible SDK ┘                                  └── MLX / Kokor
 | TTS | org.macai.qwen3-tts（Runner） | Qwen3-TTS CustomVoice 模型目录 | MLX / Metal GPU |
 | TTS | org.macai.kokoro（Runner） | Kokoro 模型目录 | MLX / Metal GPU |
 
-生产推理引擎已全部收敛到 [Runner 架构](docs/decisions/2026-09-02-runner-plugin-architecture.md)：七个引擎由 daemon 自动发现 `runners/` 下的 Runner 包并预先装配为动态 provider（`org.macai.*`），因此模型下载后无需重启 daemon。Python 环境由 uv 受管，原生引擎由同一安装接口管理；注册模型冻结当时的 Model Profile snapshot，后续 catalog 更新不会静默改写它。
+生产推理引擎已全部收敛到 [Runner 架构](docs/decisions/2026-09-02-runner-plugin-architecture.md)：daemon 自动发现 `runners/` 下的 Runner 包并预先装配为动态 provider。Python 环境与原生引擎使用同一安装接口；`/api/model-profiles` 向 GUI 投影数据化 catalog，按 Profile ID 的下载动作由 daemon 展开 source、artifact 与 Runner 绑定。注册模型冻结当时的 Profile snapshot，后续 catalog 更新不会静默改写它。
 
 `/api/models/load` 将调用者请求的 provider、daemon 选定的 provider 与裁决理由一同持久化；
 `/v1/models` 和 `/api/runtime` 返回 `requested_provider` / `provider` /
 `provider_selection_reason` / `effective_device`，便于审计缺省选择和兼容别名。
+
+本地目录通过 `POST /api/models/inspect` 由 daemon 的 trusted Runner manifest 检测；只有
+唯一匹配会返回短期 routing token。CLI 可用 `macai inspect <directory>` 查看结果，再用
+`macai load <directory> --routing-token <token>` 注册。GUI 展示同一诊断，不在 Swift 推断
+Runner。
 
 当前 Runner Protocol v1 是单实例、单活动推理。显式信任 Runner 等同信任本地代码以
 aiworkd 用户权限运行；digest、环境变量 allowlist 和输出路径校验不构成 OS 沙箱。
@@ -82,7 +87,7 @@ MacAIConsole 当前提供：
 - Runtime 状态和系统内存压力
 - 已加载模型、驻留内存和有效加速设备
 - 模型仓库、注册、加载、卸载、改名和详细设置
-- 模型页一键下载推荐模型（含 Runner 引擎 Kokoro / Qwen3-ASR），Provider 环境未就绪时行内提示安装入口；环境完成后再次点击即可注册启动，无需重启 daemon
+- 模型页从 daemon Profile catalog 展示并一键下载推荐模型；环境未就绪时行内提示安装入口，环境完成后可注册启动，无需修改或重启 GUI
 - Chat / STT / TTS 任务记录与详情
 - GUI / daemon 最近日志，支持 Info / Debug 过滤和级别着色
 - 菜单栏状态与 daemon 启停
@@ -124,7 +129,7 @@ cargo build --release --workspace
 ### 3. 安装 llama.cpp 引擎（Runner）
 
 llama.cpp 已迁移 Runner 架构（`org.macai.llama.cpp`）。安装走 daemon 统一
-入口——GUI「设置 → 运行环境」或直接调 API：
+入口——GUI「设置 → 引擎」或直接调 API：
 
 ```bash
 curl -X POST http://127.0.0.1:11435/api/runners/org.macai.llama.cpp/install
@@ -196,7 +201,7 @@ ggml-large-v3-turbo-encoder.mlmodelc/
 
 ### 5. 准备 Qwen3-ASR 0.6B
 
-Qwen3-ASR 由 daemon 的 Qwen3-ASR Runner（`org.macai.qwen3-asr`）提供服务，Apple Silicon 上走 MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole「设置 → 运行环境」里对 `org.macai.qwen3-asr` 执行安装，或手动：
+Qwen3-ASR 由 daemon 的 Qwen3-ASR Runner（`org.macai.qwen3-asr`）提供服务，Apple Silicon 上走 MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole「设置 → 引擎」里对 `org.macai.qwen3-asr` 执行安装，或手动：
 
 ```bash
 uv sync --project runners/qwen3-asr --locked --no-dev
@@ -222,7 +227,7 @@ uv sync --project runners/qwen3-asr --locked --no-dev
 ### 6. 准备 sherpa-onnx zh-int8-2025（Runner）
 
 sherpa-onnx 由 daemon 的 sherpa-onnx Runner（`org.macai.sherpa-onnx`）提供服务，
-Python 环境由 uv 受管：在 MacAIConsole「设置 → 运行环境」里对
+Python 环境由 uv 受管：在 MacAIConsole「设置 → 引擎」里对
 `org.macai.sherpa-onnx` 执行安装，或手动：
 
 ```bash
@@ -273,7 +278,7 @@ provider 需 runner 包内显式启用后另行声明）。
 
 ### 7. 准备 Kokoro TTS
 
-Kokoro 由 daemon 的 Kokoro Runner（`org.macai.kokoro`）提供服务，Python 环境由 uv 受管：在 MacAIConsole「设置 → 运行环境」里对 `org.macai.kokoro` 执行安装，或手动：
+Kokoro 由 daemon 的 Kokoro Runner（`org.macai.kokoro`）提供服务，Python 环境由 uv 受管：在 MacAIConsole「设置 → 引擎」里对 `org.macai.kokoro` 执行安装，或手动：
 
 ```bash
 uv sync --project runners/kokoro --locked --no-dev
@@ -300,7 +305,7 @@ uv sync --project runners/kokoro --locked --no-dev
 
 Qwen3-TTS 由 daemon 的 Qwen3-TTS Runner（`org.macai.qwen3-tts`）提供服务，
 Apple Silicon 上走 MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole
-「设置 → 运行环境」里对 `org.macai.qwen3-tts` 执行安装，或手动：
+「设置 → 引擎」里对 `org.macai.qwen3-tts` 执行安装，或手动：
 
 ```bash
 uv sync --project runners/qwen3-tts --locked --no-dev
@@ -334,7 +339,7 @@ uv sync --project runners/qwen3-tts --locked --no-dev
 ### 9. 准备 MLX-LM（Runner）
 
 MLX LLM 由 daemon 的 mlx-lm Runner（`org.macai.mlx-lm`）提供服务，Apple Silicon 上走
-MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole「设置 → 运行环境」里
+MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole「设置 → 引擎」里
 对 `org.macai.mlx-lm` 执行安装，或手动：
 
 ```bash
@@ -366,11 +371,11 @@ GGUF 和 MLX 格式互不通用：GGUF 走 llama.cpp，MLX 走 mlx-lm Runner。
 ## MacAIConsole
 
 ```bash
-cargo build --release -p ai-daemon
 cd apps/MacAIConsole
 scripts/build-app.sh release
-open build/MacAIConsole.app
 ```
+
+该脚本停止旧 GUI / daemon、重建同一配置的前后端并启动新的 app；日常本地联调应使用它。
 
 产物在 `apps/MacAIConsole/build/MacAIConsole.app`。
 
@@ -446,6 +451,7 @@ GET  /api/tasks/{id}
 GET  /api/logging
 POST /api/logging
 POST /api/models/pull
+POST /api/models/inspect
 POST /api/models/load
 POST /api/models/{id}/load
 POST /api/models/{id}/unload
@@ -651,8 +657,8 @@ MacAIConsole 使用以下目录：
 │   ├── llm/
 │   ├── stt/
 │   └── tts/
-├── models.db
 ├── model-settings.json
+├── models.db
 └── logs/
     ├── aiworkd.log
     └── gui.log

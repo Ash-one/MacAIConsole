@@ -21,6 +21,7 @@ final class DaemonController {
     private(set) var phase: Phase = .offline
     var info: RuntimeInfo?
     var providers: [ProviderEntry] = []
+    var modelProfiles: [ModelProfile] = []
     var registeredModels: [ModelEntry] = []
     private(set) var runningTasks: [InferenceTaskSummary] = []
     private(set) var completedTasks: [InferenceTaskSummary] = []
@@ -154,6 +155,7 @@ final class DaemonController {
         async let infoRequest = api.runtimeInfo()
         async let modelsRequest = api.models()
         async let providersRequest = api.providers()
+        async let profilesRequest = api.modelProfiles()
         let tasksDue = forceTasks
             || lastTasksRefresh.map { Date.now.timeIntervalSince($0) >= Self.tasksRefreshInterval }
             ?? true
@@ -162,10 +164,12 @@ final class DaemonController {
         let info = try await infoRequest
         let models = try? await modelsRequest
         let providers = try? await providersRequest
+        let profiles = try? await profilesRequest
         let tasks = try? await tasksRequest
         self.info = info
         if let models { registeredModels = models }
         if let providers { self.providers = providers }
+        if let profiles { modelProfiles = profiles }
         if let tasks {
             runningTasks = tasks.running
             completedTasks = tasks.completed
@@ -269,8 +273,8 @@ final class DaemonController {
         try await api.voices(id)
     }
 
-    func registerAndLoad(path: String, id: String, contextLength: Int, keepAlive: String?, modelType: String? = nil, provider: String? = nil) async throws {
-        _ = try await api.registerAndLoad(path: path, id: id, name: nil, contextLength: contextLength, keepAlive: keepAlive, modelType: modelType, provider: provider)
+    func registerAndLoad(path: String, id: String, contextLength: Int, keepAlive: String?, modelType: String? = nil, provider: String? = nil, routingToken: String? = nil) async throws {
+        _ = try await api.registerAndLoad(path: path, id: id, name: nil, contextLength: contextLength, keepAlive: keepAlive, modelType: modelType, provider: provider, routingToken: routingToken)
         logInfo("已注册并加载模型：\(id)")
         await refreshAfterSuccessfulMutation()
     }
@@ -282,36 +286,24 @@ final class DaemonController {
     /// 推荐模型的一键流程：下载 → 注册 → 启动。Provider 环境未就绪时先完成下载，
     /// 保留本地模型，等环境可用后再次点击即可注册启动。
     @discardableResult
-    func installRecommended(_ model: RecommendedModel) async -> Bool {
+    func installRecommended(_ model: ModelProfile) async -> Bool {
         guard !busyRecommendationIDs.contains(model.id) else { return false }
         busyRecommendationIDs.insert(model.id)
         defer { busyRecommendationIDs.remove(model.id) }
         lastError = nil
         do {
             let isLoaded = info?.loadedModels.contains { $0.id == model.id } == true
-            if !model.isDownloaded {
-                // 已驻留模型补充新增清单文件时只下载，避免无意义重启；首次下载则直接注册启动。
-                let autoLoad = providerIsAvailable(model.provider) && !isLoaded
-                _ = try await api.pull(model, autoLoad: autoLoad)
-                logInfo(autoLoad
-                    ? "已下载并启动推荐模型：\(model.id)"
-                    : "已补全推荐模型文件：\(model.id)")
-            } else if isLoaded {
+            if isLoaded {
                 return true
             } else if registeredModels.contains(where: { $0.id == model.id }) {
                 _ = try await api.loadRegistered(model.id)
                 logInfo("已启动推荐模型：\(model.id)")
             } else {
-                _ = try await api.registerAndLoad(
-                    path: model.downloadedURL?.path ?? model.localURL.path,
-                    id: model.id,
-                    name: model.title,
-                    contextLength: nil,
-                    keepAlive: nil,
-                    modelType: model.modelType,
-                    provider: model.provider
-                )
-                logInfo("已注册并启动推荐模型：\(model.id)")
+                let autoLoad = providerIsAvailable(model.runner)
+                _ = try await api.pullProfile(model.id, autoLoad: autoLoad)
+                logInfo(autoLoad
+                    ? "已下载并启动推荐模型：\(model.id)"
+                    : "已下载推荐模型：\(model.id)")
             }
             await refreshAfterSuccessfulMutation()
             return true
@@ -385,6 +377,7 @@ final class DaemonController {
         info = nil
         registeredModels = []
         providers = []
+        modelProfiles = []
         runningTasks = []
         completedTasks = []
         tasksError = nil
@@ -565,7 +558,6 @@ final class DaemonController {
         } else {
             environment.removeValue(forKey: "AIWORKD_MEMORY_BUDGET")
         }
-        environment.removeValue(forKey: "AIWORK_QWEN3_ASR_ENABLED")
         process.environment = environment
 
         // binary 位于 <仓库>/target/<配置>/aiworkd，工作目录定为仓库根

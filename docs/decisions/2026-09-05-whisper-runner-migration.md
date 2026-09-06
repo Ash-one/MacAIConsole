@@ -12,7 +12,7 @@ Architecture owner: [`Runner 插件架构`](2026-09-02-runner-plugin-architectur
 
 whisper.cpp 曾由 `Runtime::with_store` 静态装配 `WhisperCppProvider`，二进制由仓库
 脚本或 `AIWORK_WHISPER_CLI` 提供。它绕过 `/api/runners` 的统一安装、状态、进程
-监督和环境契约，使 GUI「运行环境」无法完整管理所有生产 Provider。
+监督和环境契约，使 GUI「引擎」区块无法完整管理所有生产 Provider。
 
 ## Requirement delta
 

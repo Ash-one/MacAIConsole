@@ -1,0 +1,25 @@
+schema = "macai.model.v1"
+id = "whisper-large-v3-turbo-q5"
+name = "Whisper Large v3 Turbo Q5"
+capabilities = ["stt.v1"]
+runner = "org.macai.whisper.cpp"
+adapter = "whisper-cpp-server"
+format = "file"
+
+[source]
+type = "huggingface"
+repo = "ggerganov/whisper.cpp"
+revision = "5359861c739e955e79d9a303bcbc70fb988958b1"
+
+[artifacts]
+directory = "whisper-large-v3-turbo-q5"
+files = ["ggml-large-v3-turbo-q5_0.bin"]
+
+[defaults]
+keep_alive = "5m"
+
+[resources]
+memory_estimate_bytes = 574041195
+
+[compatibility]
+runner = ">=0.1,<0.2"

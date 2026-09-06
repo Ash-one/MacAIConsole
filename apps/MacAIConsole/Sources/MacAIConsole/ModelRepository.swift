@@ -2,30 +2,30 @@ import Foundation
 
 /// 统一模型仓库：`~/Library/Application Support/MacAIConsole/Models/` 下
 /// 按 llm / tts / stt 分文件夹存放模型文件。
-/// GUI 每次刷新实时扫描该目录，放入文件即出现在列表中。
+/// GUI 枚举模型仓库顶层项目；目录能力与 Runner 路由由 daemon inspect API 决定。
 struct RepoModel: Identifiable, Hashable {
     let fileName: String
     let modelType: String   // llm / tts / stt
-    let provider: String
     let path: String
     let sizeBytes: UInt64
+    let isDirectory: Bool
     let ggufMetadata: GGUFMetadata?
     let detectionError: String?
 
     init(
         fileName: String,
         modelType: String,
-        provider: String,
         path: String,
         sizeBytes: UInt64,
+        isDirectory: Bool = false,
         ggufMetadata: GGUFMetadata? = nil,
         detectionError: String? = nil
     ) {
         self.fileName = fileName
         self.modelType = modelType
-        self.provider = provider
         self.path = path
         self.sizeBytes = sizeBytes
+        self.isDirectory = isDirectory
         self.ggufMetadata = ggufMetadata
         self.detectionError = detectionError
     }
@@ -74,23 +74,12 @@ enum ModelRepository {
                 var isDir: ObjCBool = false
                 guard fm.fileExists(atPath: item.path, isDirectory: &isDir) else { continue }
                 if isDir.boolValue {
-                    // 文件夹形态模型：Kokoro TTS、Qwen3-ASR 或 sherpa-onnx。
-                    // Provider 由目录结构与配置文件推导，保证从仓库手动注册时
-                    // 仍能选择正确后端。
-                    guard let provider = directoryProvider(at: item, type: type) else { continue }
-                    models.append(RepoModel(
-                        fileName: item.lastPathComponent,
-                        modelType: type,
-                        provider: provider,
-                        path: item.path,
-                        sizeBytes: directorySize(at: item)
-                    ))
+                    models.append(RepoModel(fileName: item.lastPathComponent, modelType: type, path: item.path, sizeBytes: 0, isDirectory: true))
                     continue
                 }
+                let ext = item.pathExtension.lowercased()
+                guard (type == "llm" && ext == "gguf") || (type == "stt" && ext == "bin") else { continue }
                 let size = (try? item.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(UInt64.init) ?? 0
-                // LLM 引擎已迁移 Runner 架构：注册直接指向 org.macai.llama.cpp，
-                // daemon 缺省裁决一致（llm → Runner）。
-                let provider = type == "llm" ? "org.macai.llama.cpp" : "org.macai.whisper.cpp"
                 var ggufMetadata: GGUFMetadata?
                 var detectionError: String?
                 if type == "llm" {
@@ -107,7 +96,6 @@ enum ModelRepository {
                 models.append(RepoModel(
                     fileName: item.lastPathComponent,
                     modelType: type,
-                    provider: provider,
                     path: item.path,
                     sizeBytes: size,
                     ggufMetadata: ggufMetadata,
@@ -137,63 +125,6 @@ enum ModelRepository {
         try await Task.detached(priority: .userInitiated) {
             try GGUFMetadataReader.read(from: url)
         }.value
-    }
-
-    private static func directoryProvider(at url: URL, type: String) -> String? {
-        let fm = FileManager.default
-        if type == "stt" {
-            let sherpaFiles = [
-                "tokens.txt",
-                "encoder.int8.onnx",
-                "decoder.onnx",
-                "joiner.int8.onnx"
-            ]
-            if sherpaFiles.allSatisfy({ fm.fileExists(atPath: url.appendingPathComponent($0).path) }) {
-                return "org.macai.sherpa-onnx"
-            }
-            // Qwen3-ASR 模型目录：由 Runner provider（org.macai.qwen3-asr）承接。
-            // 以 config.json 的 model_type 判别，4bit / 8bit 目录结构均兼容。
-            if fm.fileExists(atPath: url.appendingPathComponent("preprocessor_config.json").path),
-               let data = try? Data(contentsOf: url.appendingPathComponent("config.json")),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               json["model_type"] as? String == "qwen3_asr" {
-                return "org.macai.qwen3-asr"
-            }
-            return nil
-        }
-        guard fm.fileExists(atPath: url.appendingPathComponent("model.safetensors").path) else {
-            return nil
-        }
-        if type == "tts" {
-            // Kokoro 模型目录：由 Runner provider（org.macai.kokoro）承接。
-            return "org.macai.kokoro"
-        }
-        if type == "llm" {
-            // MLX LLM 目录（config.json + safetensors）；sharded 权重经 index 文件加载。
-            // chat.v1 Runner（org.macai.mlx-lm）承接，legacy mlx-lm 已删除。
-            guard fm.fileExists(atPath: url.appendingPathComponent("config.json").path) else {
-                return nil
-            }
-            return "org.macai.mlx-lm"
-        }
-        return nil
-    }
-
-    private static func directorySize(at url: URL) -> UInt64 {
-        let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey]
-        guard let enumerator = FileManager.default.enumerator(
-            at: url,
-            includingPropertiesForKeys: Array(keys),
-            options: .skipsHiddenFiles
-        ) else { return 0 }
-        var total: UInt64 = 0
-        for case let fileURL as URL in enumerator {
-            guard let values = try? fileURL.resourceValues(forKeys: keys),
-                  values.isRegularFile == true,
-                  let size = values.fileSize else { continue }
-            total += UInt64(size)
-        }
-        return total
     }
 
     /// 把外部模型资源拷入对应类型的文件夹。同名资源直接覆盖（视为更新）。

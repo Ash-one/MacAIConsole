@@ -22,7 +22,6 @@ final class ModelIdentifierTests: XCTestCase {
         let fileModel = RepoModel(
             fileName: file.lastPathComponent,
             modelType: "stt",
-            provider: "org.macai.whisper.cpp",
             path: file.path,
             sizeBytes: 0
         )
@@ -33,7 +32,6 @@ final class ModelIdentifierTests: XCTestCase {
         let directoryModel = RepoModel(
             fileName: directory.lastPathComponent,
             modelType: "stt",
-            provider: "org.macai.qwen3-asr",
             path: directory.path,
             sizeBytes: 0
         )

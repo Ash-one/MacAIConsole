@@ -28,6 +28,8 @@ pub struct RunnerManifest {
     pub security: Security,
     #[serde(default)]
     pub models: Vec<BundledModel>,
+    #[serde(default)]
+    pub local_detectors: Vec<LocalDetector>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -110,6 +112,46 @@ pub struct Security {
 pub struct BundledModel {
     pub profile: String,
     pub adapter: String,
+}
+
+/// 只读本地目录识别规则。规则是 manifest 数据，不允许携带可执行逻辑。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalDetector {
+    pub id: String,
+    pub capability: String,
+    pub adapter: String,
+    #[serde(default)]
+    pub required_files: Vec<String>,
+    #[serde(default)]
+    pub required_directories: Vec<String>,
+    #[serde(default)]
+    pub required_globs: Vec<RequiredGlob>,
+    #[serde(default)]
+    pub required_absent: Vec<String>,
+    #[serde(default)]
+    pub json_predicates: Vec<JsonPredicate>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequiredGlob {
+    pub pattern: String,
+    #[serde(default = "one")]
+    pub min_matches: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JsonPredicate {
+    pub file: String,
+    pub pointer: String,
+    pub equals: serde_json::Value,
+}
+
+fn one() -> usize {
+    1
 }
 
 #[derive(Debug)]
@@ -270,6 +312,50 @@ impl RunnerManifest {
                 ));
             }
         }
+        for detector in &self.local_detectors {
+            if !valid_id(&detector.id)
+                || !valid_capability(&detector.capability)
+                || !self.capabilities.contains(&detector.capability)
+                || detector.adapter.trim().is_empty()
+                || detector.reason.trim().is_empty()
+            {
+                return Err(ManifestError(
+                    "local detector must have an id, a declared capability, adapter and reason"
+                        .to_string(),
+                ));
+            }
+            if !self
+                .models
+                .iter()
+                .any(|model| model.adapter == detector.adapter)
+            {
+                return Err(ManifestError(
+                    "local detector adapter must be declared by this Runner".to_string(),
+                ));
+            }
+            for path in detector
+                .required_files
+                .iter()
+                .chain(&detector.required_directories)
+                .chain(&detector.required_absent)
+            {
+                validate_relative_path("local detector path", path)?;
+            }
+            for required in &detector.required_globs {
+                if required.min_matches == 0 || !valid_glob(&required.pattern) {
+                    return Err(ManifestError("local detector glob must be a safe relative path with at most '*' wildcards".to_string()));
+                }
+            }
+            for predicate in &detector.json_predicates {
+                validate_relative_path("local detector JSON file", &predicate.file)?;
+                if !predicate.pointer.starts_with('/') || !is_scalar_json(&predicate.equals) {
+                    return Err(ManifestError(
+                        "local detector JSON predicate requires a JSON Pointer and scalar value"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
         if let Some(engine) = &self.engine {
             if !(engine.download_url.starts_with("https://")
                 && engine.sha256.len() == 64
@@ -389,6 +475,26 @@ impl RunnerManifest {
             })
             .collect()
     }
+}
+
+fn valid_glob(value: &str) -> bool {
+    !value.contains("**")
+        && value
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/' | b'*')
+        })
+}
+
+fn is_scalar_json(value: &serde_json::Value) -> bool {
+    matches!(
+        value,
+        serde_json::Value::Null
+            | serde_json::Value::Bool(_)
+            | serde_json::Value::Number(_)
+            | serde_json::Value::String(_)
+    )
 }
 
 fn resolve_argument(

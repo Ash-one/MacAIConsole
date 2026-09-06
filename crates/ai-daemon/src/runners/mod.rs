@@ -5,6 +5,7 @@
 
 mod engine_asset;
 mod environment;
+mod inspection;
 mod instance;
 mod manifest;
 mod profile;
@@ -21,14 +22,18 @@ pub use environment::{
     EnvironmentManagerConfig, EnvironmentPhase, EnvironmentStatus, PythonInfo, UvSource,
     TESTED_UV_VERSION,
 };
+pub use inspection::{inspect as inspect_local_directory, DetectorMatch, Inspection};
 pub use instance::{
     shutdown_all_instances, InferEvent, RunnerInstanceError, RunnerInstanceManager,
     RunnerInstanceSnapshot,
 };
-pub use manifest::{CmakeBuild, EngineAsset, ManifestError, RunnerManifest, RunnerRuntime};
+pub use manifest::{
+    CmakeBuild, EngineAsset, JsonPredicate, LocalDetector, ManifestError, RequiredGlob,
+    RunnerManifest, RunnerRuntime,
+};
 pub use profile::{
     ModelProfile, ProfileArtifacts, ProfileCompatibility, ProfileDefaults, ProfileError,
-    ProfileResources, ProfileSource,
+    ProfileResources, ProfileRouting, ProfileSource,
 };
 pub use protocol::{
     read_frame, write_frame, Envelope, ProtocolError, DEFAULT_MAX_FRAME_BYTES, RUNNER_PROTOCOL_V1,

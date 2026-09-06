@@ -89,6 +89,7 @@ adapter = "kokoro-mlx"
 | `timeouts` | yes | 可覆盖的默认 deadline |
 | `security` | yes | 网络和环境变量权限 |
 | `models` | no | 随 Runner 分发的 Model Profile 引用 |
+| `local_detectors` | no | daemon-only 的本地目录签名；只读匹配已声明 adapter，不执行模型代码 |
 | `runtime.default_adapter` | no | 无 bundled Model Profile 的引擎（如 llama.cpp、whisper.cpp）的 ad-hoc 绑定默认 adapter；注册路径据此为任意本地模型构造内存绑定 |
 | `engine` | no | 原生引擎产物声明：`download_url` / `sha256`（强制校验）/ `binary`（最终可执行文件相对路径），以及可选 `engine.build` source-build 契约 |
 
@@ -228,6 +229,30 @@ Profile 拥有 artifact 和用户可配默认值；Runner manifest 拥有 adapte
 
 第三方 Model Profile 也可以引用已安装 Runner，不要求被写入 manifest。daemon
 必须验证 profile 的 capability 和 adapter 被 Runner 明确支持。
+
+## Local directory detectors
+
+`[[local_detectors]]` 让可信 Runner 声明可自动路由的本地目录签名：
+
+```toml
+[[local_detectors]]
+id = "qwen3-asr-mlx-directory"
+capability = "stt.v1"
+adapter = "qwen3-asr-mlx"
+required_files = ["config.json"]
+required_globs = [{ pattern = "*.safetensors", min_matches = 1 }]
+reason = "Qwen3-ASR MLX config and safetensors weights"
+
+[[local_detectors.json_predicates]]
+file = "config.json"
+pointer = "/model_type"
+equals = "qwen3_asr"
+```
+
+ID、capability、adapter 和 reason 必填；adapter 必须出现在该 Runner 的 `[[models]]`。
+paths 与 glob 是安全相对路径，glob 只支持 `*`（不跨目录）。JSON predicate 只接受
+以 `/` 开头的 JSON Pointer 与标量等值。未知字段、command、正则与脚本 hook 一律拒绝。
+daemon 对目录执行有界读取并拒绝 symlink；Runner 或模型代码不参与检测。
 
 ## Discovery result
 

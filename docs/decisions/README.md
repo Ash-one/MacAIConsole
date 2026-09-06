@@ -35,13 +35,17 @@
 ## 当前决策记录
 
 - [Runner 插件架构](2026-09-02-runner-plugin-architecture.md)——`implemented`
-  （七个 built-in Runner、通用协议、Runtime/GUI 管理面与选择审计已落地；第三方
+  （built-in Runner、通用协议、Runtime/GUI 环境与 Model Profile catalog 管理面、选择审计已落地；第三方
   Plugins、并发/cancel 和 OS 沙箱仍是独立后续边界）
 - [uv 管理全部 Python 环境](2026-09-02-uv-python-environments.md)——`implemented`
   （daemon-owned uv environment manager、七个独立 lock 与 GUI API 消费已落地）
 - [whisper.cpp Runner 迁移](2026-09-05-whisper-runner-migration.md)——`implemented`
   （官方 source build、常驻 server、兼容别名和静态 Provider 删除已落地）
 - [模型下载链路修复](2026-09-02-download-link-fixes.md)——`implemented`
+- [本地模型目录检测与 Runner 路由](2026-09-06-local-directory-model-routing.md)——`implemented`
+  （daemon-owned、无执行的目录签名检测与唯一匹配 routing token；GUI/CLI 消费同一管理 API。）
+- [GUI 与 daemon 的联合重建启动流程](2026-09-06-gui-daemon-rebuild-workflow.md)——`implemented`
+  （一个脚本停止旧进程、重建同一配置的前后端，并启动新 app。）
 
 已完成的 Kokoro 证据保存在
 [`docs/reference/kokoro-runner-verification.md`](../reference/kokoro-runner-verification.md)。

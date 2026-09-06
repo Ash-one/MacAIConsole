@@ -35,3 +35,22 @@ inherit_environment = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
 [[models]]
 profile = "profiles/Qwen3-TTS-0.6B-CustomVoice-4bit.toml"
 adapter = "qwen3-tts-customvoice"
+
+[[local_detectors]]
+id = "qwen3-tts-customvoice-mlx-directory"
+capability = "tts.v1"
+adapter = "qwen3-tts-customvoice"
+required_files = ["config.json"]
+required_directories = ["speech_tokenizer"]
+required_globs = [{ pattern = "*.safetensors", min_matches = 1 }]
+reason = "Qwen3-TTS CustomVoice MLX config, weights and speech tokenizer"
+
+[[local_detectors.json_predicates]]
+file = "config.json"
+pointer = "/model_type"
+equals = "qwen3_tts"
+
+[[local_detectors.json_predicates]]
+file = "config.json"
+pointer = "/tts_model_type"
+equals = "custom_voice"

@@ -35,3 +35,17 @@ inherit_environment = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
 [[models]]
 profile = "profiles/kokoro-82m-zh.toml"
 adapter = "kokoro-mlx"
+
+[[local_detectors]]
+id = "kokoro-mlx-directory"
+capability = "tts.v1"
+adapter = "kokoro-mlx"
+required_files = ["config.json", "model.safetensors"]
+required_directories = ["voices"]
+required_globs = [{ pattern = "voices/*.safetensors", min_matches = 1 }]
+reason = "Kokoro config, model weight and voice bank"
+
+[[local_detectors.json_predicates]]
+file = "config.json"
+pointer = "/n_token"
+equals = 178

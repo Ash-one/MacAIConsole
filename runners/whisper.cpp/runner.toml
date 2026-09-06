@@ -32,6 +32,10 @@ network_during_install = true
 network_during_runtime = false
 inherit_environment = ["HOME", "MACAI_WHISPER_SERVER"]
 
+[[models]]
+profile = "profiles/whisper-large-v3-turbo-q5.toml"
+adapter = "whisper-cpp-server"
+
 [engine]
 download_url = "https://github.com/ggml-org/whisper.cpp/archive/371b5a7561823ab2bb32142d2751e35e7534727b.tar.gz"
 sha256 = "89051d8fca516a3ad1f5c2f8f9d2fccb089afbaec338fca3f8731999babc6f81"

@@ -22,6 +22,8 @@ pub struct ModelProfile {
     pub defaults: ProfileDefaults,
     #[serde(default)]
     pub resources: ProfileResources,
+    #[serde(default)]
+    pub routing: Option<ProfileRouting>,
     pub compatibility: ProfileCompatibility,
 }
 
@@ -59,6 +61,15 @@ pub struct ProfileDefaults {
 #[serde(deny_unknown_fields)]
 pub struct ProfileResources {
     pub memory_estimate_bytes: Option<u64>,
+}
+
+/// 本地自动路由冻结时写入的审计快照；bundled Profile 不携带该段。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileRouting {
+    pub detector_id: String,
+    pub manifest_digest: String,
+    pub reason: String,
 }
 
 #[derive(Debug)]
@@ -197,6 +208,19 @@ impl ModelProfile {
             return Err(ProfileError(
                 "resources.memory_estimate_bytes must be positive".to_string(),
             ));
+        }
+        if let Some(routing) = &self.routing {
+            if self.source.source_type != "local"
+                || routing.detector_id.trim().is_empty()
+                || routing.manifest_digest.len() != 64
+                || !routing
+                    .manifest_digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+                || routing.reason.trim().is_empty()
+            {
+                return Err(ProfileError("routing snapshot requires local source, detector id, manifest digest and reason".to_string()));
+            }
         }
         Ok(())
     }

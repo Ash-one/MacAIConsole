@@ -35,3 +35,16 @@ inherit_environment = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
 [[models]]
 profile = "profiles/Qwen3-ASR-0.6B-MLX-4bit.toml"
 adapter = "qwen3-asr-mlx"
+
+[[local_detectors]]
+id = "qwen3-asr-mlx-directory"
+capability = "stt.v1"
+adapter = "qwen3-asr-mlx"
+required_files = ["config.json"]
+required_globs = [{ pattern = "*.safetensors", min_matches = 1 }]
+reason = "Qwen3-ASR MLX config and safetensors weights"
+
+[[local_detectors.json_predicates]]
+file = "config.json"
+pointer = "/model_type"
+equals = "qwen3_asr"
