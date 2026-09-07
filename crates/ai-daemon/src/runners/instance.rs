@@ -48,10 +48,21 @@ pub struct RunnerInstanceSnapshot {
 
 impl RunnerInstance {
     fn snapshot(&self) -> RunnerInstanceSnapshot {
-        self.state
+        let mut snapshot = self
+            .state
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+            .clone();
+        if snapshot.alive {
+            if let Some(pid) = snapshot.pid {
+                if let Some(bytes) = crate::process_memory::resident_memory_bytes(pid) {
+                    snapshot.resident_bytes = Some(bytes);
+                }
+            }
+        } else {
+            snapshot.resident_bytes = None;
+        }
+        snapshot
     }
 
     fn update_state(&self, update: impl FnOnce(&mut RunnerInstanceSnapshot)) {

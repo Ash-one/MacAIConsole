@@ -33,6 +33,7 @@ Owner: this file
 | Runner 权限模型 | manifest 的 network/filesystem 字段曾被描述为运行时沙箱 | v1 显式信任 Runner 等同授予 daemon 用户权限；MacAI 只强制身份、环境变量、模型/输出路径契约和进程监督。OS 级沙箱需独立安全决策 | replace |
 | GUI 模型目录 | Swift 内置推荐模型、artifact 清单并按目录内容推断 Provider | daemon 从 Model Profile 输出 catalog，并按 Profile ID 拥有下载、Runner 选择与注册；GUI 只传用户意图 | replace |
 | GUI 引擎管理用语 | 设置页同时保留旧「运行环境」与实验性 Runner 区块，运行状态称为「Provider 状态」 | 旧管理器已退役；设置页仅以「引擎」展示 daemon 管理的 Runner，运行状态以「Runner」标示同一生产引擎集合 | replace |
+| 2026-09-07 Worker 驻留内存恢复 | 迁移 Runner 后因旧模块删除导致 resident RSS 缺失（UI 降级显示「内存不可测」） | Worker Instance 快照由 daemon 统一基于 PID 与子进程树实时采样物理内存（RSS），不阻塞推理，卸载后清空 | replace |
 
 whisper.cpp 的具体 source build、常驻 server 与兼容迁移由
 [`2026-09-05-whisper-runner-migration.md`](2026-09-05-whisper-runner-migration.md) 拥有。
@@ -290,6 +291,7 @@ commit `cadfa31` 收敛了已发现的启动、契约与信任边界：
 | ad-hoc Runner 模型刷新路径、改名或删除时绑定与注册表一致 | binding lifecycle | `adhoc_runner_binding_tracks_refresh_rename_and_unregister` | passed（2026-09-05） |
 | Provider 缺省选择、显式选择和兼容别名可审计 | API + persistence | `provider_selection_records_default_alias_and_explicit_reasons` + registry roundtrip + `/v1/models`、`/api/runtime` 字段 + Swift decoding test | passed（2026-09-05） |
 | status snapshot 不等待 Runner I/O 锁，停止后无 resident | observability concurrency | `status_reflects_environment_phase_without_resident_worker` + crash/reload composition | passed（2026-09-03） |
+| Worker Instance 暴露实时 resident RSS，独立于 Runner I/O 锁并累加子进程树；停止后清空 | process supervision、observability | `process_memory` 单元测试 + `status_reflects_environment_phase_without_resident_worker` 驻留/卸载断言 | passed（2026-09-07） |
 | 未信任 Runner 不执行；已信任 Runner 以 daemon 用户权限执行 | trust boundary | discovery/trust 单测 + digest-bound staging；OS 权限边界由文档明确，不宣称沙箱 | passed for declared v1 boundary |
 | GUI 仅根据 daemon descriptor 展示 Runner 与环境状态 | real client composition | MacAIConsole `DaemonAPI` decoding/request tests + `swift test --enable-xctest` | passed |
 | GUI 推荐目录与下载动作完全来自 daemon Profile，未知 Runner/Profile 无需 Swift 分支 | catalog contract、client composition、negative removal | daemon profile projection/pull tests + Swift unknown-Runner decoding/request tests + GUI 源码负向搜索 | passed（2026-09-05） |
