@@ -46,6 +46,8 @@
   （daemon-owned、无执行的目录签名检测与唯一匹配 routing token；GUI/CLI 消费同一管理 API。）
 - [GUI 与 daemon 的联合重建启动流程](2026-09-06-gui-daemon-rebuild-workflow.md)——`implemented`
   （一个脚本停止旧进程、重建同一配置的前后端，并启动新 app。）
+- [模型管理页子条目详细设置与 Runner 识别展示](2026-09-06-model-management-detail-settings.md)——`implemented`
+  （模型管理页全条目左键点击开启详细设置，透明展示 Runner 及识别依据，提供上下文与文件管理。）
 
 已完成的 Kokoro 证据保存在
 [`docs/reference/kokoro-runner-verification.md`](../reference/kokoro-runner-verification.md)。

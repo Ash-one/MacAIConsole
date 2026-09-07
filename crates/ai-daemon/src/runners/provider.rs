@@ -94,9 +94,7 @@ impl RunnerProvider {
     /// Runtime 注册 Runner-backed 模型时调用：保存 Profile 快照绑定。
     pub async fn bind_model(&self, binding: RunnerModelBinding) {
         let mut bindings = self.bindings.write().await;
-        bindings.retain(|existing| {
-            existing.profile.id != binding.profile.id && existing.model_id != binding.model_id
-        });
+        bindings.retain(|existing| existing.model_id != binding.model_id);
         bindings.push(binding);
     }
 
