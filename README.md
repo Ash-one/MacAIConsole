@@ -1,7 +1,7 @@
 # MacAI
 
 <p align="center">
-  <img src="docs/icon-concepts/macai-console-icon-daylight-v3.png" alt="MacAI logo" width="280">
+  <img src="docs/logo.png" alt="MacAI logo" width="280">
 </p>
 
 MacAI 是面向 Apple Silicon 的开源本地 AI 运行管理系统，你可以导入任意包括大语言模型（LLM）、语音转文字模型（STT）、文字转语音模型（TTS）在内的等多种 AI 模型，在一个 Mac 原生应用中利用 Mac Silicon 的 CoreML 与 Metal 加速，并以 OpenAI 兼容方式提供所有的本地服务，将所有语音隐私数据在本地完成转写和生成。
@@ -606,7 +606,7 @@ apps/
 scripts/           # 模型下载、可选开发构建与真实 Runner smoke
 runners/           # daemon 自动发现的七个 Runner 包（含 llama.cpp 与 whisper.cpp）
 samples/           # 第三方集成示例（含 Hermes TTS/STT 适配器）
-docs/              # 当前工作提案、已落地决策、精确契约与验证参考
+docs/              # 当前工作提案、已落地决策与精确契约
 ```
 
 ## 架构基石与路线图
@@ -616,7 +616,6 @@ docs/              # 当前工作提案、已落地决策、精确契约与验�
 - [Runner 插件架构决策](docs/decisions/2026-09-02-runner-plugin-architecture.md)：所有生产模型接入收敛为可发现 Runner 与数据化 Model Profile。
 - [uv Python 环境决策](docs/decisions/2026-09-02-uv-python-environments.md)：所有 Python Runner 使用可复现、可探测的受管 `uv` 环境。
 - [whisper.cpp 与 llama.cpp 原生 Runner 迁移](docs/decisions/2026-09-05-whisper-runner-migration.md)：官方源码/二进制、常驻 server 与进程级隔离。
-- [Kokoro Runner 验证参考](docs/reference/kokoro-runner-verification.md)：保留首个真实 Runner 的可重复证据路径。
 - [管理页置顶 Runner 引擎状态与安装](docs/decisions/2026-09-07-management-view-engine-status-and-compact-recommendations.md)：一站式管理引擎环境与模型生命周期。
 
 ### 后续规划
