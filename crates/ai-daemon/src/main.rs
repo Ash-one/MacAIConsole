@@ -2267,7 +2267,7 @@ runner = ">=0.1,<0.2"
                 path: Some(ad_hoc_model.display().to_string()),
                 format: Some("bin".to_string()),
                 size_bytes: Some(5),
-                memory_estimate: Some(5),
+                memory_estimate: Some(0),
                 keep_alive: Some("always".to_string()),
                 context_length: None,
                 default_voice: None,
