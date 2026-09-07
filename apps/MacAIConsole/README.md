@@ -22,19 +22,23 @@ MacAIConsole 是 MacAI 的原生 macOS 控制台。应用只通过本地 HTTP AP
 - 完整 Xcode 或兼容的 Swift 5.9 工具链
 - 已构建的 `aiworkd`
 
-## 构建
+## 构建与打包
 
 ```bash
 cd apps/MacAIConsole
-scripts/build-app.sh release
-```
 
-该命令会停止旧 GUI 与 `aiworkd`，以相同配置重建两端并启动新的 app；模型与注册表保持不变。
+# 本地联调：停止旧 GUI 与 aiworkd，重建并启动新的 app
+scripts/build-app.sh release
+
+# 生成自包含 DMG 安装包（自动包含 aiworkd、macai、uv 与 runners）
+scripts/build-app.sh dmg
+```
 
 产物：
 
 ```text
 build/MacAIConsole.app
+build/MacAIConsole.dmg
 ```
 
 仅需单独启动已构建 app 时：

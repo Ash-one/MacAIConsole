@@ -239,6 +239,10 @@
   /* ---------- architecture ---------- */
   .arch { display: grid; grid-template-columns: 1fr auto 1.5fr auto 1.1fr; gap: 0; align-items: center; }
   .arch-col { display: flex; flex-direction: column; gap: 14px; justify-content: center; }
+  .arch-col.providers { gap: 8px; }
+  .arch-col.providers .arch-node.provider { padding: 9px 13px; }
+  .arch-col.providers .arch-node.provider b { font-size: 13px; }
+  .arch-col.providers .arch-node.provider .tag { margin-top: 3px; }
   .arch-node {
     background: var(--card); border: 1px solid var(--border); border-radius: 13px;
     padding: 14px 16px;
@@ -592,12 +596,14 @@
         </div>
       </div>
       <div class="arch-link r"><svg viewBox="0 0 34 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1 7h29m0 0-5-5m5 5-5 5"/></svg></div>
-      <div class="arch-col">
+      <div class="arch-col providers">
         <div class="arch-node provider"><b>llama.cpp Runner</b><span>LLM · GGUF</span><span class="tag">Metal / Accelerate</span></div>
-        <div class="arch-node provider"><b>mlx-lm Runner</b><span>LLM · MLX safetensors</span><span class="tag">MLX / GPU</span></div>
+        <div class="arch-node provider"><b>mlx-lm Runner</b><span>LLM · MLX safetensors</span><span class="tag">MLX / Metal</span></div>
         <div class="arch-node provider"><b>whisper.cpp Runner</b><span>STT · .bin</span><span class="tag">Core ML → Metal</span></div>
-        <div class="arch-node provider"><b>Kokoro MLX</b><span>TTS</span><span class="tag">MLX / GPU</span></div>
-        <div class="arch-node provider"><b>Qwen3-ASR 0.6B</b><span>STT</span><span class="tag">MLX 8-bit / MPS</span></div>
+        <div class="arch-node provider"><b>Qwen3-ASR Runner</b><span>STT · MLX 4-bit</span><span class="tag">MLX / Metal GPU</span></div>
+        <div class="arch-node provider"><b>sherpa-onnx Runner</b><span>STT · Zipformer</span><span class="tag">CPU</span></div>
+        <div class="arch-node provider"><b>Qwen3-TTS Runner</b><span>TTS · CustomVoice</span><span class="tag">MLX / Metal GPU</span></div>
+        <div class="arch-node provider"><b>Kokoro Runner</b><span>TTS · 82M-zh</span><span class="tag">MLX / Metal GPU</span></div>
       </div>
     </div>
     <p class="arch-note reveal">worker 崩溃时，daemon 返回 <code class="inline-code">backend_crashed</code> 这样的结构化错误，其余模型继续服务。另外，显式指定 provider 是硬选择——不可用就失败，绝不静默回退。悄悄换 provider 省事，但出了问题你永远查不到原因。</p>
@@ -638,8 +644,12 @@
           <div class="meta">ggml .bin 模型 · large-v3-turbo 可选 ANE 编码器</div>
         </div>
         <div class="prov-row">
-          <div class="name">Qwen3-ASR 0.6B <span class="badge">MLX 8-bit</span> <span class="badge gray">MPS 回退</span></div>
-          <div class="meta">多语言识别 · 可指定语言提示</div>
+          <div class="name">Qwen3-ASR 0.6B <span class="badge">MLX 4-bit</span> <span class="badge gray">Metal GPU</span></div>
+          <div class="meta">多语言识别 · 4-bit 量化 · 可指定语言提示</div>
+        </div>
+        <div class="prov-row">
+          <div class="name">sherpa-onnx <span class="badge">CPU</span></div>
+          <div class="meta">Zipformer zh-int8 · 中文流式分块转写，长音频内存平稳</div>
         </div>
       </div>
       <div class="moda reveal">
@@ -647,14 +657,14 @@
           <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg></div>
           <h3>TTS · 语音合成</h3>
         </div>
-        <p class="sec-sub" style="font-size:13.5px">中英混读，长文本自动分段拼接，音色随便挑。</p>
+        <p class="sec-sub" style="font-size:13.5px">中英混读，长文本自动分段拼接，多款音色随心挑选。</p>
         <div class="prov-row">
-          <div class="name">Kokoro-82M-zh <span class="badge">MLX</span></div>
-          <div class="meta">常驻 Python worker · 复用 venv · 可设默认音色</div>
+          <div class="name">Kokoro-82M-zh <span class="badge">MLX</span> <span class="badge gray">Metal GPU</span></div>
+          <div class="meta">中英双语 · 常驻 Python worker · 统一 uv 环境 · 可设默认音色</div>
         </div>
         <div class="prov-row">
-          <div class="name">macos_say <span class="badge gray">系统兜底</span></div>
-          <div class="meta">零依赖的系统 TTS 通道</div>
+          <div class="name">Qwen3-TTS 0.6B <span class="badge">MLX 4-bit</span> <span class="badge gray">Metal GPU</span></div>
+          <div class="meta">CustomVoice 4-bit · 内置 9 款官方音色 · 支持逗号携带情绪指令</div>
         </div>
       </div>
     </div>
@@ -670,12 +680,12 @@
         <p class="sec-sub">SwiftUI 原生应用，连的还是同一个 daemon——本地不加载模型，也不维护第二套状态。</p>
         <ul class="feat-list">
           <li>Runtime 状态与系统内存压力实时可见</li>
+          <li>「管理」页顶端置顶展示全部 7 个 Runner 引擎状态与一键安装控制</li>
           <li>模型仓库：注册、加载、卸载、改名与详细设置</li>
           <li>推荐模型一键下载（如 Qwen3 8B · MLX 4-bit）</li>
           <li>Chat / STT / TTS 任务记录与详情回看</li>
           <li>GUI 与 daemon 双端日志，级别过滤着色</li>
           <li>菜单栏快速查看状态、启停 daemon</li>
-          <li>Runner 引擎一键安装到 <code class="inline-code">.build/</code></li>
         </ul>
       </div>
       <div class="mock reveal">
@@ -686,22 +696,21 @@
         <div class="mock-body">
           <div class="mock-side">
             <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>运行状态</div>
-            <div class="si on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>模型</div>
-            <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a8 8 0 0 1-8 8H4l2.5-2.5A8 8 0 1 1 21 12Z"/></svg>Chat</div>
-            <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/></svg>语音转写</div>
-            <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>语音合成</div>
-            <div class="sep"></div>
+            <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M7 8h10M7 12h10M7 16h6"/></svg>任务</div>
+            <div class="si on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>管理</div>
             <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5V6a2 2 0 0 1 2-2h14v16H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>日志</div>
+            <div class="sep"></div>
+            <div class="si"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>设置</div>
           </div>
           <div class="mock-main">
             <div class="mock-stats">
               <div class="mock-stat"><div class="k">内存预算</div><div class="v">36.0 <small>GB</small></div></div>
-              <div class="mock-stat"><div class="k">驻留模型</div><div class="v">2</div></div>
+              <div class="mock-stat"><div class="k">受管引擎</div><div class="v" style="color:var(--green)">7 <small>已就绪</small></div></div>
               <div class="mock-stat"><div class="k">活跃请求</div><div class="v" style="color:var(--green)">0</div></div>
             </div>
             <div class="mock-row"><div><div class="m-name">qwen3-8b</div><div class="m-sub">llama.cpp · Metal · keep-alive 5m</div></div><span class="st resident">resident · 6.2 GB</span></div>
             <div class="mock-row"><div><div class="m-name">whisper-large-v3-turbo</div><div class="m-sub">whisper.cpp · Core ML</div></div><span class="st idle">idle · 已卸载</span></div>
-            <div class="mock-row"><div><div class="m-name">Kokoro-82M-zh</div><div class="m-sub">Kokoro MLX · 常驻 worker</div></div><span class="st ready">ready</span></div>
+            <div class="mock-row"><div><div class="m-name">Qwen3-TTS-0.6B</div><div class="m-sub">qwen3-tts · MLX 4-bit · Vivian</div></div><span class="st ready">ready</span></div>
           </div>
         </div>
       </div>
@@ -714,7 +723,7 @@
     <div class="sec-head reveal">
       <div class="overline">快速开始</div>
       <h2>五分钟跑起来</h2>
-      <p class="sec-sub">需要一台 Apple Silicon Mac、macOS 14+、Rust stable 和 Xcode Command Line Tools；Kokoro TTS 还要 Python 3.12。</p>
+      <p class="sec-sub">需要一台 Apple Silicon Mac、macOS 14+、Rust stable 和 Xcode Command Line Tools；运行 Python 系列 Runner（MLX-LM、Kokoro、Qwen3-ASR/TTS、sherpa-onnx）需 Python 3.12。</p>
     </div>
     <div class="steps">
       <div class="step reveal">
@@ -763,7 +772,7 @@ curl http://127.0.0.1:11435/v1/chat/completions <span class="arg">\</span>
         <div class="step-no">4</div>
         <div>
           <h3>打开原生控制台（可选）</h3>
-          <p class="step-desc">通过 daemon 或 GUI「设置 → 引擎」安装 llama.cpp、whisper.cpp 和其他 Runner；原生引擎与 Python 环境共享同一管理面。</p>
+          <p class="step-desc">通过 daemon 或 GUI「管理」页顶端一键安装 llama.cpp、whisper.cpp 和其他 Runner；原生引擎与 Python 环境共享同一管理面。</p>
           <div class="codeblock">
             <button class="copy-btn" data-copy>复制</button>
             <pre>curl -X POST http://127.0.0.1:11435/api/runners/org.macai.llama.cpp/install
@@ -780,11 +789,11 @@ open build/MacAIConsole.app</pre>
       </div>
     </div>
     <div class="req-row reveal">
-      <span class="lbl">构建脚本内置：</span>
+      <span class="lbl">受管引擎生态：</span>
       <span class="pill">llama.cpp Runner（固定产物 + sha256）</span>
       <span class="pill">whisper.cpp Runner（官方 source + sha256）</span>
-      <span class="pill">whisper 模型下载</span>
-      <span class="pill">七个 Runner 的 uv 受管环境一键安装</span>
+      <span class="pill">whisper 模型脚本下载</span>
+      <span class="pill">七个 Runner 的环境由 daemon 统一管理</span>
     </div>
   </div>
 </section>
@@ -853,7 +862,7 @@ macai transcribe · speak · voice · logging · serve</pre>
       <p class="sec-sub">项目还在活跃开发。当前实现状态以 README、代码和决策记录为准。</p>
     </div>
     <div class="roadmap-grid reveal">
-      <div class="rm">MLX-native ASR（mlx-whisper / parakeet-mlx）</div>
+      <div class="rm">mlx-whisper / parakeet-mlx 适配</div>
       <div class="rm">LLM / STT / TTS benchmark 框架（MLX vs llama.cpp 对比）</div>
       <div class="rm">per-device 请求队列与持久任务回放</div>
       <div class="rm">VAD、streaming STT 与 streaming TTS</div>
