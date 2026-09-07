@@ -28,6 +28,7 @@ jobs:
         with:
           version: "0.9.21"
           python-version: "3.12"
+          enable-cache: false
 
       - uses: Swatinem/rust-cache@v2
 
