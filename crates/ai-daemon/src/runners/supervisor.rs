@@ -1,6 +1,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -82,6 +83,7 @@ pub struct RunnerProcess {
     stdin: ChildStdin,
     stdout: ChildStdout,
     stderr_task: Option<JoinHandle<Vec<u8>>>,
+    stderr_buffer: Arc<Mutex<Vec<u8>>>,
     package_staging: PathBuf,
     max_frame_bytes: usize,
     shutdown_timeout: Duration,
@@ -90,6 +92,7 @@ pub struct RunnerProcess {
 struct StartupGuard {
     child: Option<Child>,
     stderr_task: Option<JoinHandle<Vec<u8>>>,
+    stderr_buffer: Arc<Mutex<Vec<u8>>>,
 }
 
 #[cfg(unix)]
@@ -220,6 +223,7 @@ impl RunnerProcess {
         let mut startup = StartupGuard {
             child: Some(child),
             stderr_task: None,
+            stderr_buffer: Arc::new(Mutex::new(Vec::new())),
         };
         let result = async {
             let stdin = startup
@@ -237,8 +241,8 @@ impl RunnerProcess {
                 .stderr
                 .take()
                 .ok_or(SupervisorError::MissingPipe("stderr"))?;
+            let buffer = startup.stderr_buffer.clone();
             startup.stderr_task = Some(tokio::spawn(async move {
-                let mut captured = Vec::new();
                 let mut chunk = [0_u8; 4096];
                 loop {
                     let read = match stderr.read(&mut chunk).await {
@@ -248,18 +252,37 @@ impl RunnerProcess {
                     if read == 0 {
                         break;
                     }
-                    let remaining = MAX_STDERR_CAPTURE_BYTES.saturating_sub(captured.len());
-                    captured.extend_from_slice(&chunk[..read.min(remaining)]);
+                    let mut guard = buffer.lock().unwrap();
+                    let remaining = MAX_STDERR_CAPTURE_BYTES.saturating_sub(guard.len());
+                    guard.extend_from_slice(&chunk[..read.min(remaining)]);
                 }
-                captured
+                let guard = buffer.lock().unwrap();
+                guard.clone()
             }));
             let boot_timeout = Duration::from_secs(manifest.timeouts.boot_seconds);
-            let hello = timeout(
+            let hello_res = timeout(
                 boot_timeout,
                 read_frame(&mut stdout, DEFAULT_MAX_FRAME_BYTES),
             )
             .await
-            .map_err(|_| SupervisorError::Deadline("boot"))??;
+            .map_err(|_| SupervisorError::Deadline("boot"))?;
+            let hello = match hello_res {
+                Ok(hello) => hello,
+                Err(ProtocolError::Io(error)) => {
+                    tokio::task::yield_now().await;
+                    let stderr = String::from_utf8_lossy(&startup.stderr_buffer.lock().unwrap())
+                        .trim()
+                        .to_string();
+                    if !stderr.is_empty() {
+                        return Err(SupervisorError::Protocol(ProtocolError::InvalidEnvelope(
+                            format!("runner protocol I/O error ({error}): {stderr}"),
+                        )));
+                    } else {
+                        return Err(SupervisorError::Protocol(ProtocolError::Io(error)));
+                    }
+                }
+                Err(other) => return Err(SupervisorError::Protocol(other)),
+            };
             validate_hello(manifest, &hello)?;
             Ok((stdin, stdout))
         }
@@ -274,6 +297,7 @@ impl RunnerProcess {
                 stdin,
                 stdout,
                 stderr_task: startup.stderr_task.take(),
+                stderr_buffer: startup.stderr_buffer.clone(),
                 package_staging,
                 max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
                 shutdown_timeout: Duration::from_secs(manifest.timeouts.shutdown_seconds),
@@ -286,16 +310,35 @@ impl RunnerProcess {
         }
     }
 
+    pub fn captured_stderr(&self) -> String {
+        let guard = self.stderr_buffer.lock().unwrap();
+        String::from_utf8_lossy(&guard).trim().to_string()
+    }
+
     pub async fn send(&mut self, envelope: &Envelope) -> Result<(), SupervisorError> {
         write_frame(&mut self.stdin, envelope).await?;
         Ok(())
     }
 
     pub async fn receive(&mut self, deadline: Duration) -> Result<Envelope, SupervisorError> {
-        timeout(deadline, read_frame(&mut self.stdout, self.max_frame_bytes))
+        let read_result = timeout(deadline, read_frame(&mut self.stdout, self.max_frame_bytes))
             .await
-            .map_err(|_| SupervisorError::Deadline("response"))?
-            .map_err(Into::into)
+            .map_err(|_| SupervisorError::Deadline("response"))?;
+        match read_result {
+            Ok(envelope) => Ok(envelope),
+            Err(ProtocolError::Io(error)) => {
+                tokio::task::yield_now().await;
+                let stderr = self.captured_stderr();
+                if !stderr.is_empty() {
+                    Err(SupervisorError::Protocol(ProtocolError::InvalidEnvelope(
+                        format!("runner protocol I/O error ({error}): {stderr}"),
+                    )))
+                } else {
+                    Err(SupervisorError::Protocol(ProtocolError::Io(error)))
+                }
+            }
+            Err(other) => Err(SupervisorError::Protocol(other)),
+        }
     }
 
     pub async fn request(
