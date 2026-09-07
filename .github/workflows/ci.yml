@@ -34,6 +34,8 @@ jobs:
       - run: cargo fmt --all -- --check
 
       - run: cargo test --workspace
+        env:
+          AIWORKD_MEMORY_BUDGET: "17179869184"
 
   console:
     name: MacAIConsole (swift test)

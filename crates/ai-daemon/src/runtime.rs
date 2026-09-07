@@ -89,6 +89,7 @@ impl Runtime {
     /// 纯内存构造，仅供单元测试：额外注入 mock 与 macos-say 测试 provider。
     pub fn new() -> Self {
         let mut runtime = Self::with_options_and_seed(None, Vec::new(), HashMap::new());
+        runtime.memory_budget = None;
         runtime.inject_test_providers();
         runtime
     }
