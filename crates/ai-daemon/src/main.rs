@@ -1757,13 +1757,31 @@ async fn bootstrap_runners_from_root(
                 "runner model bound"
             );
         }
-        if let Some(adapter) = manifest.runtime.default_adapter.as_deref() {
-            for registered in runtime
-                .list_models()
-                .await
-                .into_iter()
-                .filter(|entry| entry.profile.is_none() && entry.spec.provider == runner_id)
-            {
+        for registered in runtime
+            .list_models()
+            .await
+            .into_iter()
+            .filter(|entry| entry.spec.provider == runner_id)
+        {
+            if let Some(profile) = runtime.registered_runner_profile(&registered.spec.id).await {
+                let kind = if profile.capabilities.iter().any(|cap| cap == "stt.v1") {
+                    "stt"
+                } else if profile.capabilities.iter().any(|cap| cap == "tts.v1") {
+                    "tts"
+                } else {
+                    "llm"
+                };
+                if let Ok(model_dir) = profile_artifact_path(&models_root, kind, &profile) {
+                    provider
+                        .bind_model(RunnerModelBinding {
+                            model_id: registered.spec.id.clone(),
+                            profile,
+                            environment_id: manifest.runtime.id.clone(),
+                            artifact_root: model_dir,
+                        })
+                        .await;
+                }
+            } else if let Some(adapter) = manifest.runtime.default_adapter.as_deref() {
                 let Some(path) = registered.spec.path.as_deref() else {
                     continue;
                 };

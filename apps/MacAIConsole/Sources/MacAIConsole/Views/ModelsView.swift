@@ -6,6 +6,7 @@ struct ModelsView: View {
     @State private var repoModels: [RepoModel] = []
     @State private var inspections: [String: LocalInspection] = [:]
     @State private var showingAddSheet = false
+    @State private var selectedModel: ModelDetailTarget?
 
     var body: some View {
         ScrollView {
@@ -47,9 +48,33 @@ struct ModelsView: View {
         .sheet(isPresented: $showingAddSheet, onDismiss: { Task { await rescanRepo() } }) {
             AddModelSheet()
         }
+        .sheet(item: $selectedModel) { target in
+            ModelDetailSheet(
+                target: target,
+                inspection: inspection(for: target),
+                onUpdate: {
+                    await rescanRepo()
+                    try? await controller.refresh()
+                }
+            )
+            .environment(controller)
+            .environment(router)
+        }
         .task {
             controller.bootstrapIfNeeded()
             await rescanRepo()
+        }
+    }
+
+    private func inspection(for target: ModelDetailTarget) -> LocalInspection? {
+        switch target {
+        case .registered(let entry):
+            guard let path = entry.path else { return nil }
+            return inspections[path]
+        case .repo(let model):
+            return inspections[model.path]
+        case .profile:
+            return nil
         }
     }
 
@@ -123,7 +148,8 @@ struct ModelsView: View {
                         isLoaded: loadedIDs.contains(model.id),
                         providerAvailable: controller.providerIsAvailable(model.runner),
                         providerMissing: diagnostics.missing,
-                        unavailableReason: diagnostics.reason
+                        unavailableReason: diagnostics.reason,
+                        onSelect: { selectedModel = .profile(model) }
                     ) {
                         Task {
                             if await controller.installRecommended(model) {
@@ -169,7 +195,8 @@ struct ModelsView: View {
                                 RegisteredModelRow(
                                     entry: entry,
                                     isLoaded: loadedIDs.contains(entry.id),
-                                    isWorkerProcess: isWorker(entry)
+                                    isWorkerProcess: isWorker(entry),
+                                    onSelect: { selectedModel = .registered(entry) }
                                 )
                                 if entry.id != entries(ofType: type).last?.id { HairlineDivider() }
                             }
@@ -225,7 +252,8 @@ struct ModelsView: View {
                                             isRegistered: registeredPaths.contains(model.path),
                                             isRecommended: controller.modelProfiles.contains {
                                                 $0.localURL.standardizedFileURL == URL(fileURLWithPath: model.path).standardizedFileURL
-                                            }
+                                            },
+                                            onSelect: { selectedModel = .repo(model) }
                                         )
                                         if model.id != entries.last?.id { HairlineDivider() }
                                     }
@@ -307,6 +335,7 @@ struct RegisteredModelRow: View {
     let isLoaded: Bool
     /// true 表示 Provider 为 worker 隔离：加载=拉起独立子进程，卸载=结束该进程。
     let isWorkerProcess: Bool
+    let onSelect: () -> Void
 
     @State private var showRenameSheet = false
     @State private var renameDraft = ""
@@ -322,23 +351,11 @@ struct RegisteredModelRow: View {
     var body: some View {
         HStack(spacing: 10) {
             ModelTypeIcon(type: entry.modelType)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 8) {
-                    Text(entry.id)
-                        .font(.body.weight(.semibold))
-                    if isWorkerProcess {
-                        Chip(text: "独立进程", color: Theme.accent)
-                    }
-                }
-                Text(entry.ownedBy)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                if let requested = entry.requestedProvider,
-                   requested != entry.ownedBy.split(separator: "/").last.map(String.init) {
-                    Text("请求 \(requested) → \(entry.ownedBy)")
-                        .font(.caption2)
-                        .foregroundStyle(Color.secondary)
-                        .help(entry.providerSelectionReason ?? "daemon Provider 裁决")
+            HStack(spacing: 8) {
+                Text(entry.id)
+                    .font(.body.weight(.semibold))
+                if isWorkerProcess {
+                    Chip(text: "独立进程", color: Theme.accent)
                 }
             }
             Spacer(minLength: 12)
@@ -382,6 +399,8 @@ struct RegisteredModelRow: View {
         .padding(.vertical, 10)
         .padding(.horizontal, 8)
         .hoverableRow()
+        .onTapGesture { onSelect() }
+        .help("点击查看详细设置")
         .contextMenu {
             Button {
                 renameDraft = entry.id
@@ -475,6 +494,7 @@ struct RepoModelRow: View {
     let isLoaded: Bool
     let isRegistered: Bool
     let isRecommended: Bool
+    let onSelect: () -> Void
 
     @State private var contextDraft = ""
     @State private var isReloading = false
@@ -495,22 +515,29 @@ struct RepoModelRow: View {
         HStack(spacing: 10) {
             ModelTypeIcon(type: model.modelType)
                 .opacity(isRegistered ? 0.55 : 1)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(model.fileName)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(isRegistered ? .secondary : .primary)
-                    if isRecommended {
-                        Image(systemName: "star.fill")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.yellow)
-                            .help("推荐模型")
-                    }
+            HStack(spacing: 8) {
+                Text(model.fileName)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(isRegistered ? .secondary : .primary)
+                if isRecommended {
+                    Image(systemName: "star.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.yellow)
+                        .help("推荐模型")
                 }
-                Text(repositorySubtitle)
-                    .font(.caption)
-                    .foregroundStyle(model.detectionError == nil ? Color.secondary : Theme.warning)
-                    .lineLimit(1)
+                if model.isDirectory {
+                    Chip(text: "目录")
+                } else {
+                    Text(Format.bytes(model.sizeBytes))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                if let error = model.detectionError {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(Theme.warning)
+                        .help("GGUF 检测失败：\(error)")
+                }
             }
             Spacer(minLength: 12)
             if isLLM, !model.isDirectory, model.detectionError == nil {
@@ -524,21 +551,9 @@ struct RepoModelRow: View {
         .padding(.vertical, 10)
         .padding(.horizontal, 8)
         .hoverableRow()
+        .onTapGesture { onSelect() }
+        .help("点击查看详细设置")
         .onAppear { contextDraft = Self.displayValue(ModelRepository.contextLength(for: model.modelID)) }
-    }
-
-    private var repositorySubtitle: String {
-        var parts = [model.isDirectory ? "目录" : Format.bytes(model.sizeBytes)]
-        if let inspection {
-            parts.append(inspection.status == "recognized" ? (inspection.matches.first?.reason ?? "已识别") : (inspection.diagnostics.first ?? inspection.status))
-        }
-        if let metadata = model.ggufMetadata {
-            parts.append(metadata.summary)
-        } else if let detectionError = model.detectionError {
-            parts.append("GGUF 检测失败：\(detectionError)")
-        }
-        parts.append("Models/\(model.modelType)/")
-        return parts.joined(separator: " · ")
     }
 
     /// TTS 试听：合成一句固定文本并立即播放。
@@ -754,6 +769,7 @@ struct ProfileModelRow: View {
     let providerMissing: Bool
     /// Provider 不可用的具体原因，来自 daemon 的 reason / install_hint。
     let unavailableReason: String?
+    let onSelect: () -> Void
     let action: () -> Void
 
     private var isBusy: Bool {
@@ -823,6 +839,8 @@ struct ProfileModelRow: View {
         .padding(.vertical, 11)
         .padding(.horizontal, 8)
         .hoverableRow()
+        .onTapGesture { onSelect() }
+        .help("点击查看详细设置")
     }
 
     /// Provider 不可用时的引导：统一指向设置页「引擎」区块——引擎安装

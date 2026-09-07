@@ -396,16 +396,10 @@ impl Runtime {
         }
         {
             let registry = self.registry.read().await;
-            let Some(existing) = registry.get(id) else {
+            if !registry.contains_key(id) {
                 return Err(ProviderError::new(
                     AIError::ModelNotFound,
                     format!("model '{id}' not found"),
-                ));
-            };
-            if existing.profile.is_some() {
-                return Err(ProviderError::new(
-                    AIError::InvalidRequest,
-                    "Runner-backed Model Profile IDs are stable and cannot be renamed",
                 ));
             }
             if registry.contains_key(new_id) {
@@ -428,35 +422,28 @@ impl Runtime {
         ) {
             self.unload_model(id).await?;
         }
-        let adhoc_runner_provider = {
+        let runner_provider = {
             let registry = self.registry.read().await;
             registry.get(id).and_then(|entry| {
-                (entry.profile.is_none() && entry.spec.provider.starts_with("org.macai."))
+                entry
+                    .spec
+                    .provider
+                    .starts_with("org.macai.")
                     .then(|| entry.spec.provider.clone())
             })
         };
-        if let Some(provider_id) = adhoc_runner_provider {
+        if let Some(provider_id) = runner_provider {
             let provider = self
                 .runner_providers
                 .read()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .get(&provider_id)
-                .cloned()
-                .ok_or_else(|| {
-                    ProviderError::new(
-                        AIError::ProviderUnavailable,
-                        format!("Runner provider '{provider_id}' is not attached"),
-                    )
-                })?;
-            let renamed = provider
-                .rename_bound_model(id, new_id)
-                .await
-                .map_err(|message| ProviderError::new(AIError::InvalidRequest, message))?;
-            if !renamed {
-                return Err(ProviderError::new(
-                    AIError::ModelNotFound,
-                    format!("Runner model binding '{id}' not found"),
-                ));
+                .cloned();
+            if let Some(provider) = provider {
+                provider
+                    .rename_bound_model(id, new_id)
+                    .await
+                    .map_err(|message| ProviderError::new(AIError::InvalidRequest, message))?;
             }
         }
         let mut entry = {
@@ -484,16 +471,19 @@ impl Runtime {
     /// 从注册表中删除一个模型。已加载的模型会先卸载（终止 worker）。
     /// 返回 Err 表示模型不存在或卸载失败。
     pub async fn unregister_model(&self, id: &str) -> Result<(), ProviderError> {
-        let adhoc_runner_provider = self.registry.read().await.get(id).map(|entry| {
-            (entry.profile.is_none() && entry.spec.provider.starts_with("org.macai."))
+        let runner_provider = self.registry.read().await.get(id).and_then(|entry| {
+            entry
+                .spec
+                .provider
+                .starts_with("org.macai.")
                 .then(|| entry.spec.provider.clone())
         });
-        let Some(adhoc_runner_provider) = adhoc_runner_provider else {
+        if !self.registry.read().await.contains_key(id) {
             return Err(ProviderError::new(
                 AIError::ModelNotFound,
                 format!("model '{id}' not found"),
             ));
-        };
+        }
         // 已加载则先卸载，避免孤儿 worker。读守卫必须在 unload 前释放，理由同
         // rename_model：if let 的 scrutinee 临时值会在 unload 期间占住读锁，
         // 与 unload_model -> set_state 的写锁互等死锁。
@@ -511,7 +501,7 @@ impl Runtime {
         if let Some(store) = &self.store {
             store.remove(id);
         }
-        if let Some(provider_id) = adhoc_runner_provider {
+        if let Some(provider_id) = runner_provider {
             let provider = {
                 self.runner_providers
                     .read()
@@ -1647,11 +1637,15 @@ runner = ">=0.1,<0.2"
             .await
             .expect("registered profile must survive restart");
         assert_eq!(restored_profile.digest().unwrap(), digest);
-        let rename_error = restored
+        restored
             .rename_model(&profile.id, "renamed-runner-model")
             .await
-            .unwrap_err();
-        assert_eq!(rename_error.kind, AIError::InvalidRequest);
+            .expect("runner profile model rename succeeds");
+        let renamed_profile = restored
+            .registered_runner_profile("renamed-runner-model")
+            .await
+            .expect("renamed model profile must be accessible by new id");
+        assert_eq!(renamed_profile.digest().unwrap(), digest);
         let store = crate::registry::RegistryStore::open(&path).unwrap();
         let profiles = store.load_profiles();
         assert_eq!(profiles.len(), 1);
@@ -1659,7 +1653,7 @@ runner = ">=0.1,<0.2"
         assert_eq!(profiles[0].runner, "org.macai.kokoro");
         assert_eq!(profiles[0].digest, digest);
         assert_eq!(
-            store.load_model_profile_bindings()[&profile.id].digest,
+            store.load_model_profile_bindings()["renamed-runner-model"].digest,
             frozen.digest
         );
         drop(restored);
