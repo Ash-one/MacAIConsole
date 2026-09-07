@@ -29,7 +29,7 @@ struct RootView: View {
                     Label("设置", systemImage: "gearshape")
                         .tag(Page.settings)
                 }
-                .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 280)
             }
         } detail: {
             Group {
@@ -59,20 +59,27 @@ struct RootView: View {
         .task { controller.bootstrapIfNeeded() }
     }
 
-    /// 侧边栏顶部品牌区：渐变标 + 应用名 + 守护进程相位点。
+    /// 侧边栏顶部品牌区：渐变标 + 应用名（两行）+ 守护进程相位点。
     private var sidebarHeader: some View {
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .fill(Theme.accentGradient)
-                .frame(width: 24, height: 24)
+                .frame(width: 28, height: 28)
                 .overlay {
                     Image(systemName: "cpu.fill")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(.black.opacity(0.8))
                 }
-            Text("MacAI Console")
-                .font(.headline)
-            Spacer(minLength: 8)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("MacAI")
+                    .font(.headline)
+                    .lineLimit(1)
+                Text("Console")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 10)
             StatusDot(
                 color: phaseColor,
                 pulse: controller.phase != .offline
@@ -81,8 +88,8 @@ struct RootView: View {
             .accessibilityLabel("守护进程\(phaseLabel)")
         }
         .padding(.horizontal, 16)
-        .padding(.top, 14)
-        .padding(.bottom, 6)
+        .padding(.top, 16)
+        .padding(.bottom, 10)
     }
 
     private var phaseColor: Color {
