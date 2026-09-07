@@ -9,8 +9,13 @@ final class AppRouter {
 
     init() {}
 
-    /// 页面内引导跳转：如模型页「Provider 环境未就绪」引导用户去设置安装引擎。
+    /// 页面内引导跳转：如运行状态页内存预算卡片「修改」跳转设置页。
     func goToSettings() {
         page = .settings
+    }
+
+    /// 页面内引导跳转：导航至「管理」页（包含顶端引擎状态与模型管理）。
+    func goToManagement() {
+        page = .models
     }
 }

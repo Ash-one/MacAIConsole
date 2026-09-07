@@ -154,9 +154,10 @@ struct RunnerEntry: Decodable, Identifiable, Hashable {
     var environmentId: String
     var phase: String
     var models: [RunnerModel]
+    var capabilities: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case id, root, state, models
+        case id, root, state, models, capabilities
         case environmentId = "environment_id"
         case phase
     }

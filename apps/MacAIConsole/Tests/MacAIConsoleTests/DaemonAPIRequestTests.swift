@@ -108,6 +108,39 @@ final class DaemonAPIRequestTests: XCTestCase {
         XCTAssertEqual(limits, [1, 100])
     }
 
+    func testRunnersDecodesEngineEntriesAndCapabilities() async throws {
+        let json = """
+        {
+            "data": [
+                {
+                    "id": "org.macai.llama-cpp",
+                    "root": "/runners/llama.cpp",
+                    "state": "trusted",
+                    "environment_id": "llama-cpp",
+                    "phase": "ready",
+                    "capabilities": ["chat", "completion"],
+                    "models": []
+                }
+            ]
+        }
+        """
+        let api = try makeAPI(status: 200, body: json)
+        let runners = try await api.runners()
+        XCTAssertEqual(runners.count, 1)
+        let first = try XCTUnwrap(runners.first)
+        XCTAssertEqual(first.id, "org.macai.llama-cpp")
+        XCTAssertEqual(first.phase, "ready")
+        XCTAssertEqual(first.capabilities, ["chat", "completion"])
+    }
+
+    func testInstallRunnerSendsPostToRunnersInstallEndpoint() async throws {
+        let api = try makeAPI(status: 200, body: #"{"environment_id":"llama-cpp","phase":"ready"}"#)
+        let res = try await api.installRunner("org.macai.llama-cpp")
+        XCTAssertEqual(res.phase, "ready")
+        XCTAssertEqual(RecordingURLProtocol.recorded.first?.url?.path, "/api/runners/org.macai.llama-cpp/install")
+        XCTAssertEqual(RecordingURLProtocol.recorded.first?.httpMethod, "POST")
+    }
+
     private func makeAPI(status: Int, body: String) throws -> DaemonAPI {
         RecordingURLProtocol.enqueue(status: status, body: body)
         let configuration = URLSessionConfiguration.ephemeral
