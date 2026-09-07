@@ -306,10 +306,13 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "downloads and builds whisper.cpp from source"]
     async fn whisper_source_engine_installs_when_smoke_is_enabled() {
-        if std::env::var("MACAI_WHISPER_ENGINE_INSTALL_SMOKE").as_deref() != Ok("1") {
-            return;
-        }
+        assert_eq!(
+            std::env::var("MACAI_WHISPER_ENGINE_INSTALL_SMOKE").as_deref(),
+            Ok("1"),
+            "set MACAI_WHISPER_ENGINE_INSTALL_SMOKE=1 before running this ignored smoke test"
+        );
         let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runners/whisper.cpp");
         let manifest = crate::runners::RunnerManifest::load(&package.join("runner.toml")).unwrap();
         let asset = manifest

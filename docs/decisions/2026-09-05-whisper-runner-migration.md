@@ -83,9 +83,9 @@ whisper.cpp 官方 release 直接证明。本决策选择固定官方 source arc
 ### 2026-09-05 target-machine evidence
 
 - 官方 source archive SHA-256：`89051d8fca516a3ad1f5c2f8f9d2fccb089afbaec338fca3f8731999babc6f81`；
-- `MACAI_WHISPER_ENGINE_INSTALL_SMOKE=1 ... cargo test -p ai-daemon whisper_source_engine_installs_when_smoke_is_enabled -- --nocapture`：下载、构建、提升及 `--help` smoke passed；
+- `MACAI_WHISPER_ENGINE_INSTALL_SMOKE=1 ... cargo test -p ai-daemon whisper_source_engine_installs_when_smoke_is_enabled -- --ignored --nocapture`：下载、构建、提升及 `--help` smoke passed；
 - base 模型 SHA-256：`60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe`；
-- `cargo test -p ai-daemon --test runner_whisper_real_wiring -- --nocapture`：load → infer → unload → shutdown passed，输入 `speech.wav` 的实际结果为“你好,这是一段视听文本。”，language=`chinese`；
+- `cargo test -p ai-daemon --test runner_whisper_real_wiring -- --ignored --nocapture`：load → infer → unload → shutdown passed，输入 `speech.wav` 的实际结果为“你好,这是一段视听文本。”，language=`chinese`；
 - `cargo test --workspace`、MacAIConsole 36 tests、七个 Runner 的 42 个 adapter tests、
   `cargo fmt --all -- --check` 与 `git diff --check` passed。
 - 异常清理修正后，`dropping_exited_runner_kills_its_descendant_process_group` 验证 daemon

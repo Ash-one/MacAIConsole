@@ -765,6 +765,10 @@ impl Runtime {
 
     pub async fn unload_model(&self, id: &str) -> Result<(), ProviderError> {
         let _lifecycle = self.lifecycle_lock.lock().await;
+        self.unload_model_locked(id).await
+    }
+
+    async fn unload_model_locked(&self, id: &str) -> Result<(), ProviderError> {
         self.ensure_model_idle(id)?;
         let handle = self.handles.read().await.get(id).cloned();
         let Some(handle) = handle else {
@@ -1107,7 +1111,7 @@ impl Runtime {
                 .get(&id)
                 .and_then(|entry| entry.spec.memory_estimate)
                 .unwrap_or(0);
-            match self.unload_model(&id).await {
+            match self.unload_model_locked(&id).await {
                 Ok(()) => {
                     tracing::info!(model = %id, freed_bytes = bytes, "LRU evicted model");
                     freed += bytes;
@@ -1297,6 +1301,23 @@ mod tests {
         }
     }
 
+    fn mock_spec_with_memory(id: &str, memory_estimate: u64) -> ModelSpec {
+        let mut spec = mock_spec();
+        spec.id = id.to_string();
+        spec.memory_estimate = Some(memory_estimate);
+        spec.keep_alive = Some("10m".to_string());
+        spec
+    }
+
+    async fn model_state(runtime: &Runtime, id: &str) -> Option<String> {
+        runtime
+            .registry
+            .read()
+            .await
+            .get(id)
+            .map(|entry| entry.state.clone())
+    }
+
     #[test]
     fn provider_status_must_confirm_ready_resident_model() {
         let ready_mock = ProviderStatus {
@@ -1375,6 +1396,63 @@ mod tests {
         drop(lease);
         runtime.unload_model("mock-test").await.unwrap();
         assert!(runtime.runtime_info("test").await.loaded_models.is_empty());
+    }
+
+    #[tokio::test]
+    async fn memory_budget_evicts_the_least_recent_idle_model_before_loading() {
+        let mut runtime = Runtime::new();
+        runtime.memory_budget = Some(100);
+        runtime.register(mock_spec_with_memory("old", 35)).await;
+        runtime.register(mock_spec_with_memory("newer", 45)).await;
+        runtime
+            .register(mock_spec_with_memory("requested", 50))
+            .await;
+        runtime.set_state("old", "ready", true).await;
+        runtime.set_state("newer", "ready", true).await;
+        {
+            let mut registry = runtime.registry.write().await;
+            registry.get_mut("old").unwrap().last_used_at = Some(1);
+            registry.get_mut("newer").unwrap().last_used_at = Some(2);
+        }
+
+        runtime.load_model("requested").await.unwrap();
+
+        assert_eq!(
+            model_state(&runtime, "old").await.as_deref(),
+            Some("unloaded")
+        );
+        assert_eq!(
+            model_state(&runtime, "newer").await.as_deref(),
+            Some("ready")
+        );
+        assert_eq!(
+            model_state(&runtime, "requested").await.as_deref(),
+            Some("ready")
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_budget_rejects_load_when_the_only_eviction_candidate_has_a_lease() {
+        let mut runtime = Runtime::new();
+        runtime.memory_budget = Some(100);
+        runtime
+            .register(mock_spec_with_memory("resident", 60))
+            .await;
+        runtime
+            .register(mock_spec_with_memory("requested", 50))
+            .await;
+        let runtime = Arc::new(runtime);
+        runtime.set_state("resident", "ready", true).await;
+        let lease = runtime.model_lease("resident");
+
+        let error = runtime.load_model("requested").await.unwrap_err();
+
+        assert_eq!(error.kind, AIError::ProviderUnavailable);
+        assert_eq!(
+            model_state(&runtime, "resident").await.as_deref(),
+            Some("ready")
+        );
+        drop(lease);
     }
 
     #[tokio::test]

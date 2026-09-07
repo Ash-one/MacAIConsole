@@ -276,6 +276,12 @@ commit `cadfa31` 收敛了已发现的启动、契约与信任边界：
 - HTTP 管理面：`GET /api/runners` 与 `POST /api/runners/{runner}/install`；
 - GUI 消费端：设置页「引擎」区块（`runners()`/`installRunner`）；
 - 七个 built-in Runner 包的 adapter 单测和 lock freshness 进入 CI；
+- CI 不伪造宿主机 AI 内存预算：无调度主张的 mock fixture 使用 0 estimate；
+  Runtime 单测以固定预算直接验证 LRU 逐出和 lease 保护；
+- `load_model` 持有生命周期锁时，LRU 通过同一锁域内的私有卸载路径逐出，避免重入
+  `unload_model` 等待自身锁；
+- 需要模型权重、目标机引擎或网络 source build 的真实 smoke 标记为 Cargo ignored，
+  仅以显式 `--ignored` 命令作为真实模型证据；
 - ad-hoc Runner 绑定的路径刷新、rename 与 unregister 由 Runtime 组合回归测试固定；
 - Provider 选择的 requested / selected / reason 持久化并出现在管理 API。
 
@@ -287,7 +293,7 @@ commit `cadfa31` 收敛了已发现的启动、契约与信任边界：
 | 新 Model Profile 可选择 Runner，且首次下载前 Runner 已装配 | profile resolution、registration | `builtin_runner_attaches_before_its_model_artifact_exists`；动态 provider 按 descriptor 能力判定 | passed（2026-09-03） |
 | 已注册模型恢复注册时 Profile，catalog 更新不改写它 | persistence、restart | registry binding roundtrip + `registered_runner_model_restores_its_immutable_profile_snapshot` | passed（2026-09-03） |
 | Worker 崩溃返回 `backend_crashed`、清空 resident，并可重新 load | process supervision、status、recovery | `crashed_worker_clears_residency_and_can_be_reloaded` | passed（2026-09-03） |
-| lease、busy guard、LRU 和 keep-alive 对动态 Provider 走同一 Runtime owner | lifecycle composition | `active_model_lease_blocks_unload` + `runner_runtime_composition` | passed |
+| lease、busy guard、LRU 和 keep-alive 对动态 Provider 走同一 Runtime owner | lifecycle composition | `active_model_lease_blocks_unload` + 固定预算的 Runtime LRU/lease tests + `runner_runtime_composition` | passed |
 | ad-hoc Runner 模型刷新路径、改名或删除时绑定与注册表一致 | binding lifecycle | `adhoc_runner_binding_tracks_refresh_rename_and_unregister` | passed（2026-09-05） |
 | Provider 缺省选择、显式选择和兼容别名可审计 | API + persistence | `provider_selection_records_default_alias_and_explicit_reasons` + registry roundtrip + `/v1/models`、`/api/runtime` 字段 + Swift decoding test | passed（2026-09-05） |
 | status snapshot 不等待 Runner I/O 锁，停止后无 resident | observability concurrency | `status_reflects_environment_phase_without_resident_worker` + crash/reload composition | passed（2026-09-03） |

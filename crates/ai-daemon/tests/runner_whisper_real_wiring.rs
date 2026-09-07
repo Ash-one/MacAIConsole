@@ -7,7 +7,7 @@
 //! MACAI_WHISPER_SERVER=/absolute/path/to/whisper-server \
 //! MACAI_WHISPER_WIRING_MODEL=/absolute/path/to/ggml-base.bin \
 //! MACAI_WHISPER_WIRING_AUDIO=/absolute/path/to/speech.wav \
-//!   cargo test -p ai-daemon --test runner_whisper_real_wiring -- --nocapture
+//!   cargo test -p ai-daemon --test runner_whisper_real_wiring -- --ignored --nocapture
 //! ```
 
 use std::collections::HashSet;
@@ -56,18 +56,14 @@ fn temp_root() -> PathBuf {
 }
 
 #[tokio::test]
+#[ignore = "requires a local whisper-server, model, and PCM WAV fixture"]
 async fn whisper_runner_real_composition_load_infer_unload() {
-    let (Ok(server), Ok(model), Ok(audio)) = (
-        std::env::var("MACAI_WHISPER_SERVER"),
-        std::env::var("MACAI_WHISPER_WIRING_MODEL"),
-        std::env::var("MACAI_WHISPER_WIRING_AUDIO"),
-    ) else {
-        eprintln!(
-            "skipped: set MACAI_WHISPER_SERVER, MACAI_WHISPER_WIRING_MODEL, and \
-             MACAI_WHISPER_WIRING_AUDIO for the real Whisper Runner wiring test"
-        );
-        return;
-    };
+    let server = std::env::var("MACAI_WHISPER_SERVER")
+        .expect("set MACAI_WHISPER_SERVER for the real Whisper Runner wiring test");
+    let model = std::env::var("MACAI_WHISPER_WIRING_MODEL")
+        .expect("set MACAI_WHISPER_WIRING_MODEL for the real Whisper Runner wiring test");
+    let audio = std::env::var("MACAI_WHISPER_WIRING_AUDIO")
+        .expect("set MACAI_WHISPER_WIRING_AUDIO for the real Whisper Runner wiring test");
     let server = PathBuf::from(server);
     let model = PathBuf::from(model);
     let audio = PathBuf::from(audio);

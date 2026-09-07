@@ -9,7 +9,7 @@
 //!
 //! ```bash
 //! MACAI_KOKORO_WIRING_MODEL=/absolute/path/to/kokoro-82m-zh \
-//!   cargo test -p ai-daemon --test runner_kokoro_real_wiring
+//!   cargo test -p ai-daemon --test runner_kokoro_real_wiring -- --ignored --nocapture
 //! ```
 
 use std::collections::HashSet;
@@ -61,14 +61,12 @@ fn temp_root(label: &str) -> PathBuf {
 }
 
 #[tokio::test]
+#[ignore = "requires a local Kokoro model and synced Runner environment"]
 async fn kokoro_runner_real_composition_load_infer_unload() {
-    let Ok(model_root) = std::env::var("MACAI_KOKORO_WIRING_MODEL") else {
-        eprintln!(
-            "skipped: set MACAI_KOKORO_WIRING_MODEL to the kokoro-82m-zh model directory \
-             and `uv sync --project runners/kokoro --locked --no-dev` first"
-        );
-        return;
-    };
+    let model_root = std::env::var("MACAI_KOKORO_WIRING_MODEL").expect(
+        "set MACAI_KOKORO_WIRING_MODEL to the kokoro-82m-zh model directory and \
+         run `uv sync --project runners/kokoro --locked --no-dev` first",
+    );
     let model_root = PathBuf::from(model_root);
     assert!(
         model_root.join("model.safetensors").is_file(),
