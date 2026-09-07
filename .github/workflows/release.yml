@@ -43,6 +43,7 @@ jobs:
         with:
           version: "0.9.21"
           python-version: "3.12"
+          enable-cache: false
 
       - name: Install create-dmg (optional)
         run: |
