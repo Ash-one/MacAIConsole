@@ -8,16 +8,17 @@ format = "directory"
 
 [source]
 type = "huggingface"
-repo = "aufklarer/Qwen3-ASR-0.6B-MLX-4bit"
-# 2026-09-02 git ls-remote master HEAD（immutable 40-hex）
-revision = "3478f178e267548f04a6b616ff10beeb1e644e54"
+repo = "mlx-community/Qwen3-ASR-0.6B-4bit"
+# 2026-01-29 git ls-remote main HEAD（immutable 40-hex，经 HF API 核对）
+revision = "313d850181767edf09f00a9c289becca70e58cd0"
 
 [artifacts]
 # artifacts.directory 是相对 Models root 的子目录名（safe relative path，不允许 "."）
 directory = "Qwen3-ASR-0.6B-MLX-4bit"
 files = [
+    "chat_template.json",
     "config.json",
-    "configuration.json",
+    "generation_config.json",
     "merges.txt",
     "model.safetensors",
     "model.safetensors.index.json",
@@ -25,6 +26,7 @@ files = [
     "tokenizer_config.json",
     "vocab.json",
 ]
+
 
 [defaults]
 keep_alive = "always"
