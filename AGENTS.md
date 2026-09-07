@@ -29,7 +29,7 @@
 
 # MacAI 项目指南
 
-本节是本仓库的项目级事实与约定索引，供编码 Agent 使用；上方各节的通用规则继续适用。事实核对应 2026-09-05 的当前代码。文档分工：`README.md` 记录当前实现状态；`apps/MacAIConsole/README.md` 专述 GUI；`docs/decisions/` 记录工作提案和已落地决策；`docs/specs/` 记录提案或实现引用的精确契约；`docs/plans/` 只保存尚未完成的实施与验证计划。`handoff.md` 是历史设计材料，不再作为当前事实、工作提案或决策 owner。
+本节是本仓库的项目级事实与约定索引，供编码 Agent 使用；上方各节的通用规则继续适用。事实核对应 2026-09-07 的当前代码。文档分工：`README.md` 记录当前实现状态；`apps/MacAIConsole/README.md` 专述 GUI；`docs/decisions/` 记录工作提案和已落地决策；`docs/specs/` 记录提案或实现引用的精确契约；`docs/plans/` 只保存尚未完成的实施与验证计划。
 
 每个改变行为、架构、共享契约、持久格式、工具流程或测试策略的非机械改动，都必须在同一 bounded change 中创建或更新一个 owning decision record。提案只有在代码、证据和当前文档全部收敛后，才能改写为已落地决策。
 
@@ -93,4 +93,4 @@ done
 - **本地产物不入库**：`target/`（Rust）、`.build/`（第三方引擎、Python venv）与模型权重都不在仓库；运行时数据在 `~/Library/Application Support/MacAIConsole/`（models.db、模型、日志）。
 - **`.wt-qa/` 是 QA 用的 git worktree 副本**，已 gitignore，不属于本仓库：不要在其中工作，不要把它的变更算进本仓库。
 - **常用环境变量**：`AIWORKD_PATH`（daemon 二进制）、`MACAI_LLAMA_SERVER` / `MACAI_WHISPER_SERVER`（Runner 引擎显式覆盖）、`AIWORKD_MEMORY_BUDGET`（字节）、`MACAI_UV_PATH`、`MACAI_RUNNERS_DIR`、`MACAI_UV_PYTHON_INSTALL_MIRROR`。
-- **文档同步**：改动对外行为（endpoint、CLI 命令、环境变量、目录布局）时同步 `README.md`；非机械改动在 `docs/decisions/` 创建或更新唯一 owner，并同步它引用的 `docs/specs/`。不要向 `handoff.md` 追加当前决策。
+- **文档同步**：改动对外行为（endpoint、CLI 命令、环境变量、目录布局）时同步 `README.md`；非机械改动在 `docs/decisions/` 创建或更新唯一 owner，并同步它引用的 `docs/specs/`。
