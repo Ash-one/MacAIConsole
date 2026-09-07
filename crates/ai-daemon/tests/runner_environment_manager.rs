@@ -430,3 +430,18 @@ async fn uv_resolution_reports_the_actual_version() {
     assert!(!uv.path.as_os_str().is_empty());
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[tokio::test]
+async fn uv_resolution_fails_with_descriptive_error_when_explicit_path_missing() {
+    let root = temp_root("baduv");
+    let manager = manager(&root);
+    std::env::set_var("MACAI_UV_PATH", "/non/existent/uv_binary");
+    let err = manager
+        .resolve_uv()
+        .expect_err("must fail for nonexistent uv");
+    assert!(err
+        .to_string()
+        .contains("cannot run /non/existent/uv_binary"));
+    std::env::remove_var("MACAI_UV_PATH");
+    let _ = std::fs::remove_dir_all(root);
+}

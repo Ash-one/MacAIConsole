@@ -121,13 +121,16 @@ daemon 是环境操作的唯一 owner：
 
 ### uv executable
 
-daemon 负责定位并报告 `uv`，GUI 只消费状态。当前解析顺序为：
+daemon 负责定位并报告 `uv`，GUI 只消费状态。解析顺序为：
 
 1. 明确配置的 `MACAI_UV_PATH`；
-2. `PATH` 中的可执行文件 fallback。
+2. macOS App Bundle 内置产物（`Contents/MacOS/uv` 或 `Contents/Resources/uv`）；
+3. `PATH` 中的可执行文件 fallback；
+4. 常见系统与用户安装路径 fallback（`/opt/homebrew/bin/uv`、`/usr/local/bin/uv`、`~/.local/bin/uv`、`~/.cargo/bin/uv`）。
 
 代码以 `TESTED_UV_VERSION = "0.9.21"` 和 CI 配置记录经过测试的版本，并在状态接口
-返回实际版本；当前不会拒绝其他 uv 版本。应用内置/受管 uv 尚未实现。
+返回实际版本；当前不会拒绝其他 uv 版本。独立打包（`build-app.sh`）自动提取固定版本
+`uv` 静态二进制放入 App Bundle，实现完全自包含运行。
 
 ### Network and cache
 

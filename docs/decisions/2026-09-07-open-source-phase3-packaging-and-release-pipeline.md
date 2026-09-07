@@ -17,10 +17,10 @@
 ### 1. 自包含 App Bundle 架构 (Standalone App)
 
 对 `MacAIConsole.app` 的结构进行自包含组装：
-- `Contents/MacOS/`：放置 `MacAIConsole`（主程序）、`aiworkd`（守护进程）与 `macai`（CLI 工具）；
+- `Contents/MacOS/`：放置 `MacAIConsole`（主程序）、`aiworkd`（守护进程）、`macai`（CLI 工具）与 `uv`（静态独立二进制，固定经过测试的 0.9.21 版本）；
 - `Contents/Resources/`：放置 `AppIcon.icns` 及内置 `runners/` 结构（自动排除本地 `.venv`、`__pycache__` 等开发缓存）；
-- 守护进程自适应：`crates/ai-daemon/src/main.rs` 的 `builtin_runners_root()` 增加检查 App Bundle 的 `Contents/Resources/runners`；
-- GUI 控制器自适应：`DaemonController.swift` 在启动时若检测到 Bundle 内置 `runners`，自动注入 `MACAI_RUNNERS_DIR` 并设置安全的工作目录。
+- 守护进程自适应：`crates/ai-daemon/src/main.rs` 的 `builtin_runners_root()` 增加检查 App Bundle 的 `Contents/Resources/runners`；`environment.rs` 增加检查同级 `Contents/MacOS/uv` 与 `Contents/Resources/uv`，并支持常见系统路径多级 fallback；
+- GUI 控制器自适应：`DaemonController.swift` 在启动时若检测到 Bundle 内置 `runners`，自动注入 `MACAI_RUNNERS_DIR` 并设置安全的工作目录；自动探测 Bundle 内置 `uv` 并注入 `MACAI_UV_PATH`；同时自动向子进程补全 GUI 缺失的系统级 PATH。
 
 ### 2. 双模构建脚本 (build-app.sh)
 
@@ -39,6 +39,7 @@
 
 ## 后果与验证
 
-- 产物自包含：普通用户下载 `MacAIConsole.dmg` 拖入 `/Applications` 后即可直接运行，无需本机配置 Rust 或克隆代码仓库；
-- 打包验证：本地执行 `build-app.sh dmg` 成功生成约 8.1MB 的压缩镜像，挂载验证文件结构完整无误；
+- 产物完全自包含：普通用户下载 `MacAIConsole.dmg` 拖入 `/Applications` 后即可直接运行，不仅无需配置 Rust 或代码仓库，亦无需额外安装 Python 或 `uv` 工具；
+- 打包验证：本地执行 `build-app.sh dmg` 成功将 `uv`（43.5MB）打包至 `Contents/MacOS/uv` 并生成 28MB 的压缩镜像，挂载验证文件结构与递归代码签名均完整无误；
+- 容错提升：多级回退策略（`MACAI_UV_PATH` → Bundle 内置 → `PATH` 搜索 → 常见系统路径）与 PATH 补齐保证了在终端、GUI、DMG 挂载等各种执行形态下的一致稳定性；
 - CI 具备端到端发布能力。

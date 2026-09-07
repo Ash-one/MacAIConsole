@@ -127,6 +127,41 @@ final class DaemonControllerConnectionTests: XCTestCase {
         )
         return DaemonController(api: api, logsEnabled: false)
     }
+
+    func testEnrichedPathPreservesCurrentAndAppendsExisting() {
+        let initial = "/usr/bin:/bin"
+        let enriched = DaemonController.enrichedPath(current: initial)
+        XCTAssertTrue(enriched.hasPrefix("/usr/bin:/bin"))
+    }
+
+    func testEnvironmentForSpawningSetsRunnersAndUvVariables() {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("test_spawn_\(UUID().uuidString)")
+        let bundleURL = tempDir.appendingPathComponent("MacAIConsole.app")
+        let macosURL = bundleURL.appendingPathComponent("Contents/MacOS")
+        let resURL = bundleURL.appendingPathComponent("Contents/Resources")
+        let runnersURL = resURL.appendingPathComponent("runners")
+        let fakeUv = macosURL.appendingPathComponent("uv")
+
+        try? FileManager.default.createDirectory(at: macosURL, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: runnersURL, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: fakeUv.path, contents: Data(), attributes: [.posixPermissions: 0o755])
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        guard let testBundle = Bundle(url: bundleURL) else {
+            XCTFail("Failed to create test bundle")
+            return
+        }
+
+        let env = DaemonController.environmentForSpawning(
+            base: ["PATH": "/usr/bin:/bin"],
+            systemSettings: nil,
+            bundle: testBundle
+        )
+
+        XCTAssertEqual(env["MACAI_RUNNERS_DIR"], runnersURL.path)
+        XCTAssertEqual(env["MACAI_UV_PATH"], fakeUv.path)
+        XCTAssertNotNil(env["PATH"])
+    }
 }
 
 private final class BusyRuntimeURLProtocol: URLProtocol {
