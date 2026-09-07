@@ -11,10 +11,11 @@ struct MacAIConsoleApp: App {
             RootView()
                 .environment(controller)
                 .environment(router)
-                .frame(minWidth: 780, minHeight: 520)
+                .frame(minWidth: 860, idealWidth: 1000, minHeight: 580, idealHeight: 660)
                 .tint(Theme.accent)
                 .preferredColorScheme(preferredColorScheme)
         }
+        .defaultSize(width: 1000, height: 660)
         .windowResizability(.contentMinSize)
 
         MenuBarExtra {
