@@ -259,6 +259,11 @@ async fn status_reflects_environment_phase_without_resident_worker() {
     assert!(snapshot.pid.is_some());
     assert_eq!(snapshot.loaded_model.as_deref(), Some("fake-model"));
     assert_eq!(snapshot.active_requests, 0);
+    assert!(snapshot.resident_bytes.is_some());
+    assert!(snapshot.resident_bytes.unwrap() > 0);
+    let memory_usage = provider.memory_usage_bytes().await;
+    assert!(memory_usage.is_some());
+    assert!(memory_usage.unwrap() > 0);
     instances
         .shutdown_instance("org.example.fake")
         .await
@@ -274,6 +279,7 @@ async fn status_reflects_environment_phase_without_resident_worker() {
         "a stopped worker has no resident model"
     );
     assert_eq!(stopped.effective_device, None);
+    assert_eq!(provider.memory_usage_bytes().await, None);
     let _ = std::fs::remove_dir_all(root);
 }
 

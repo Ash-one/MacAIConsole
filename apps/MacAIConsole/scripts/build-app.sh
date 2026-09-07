@@ -21,7 +21,7 @@ stop_process() {
         echo "==> 停止旧 ${name}"
         pkill -x "${name}"
         for _ in {1..50}; do
-            pgrep -x "${name}" >/dev/null 2>&1 || return
+            pgrep -x "${name}" >/dev/null 2>&1 || return 0
             sleep 0.1
         done
         echo "${name} 未在 5 秒内退出" >&2
