@@ -52,6 +52,8 @@
   （落地 CONTRIBUTING、CODE_OF_CONDUCT、SECURITY、Issue/PR 模板、THIRD_PARTY_LICENSES 与模型免责声明。）
 - [开源筹备阶段 3：独立打包流水线与自动化发布 (DMG + CLI Release)](2026-09-07-open-source-phase3-packaging-and-release-pipeline.md)——`implemented`
   （实现自包含 MacAIConsole.app、支持 DMG 制作与 hdiutil 降级、配置 GitHub Actions 自动化 Release 流水线。）
+- [Kokoro G2P 容灾韧性与 Runner 退出诊断增强](2026-09-07-kokoro-g2p-resilience-and-runner-diagnostics.md)——`implemented`
+  （将 espeak-ng 数据迁移至 `~/.cache/macai/espeak-<hash>` 免于 `/tmp` 清理，提供纯 Python 拼读降级机制，增强 Supervisor 子进程 stderr 退出诊断。）
 
 已完成的 Kokoro 证据保存在
 [`docs/reference/kokoro-runner-verification.md`](../reference/kokoro-runner-verification.md)。

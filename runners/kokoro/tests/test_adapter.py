@@ -12,6 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from macai_kokoro_runner import protocol
 from macai_kokoro_runner.engine import (  # noqa: E402
     _contains_cjk,
+    _ensure_short_espeak_data,
+    _get_espeak_target_root,
+    _is_espeak_data_intact,
+    _patch_misaki_zh_version,
+    _pure_python_spelling_fallback,
     _resolve_voice_path,
     _split_long_text_for_kokoro,
 )
@@ -101,3 +106,106 @@ class TestProtocolCodec:
         assert protocol.read_frame(stream) == frame
         # 流耗尽后返回 None（EOF 语义与 daemon 对齐）。
         assert protocol.read_frame(stream) is None
+
+
+class TestEspeakDataAndG2PResilience:
+    def test_spelling_fallback_maps_letters(self):
+        class DummyToken:
+            def __init__(self, text):
+                self.text = text
+
+        phones, rating = _pure_python_spelling_fallback(DummyToken("Mio"))
+        assert phones == "ˈɛmˌIˈO"
+        assert rating == 2
+
+    def test_spelling_fallback_handles_empty_or_non_alpha(self):
+        class DummyToken:
+            def __init__(self, text):
+                self.text = text
+
+        assert _pure_python_spelling_fallback(DummyToken("")) == (None, None)
+        assert _pure_python_spelling_fallback(DummyToken("123")) == (None, None)
+
+    def test_is_espeak_data_intact_validates_required_files(self, tmp_path):
+        assert not _is_espeak_data_intact(str(tmp_path / "missing"))
+
+        espeak_dir = tmp_path / "espeak-ng-data"
+        espeak_dir.mkdir()
+        assert not _is_espeak_data_intact(str(espeak_dir))
+
+        (espeak_dir / "phontab").write_bytes(b"data")
+        assert not _is_espeak_data_intact(str(espeak_dir))
+
+        (espeak_dir / "phondata").write_bytes(b"data")
+        assert not _is_espeak_data_intact(str(espeak_dir))
+
+        (espeak_dir / "phonindex").write_bytes(b"data")
+        assert _is_espeak_data_intact(str(espeak_dir))
+
+        # 0 字节损坏文件应当拒绝
+        (espeak_dir / "phontab").write_bytes(b"")
+        assert not _is_espeak_data_intact(str(espeak_dir))
+
+    def test_get_espeak_target_root(self, tmp_path, monkeypatch):
+        # 1. 默认优先使用 XDG_CACHE_HOME / MACAI_CACHE_DIR
+        cache_dir = tmp_path / "custom_cache"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache_dir))
+        root = _get_espeak_target_root("abcd1234")
+        assert root == str(cache_dir / "macai" / "espeak-abcd1234")
+
+        # 2. 如果路径超长 (>200 字符)，回退到 /tmp
+        long_cache = tmp_path / ("very_long_directory_" * 15)
+        monkeypatch.setenv("XDG_CACHE_HOME", str(long_cache))
+        root_fallback = _get_espeak_target_root("abcd1234")
+        assert root_fallback == "/tmp/macai-espeak-abcd1234"
+
+    def test_ensure_short_espeak_data_self_heals_when_pruned(self, tmp_path, monkeypatch):
+        import hashlib
+        import espeakng_loader
+
+        # 设置 XDG_CACHE_HOME 指向 tmp_path / "cache"
+        cache_home = tmp_path / "cache"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
+
+        # 构造假的源目录（包含完整数据文件，路径长度 > 200 模拟受管深路径）
+        deep_prefix = "deep_subpath_" * 15
+        source_dir = tmp_path / deep_prefix / "espeak-ng-data"
+        source_dir.mkdir(parents=True)
+        for f in ("phontab", "phondata", "phonindex"):
+            (source_dir / f).write_bytes(b"valid-content")
+
+        # 模拟 espeakng_loader.get_data_path 返回这个较长路径
+        long_source_str = str(source_dir)
+        assert len(long_source_str) > 200
+        monkeypatch.setattr(espeakng_loader, "get_data_path", lambda: long_source_str)
+
+        # 模拟 target 目录（模拟被清理部分文件后的残缺状态）
+        digest = hashlib.sha1(long_source_str.encode("utf-8")).hexdigest()[:10]
+        target_root = cache_home / "macai" / f"espeak-{digest}"
+        target = target_root / "espeak-ng-data"
+        target.mkdir(parents=True)
+        (target / "lang").mkdir()
+
+        # 目标原本损坏（缺少 phontab）
+        assert not _is_espeak_data_intact(str(target))
+
+        # 执行自愈
+        result = _ensure_short_espeak_data()
+        assert result is True
+        # 目标已被自愈重建
+        assert _is_espeak_data_intact(str(target))
+        assert (target / "phontab").read_bytes() == b"valid-content"
+
+    def test_patch_misaki_zh_version_with_espeak_not_ready(self):
+        # 当 espeak_ready=False 时，必须安全使用纯 Python fallback，不触发 espeak_Initialize
+        _patch_misaki_zh_version(espeak_ready=False)
+        from misaki import zh as misaki_zh
+
+        g2p = misaki_zh.ZHG2P()
+        # 测试中英混合文本包含 OOD 词汇 Mio，确保不抛异常且成功音素化
+        res, _ = g2p("你好 Mio 世界")
+        assert res
+        assert "ˈɛmˌIˈO" in res
+
+
+

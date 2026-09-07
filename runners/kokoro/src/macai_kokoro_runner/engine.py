@@ -23,20 +23,79 @@ def log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
-def _ensure_short_espeak_data() -> None:
+_LETTER_PHONEMES = {
+    "A": "ɐ", "B": "bˈi", "C": "sˈi", "D": "dˈi", "E": "ˈi",
+    "F": "ˈɛf", "G": "ʤˈi", "H": "ˈAʧ", "I": "ˌI", "J": "ʤˈA",
+    "K": "kˈA", "L": "ˈɛl", "M": "ˈɛm", "N": "ˈɛn", "O": "ˈO",
+    "P": "pˈi", "Q": "kjˈu", "R": "ˈɑɹ", "S": "ˈɛs", "T": "tˈi",
+    "U": "jˈu", "V": "vˈi", "W": "dˈʌbᵊlju", "X": "ˈɛks", "Y": "wˈI", "Z": "zˈi",
+}
+
+
+def _pure_python_spelling_fallback(token) -> tuple[str | None, int | None]:
+    """针对不在 CMU 词典里的生僻英文单词，按字母发音拼读，杜绝崩溃。"""
+    raw = getattr(token, "text", str(token)).strip()
+    if not raw:
+        return None, None
+    phones = [_LETTER_PHONEMES.get(ch.upper(), "") for ch in raw if ch.isalpha()]
+    res = "".join(phones)
+    return (res, 2) if res else (None, None)
+
+
+def _is_espeak_data_intact(path: str) -> bool:
+    """检查 espeak 数据目录的核心数据文件是否完整。"""
+    if not os.path.isdir(path):
+        return False
+    required = ("phontab", "phondata", "phonindex")
+    return all(
+        os.path.isfile(os.path.join(path, item)) and os.path.getsize(os.path.join(path, item)) > 0
+        for item in required
+    )
+
+
+def _touch_espeak_data(path: str) -> None:
+    """刷新目录和关键文件的 mtime/atime，防止 macOS periodic 任务清理。"""
+    try:
+        now = time.time()
+        os.utime(path, (now, now))
+        for item in ("phontab", "phondata", "phonindex"):
+            file_path = os.path.join(path, item)
+            if os.path.isfile(file_path):
+                os.utime(file_path, (now, now))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _get_espeak_target_root(digest: str) -> str:
+    """获取 espeak 数据目录目标根路径，优先使用 ~/.cache/macai/espeak-<digest>。"""
+    cache_base = os.environ.get("MACAI_CACHE_DIR") or os.environ.get("XDG_CACHE_HOME")
+    if not cache_base:
+        cache_base = os.path.expanduser("~/.cache")
+    candidate_root = os.path.join(cache_base, "macai", f"espeak-{digest}")
+    candidate_target = os.path.join(candidate_root, "espeak-ng-data")
+    if len(candidate_target) <= 200:
+        return candidate_root
+    # 极罕见场景下用户 HOME 路径过长时回退至 /tmp
+    return os.path.join("/tmp", f"macai-espeak-{digest}")
+
+
+def _ensure_short_espeak_data() -> bool:
     """espeak-ng 固定缓冲会截断过长的 data 路径（实测 ~255 字符以上失败）：
     受管环境位于 `Runtimes/python/<env-id>/<64-hex-fingerprint>/.venv/…` 时
     espeak-ng-data 绝对路径超过限制，espeak_Initialize 回退编译期默认路径并
-    exit(1) 杀死整个 worker。修复：把 espeakng_loader 的 data 复制到 `/tmp`
-    短路径，并把 phonemizer 的 data path 指向副本；路径本身够短时零开销跳过。
+    exit(1) 杀死整个 worker。修复：优先把 espeakng_loader 的 data 复制到
+    `~/.cache/macai/espeak-<hash>` 短路径（持久、受用户缓存控制、免于 /tmp 定期清理）；
+    极深路径下回退 `/tmp`；路径本身够短时零开销跳过。
 
-    只复制 21MB 目录一次（按源路径 hash 去重），由 OS 清理临时副本。
+    同时具备文件完整性自愈：如果数据文件被误删，自动重新全量复制，避免
+    espeak_Initialize 找不到文件触发 C exit(1)。
+    返回 True 表示 espeak 可用，False 表示不可用（应降级纯 Python 兜底）。
     """
     try:
         import espeakng_loader
         from phonemizer.backend.espeak.wrapper import EspeakWrapper
     except Exception:  # noqa: BLE001 — espeak 不可用时保持原状
-        return
+        return False
     # misaki/espeak.py 在模块级执行 set_data_path(长路径)；必须先触发它，
     # 否则后续首次 import 会把下面设置的短路径覆盖回去。
     try:
@@ -44,25 +103,45 @@ def _ensure_short_espeak_data() -> None:
     except Exception:  # noqa: BLE001
         pass
 
-    source = espeakng_loader.get_data_path()
+    try:
+        source = espeakng_loader.get_data_path()
+    except Exception:  # noqa: BLE001
+        return False
+
+    if not _is_espeak_data_intact(source):
+        log(f"[kokoro-runner] source espeak data is incomplete: {source}")
+        return False
+
     # 阈值取 200，远低于 espeak-ng 实测截断点（~255）。
-    if len(source) <= 200 and os.path.isdir(source):
+    if len(source) <= 200:
         EspeakWrapper.set_data_path(source)
-        return
+        return True
+
     digest = hashlib.sha1(source.encode("utf-8")).hexdigest()[:10]
-    target_root = os.path.join("/tmp", f"macai-espeak-{digest}")
+    target_root = _get_espeak_target_root(digest)
     target = os.path.join(target_root, "espeak-ng-data")
-    if not os.path.isdir(target):
+    if not _is_espeak_data_intact(target):
+        os.makedirs(target_root, exist_ok=True)
         staging = f"{target_root}.staging-{os.getpid()}"
         shutil.rmtree(staging, ignore_errors=True)
         os.makedirs(staging, exist_ok=True)
         shutil.copytree(source, os.path.join(staging, "espeak-ng-data"))
+        shutil.rmtree(target_root, ignore_errors=True)
         try:
             os.replace(staging, target_root)
-        except FileExistsError:
+        except Exception:
             shutil.rmtree(staging, ignore_errors=True)
-    EspeakWrapper.set_data_path(target)
-    log(f"[kokoro-runner] espeak data relocated to short path: {target}")
+            if not _is_espeak_data_intact(target):
+                log(f"[kokoro-runner] failed to establish espeak data at {target}")
+                return False
+
+    if _is_espeak_data_intact(target):
+        _touch_espeak_data(target)
+        EspeakWrapper.set_data_path(target)
+        log(f"[kokoro-runner] espeak data verified at short path: {target}")
+        return True
+
+    return False
 
 
 def _split_long_text_for_kokoro(text: str, max_chars: int = 150) -> str:
@@ -96,15 +175,27 @@ def _split_long_text_for_kokoro(text: str, max_chars: int = 150) -> str:
     return "\n".join(lines)
 
 
-def _patch_misaki_zh_version() -> None:
+def _patch_misaki_zh_version(espeak_ready: bool = True) -> None:
     """修复 mlx-audio 0.5.x 中文 G2P 的 vocab 错位（钉为 v1.1，补英文 fallback）。"""
 
     def _default_en_callable():
         try:
             from misaki import en as misaki_en
-            from misaki import espeak
 
-            fallback = espeak.EspeakFallback(british=False)
+            fallback = None
+            if espeak_ready:
+                try:
+                    from misaki import espeak
+
+                    fallback = espeak.EspeakFallback(british=False)
+                except Exception as error:  # noqa: BLE001
+                    log(f"[kokoro-runner] espeak fallback init failed: {error}")
+                    fallback = None
+
+            if fallback is None:
+                fallback = _pure_python_spelling_fallback
+                log("[kokoro-runner] using pure-python letter spelling fallback for OOD English words")
+
             g2p = misaki_en.G2P(trf=False, british=False, fallback=fallback, unk="")
 
             def en_callable(text):
@@ -117,6 +208,21 @@ def _patch_misaki_zh_version() -> None:
         except Exception as error:  # noqa: BLE001
             log(f"[kokoro-runner] en_callable unavailable: {error}")
             return None
+
+    if not espeak_ready:
+        try:
+            from misaki import espeak as _misaki_espeak
+
+            class SafeEspeakFallback:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                def __call__(self, token):
+                    return _pure_python_spelling_fallback(token)
+
+            _misaki_espeak.EspeakFallback = SafeEspeakFallback
+        except Exception:  # noqa: BLE001
+            pass
 
     try:
         from misaki import zh as misaki_zh
@@ -159,8 +265,8 @@ class KokoroEngine:
         self.model_root = model_root
         # 必须先于任何 EspeakBackend 构造修复 espeak data 路径（短路径），
         # 长路径会被 espeak-ng 固定缓冲截断并 exit(1) 杀死 worker。
-        _ensure_short_espeak_data()
-        _patch_misaki_zh_version()
+        self._espeak_ready = _ensure_short_espeak_data()
+        _patch_misaki_zh_version(espeak_ready=self._espeak_ready)
         from mlx_audio.tts.generate import load_model
 
         self._model = load_model(model_root)
