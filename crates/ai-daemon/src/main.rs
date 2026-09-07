@@ -2376,4 +2376,48 @@ runner = ">=0.1,<0.2"
         assert_eq!(result.status(), StatusCode::OK);
         assert!(runtime.get_model("mock-task").await.is_none());
     }
+
+    #[test]
+    fn builtin_runner_bundled_profiles_are_valid_and_construct_pull_targets() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runners");
+        let registry = ai_daemon::runners::RunnerRegistry::discover(
+            &[root.clone()],
+            &[],
+            &std::collections::HashSet::new(),
+        );
+
+        let mut checked_profile_count = 0;
+        for entry in registry.entries() {
+            assert_eq!(
+                entry.state,
+                ai_daemon::runners::RunnerState::Trusted,
+                "runner at {:?} must be trusted: {:?}",
+                entry.root,
+                entry.reason
+            );
+            for bundled in &entry.bundled_profiles {
+                let profile = &bundled.profile;
+                assert_eq!(profile.source.source_type, "huggingface");
+                assert!(!profile.source.repo.trim().is_empty());
+                assert!(
+                    profile.source.revision.len() == 40 || profile.source.revision.len() == 64,
+                    "profile '{}' revision must be 40- or 64-character hex commit",
+                    profile.id
+                );
+                assert!(!profile.artifacts.files.is_empty());
+
+                let request = pull_request_for_profile(profile, false).unwrap_or_else(|e| {
+                    panic!("pull_request_for_profile failed for '{}': {e}", profile.id)
+                });
+                let (_, targets) = pull::pull_targets(&request)
+                    .unwrap_or_else(|e| panic!("pull_targets failed for '{}': {e}", profile.id));
+                assert_eq!(targets.len(), profile.artifacts.files.len());
+                checked_profile_count += 1;
+            }
+        }
+        assert_eq!(
+            checked_profile_count, 7,
+            "all 7 repo recommended model profiles must be checked"
+        );
+    }
 }

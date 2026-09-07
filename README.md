@@ -207,7 +207,7 @@ Qwen3-ASR 由 daemon 的 Qwen3-ASR Runner（`org.macai.qwen3-asr`）提供服务
 uv sync --project runners/qwen3-asr --locked --no-dev
 ```
 
-推荐模型（4-bit，ModelScope: `aufklarer/Qwen3-ASR-0.6B-MLX-4bit`）可以在 MacAIConsole 模型页一键下载；模型目录放进 `~/Library/Application Support/MacAIConsole/Models/stt/`。
+推荐模型（4-bit，Hugging Face: `mlx-community/Qwen3-ASR-0.6B-4bit`）可以在 MacAIConsole「管理」页一键下载；模型目录放进 `~/Library/Application Support/MacAIConsole/Models/stt/`。
 
 注册时显式选择 Runner provider `org.macai.qwen3-asr`，模型 ID 必须与目录名一致：
 
