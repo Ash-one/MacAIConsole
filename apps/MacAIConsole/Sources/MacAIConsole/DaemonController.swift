@@ -535,17 +535,56 @@ final class DaemonController {
         return environment
     }
 
-    private static func spawn(binary: URL) throws -> (Process, FileHandle) {
-        let process = Process()
-        process.executableURL = binary
+    static func enrichedPath(
+        current: String?,
+        fileManager: FileManager = .default,
+        homeDir: URL? = nil
+    ) -> String {
+        let separator = ":"
+        var paths = (current ?? "").split(separator: separator).map(String.init)
+        let home = (homeDir ?? fileManager.homeDirectoryForCurrentUser).path
+        let fallbacks = [
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "\(home)/.local/bin",
+            "\(home)/.cargo/bin",
+        ]
+        for fb in fallbacks where !paths.contains(fb) && fileManager.fileExists(atPath: fb) {
+            paths.append(fb)
+        }
+        return paths.joined(separator: separator)
+    }
 
-        let systemSettings = SCDynamicStoreCopyProxies(nil) as? [String: Any]
+    static func resolveBundleUv(
+        bundle: Bundle = .main,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        // 1. Contents/MacOS/uv
+        let macosUv = bundle.bundleURL.appendingPathComponent("Contents/MacOS/uv")
+        if fileManager.isExecutableFile(atPath: macosUv.path) {
+            return macosUv
+        }
+        // 2. Contents/Resources/uv
+        if let resUv = bundle.resourceURL?.appendingPathComponent("uv"),
+           fileManager.isExecutableFile(atPath: resUv.path) {
+            return resUv
+        }
+        return nil
+    }
+
+    static func environmentForSpawning(
+        base: [String: String],
+        systemSettings: [String: Any]?,
+        bundle: Bundle = .main,
+        fileManager: FileManager = .default
+    ) -> [String: String] {
         var environment = environmentByApplyingProxyMode(
             AppSettings.proxyMode,
             httpProxy: AppSettings.httpProxy,
             httpsProxy: AppSettings.httpsProxy,
             systemSettings: systemSettings,
-            to: ProcessInfo.processInfo.environment
+            to: base
         )
         environment = environmentByApplyingDownloadSource(
             AppSettings.downloadSource,
@@ -558,12 +597,38 @@ final class DaemonController {
         } else {
             environment.removeValue(forKey: "AIWORKD_MEMORY_BUDGET")
         }
+
+        // 补全 GUI 进程缺失的常用 PATH 路径
+        environment["PATH"] = enrichedPath(current: environment["PATH"], fileManager: fileManager)
+
+        // 若处于独立 App Bundle，自动注入内置 runners 目录
+        if let bundleRunners = bundle.resourceURL?.appendingPathComponent("runners"),
+           fileManager.fileExists(atPath: bundleRunners.path) {
+            environment["MACAI_RUNNERS_DIR"] = bundleRunners.path
+        }
+
+        // 自动探测 Bundle 内置 uv
+        if let bundleUv = resolveBundleUv(bundle: bundle, fileManager: fileManager) {
+            environment["MACAI_UV_PATH"] = bundleUv.path
+        }
+
+        return environment
+    }
+
+    private static func spawn(binary: URL) throws -> (Process, FileHandle) {
+        let process = Process()
+        process.executableURL = binary
+
+        let systemSettings = SCDynamicStoreCopyProxies(nil) as? [String: Any]
+        let environment = environmentForSpawning(
+            base: ProcessInfo.processInfo.environment,
+            systemSettings: systemSettings
+        )
         process.environment = environment
 
-        // 若处于独立 App Bundle，自动注入内置 runners 目录并使用用户主目录作为 cwd
+        // 若处于独立 App Bundle，使用用户主目录作为 cwd
         if let bundleRunners = Bundle.main.resourceURL?.appendingPathComponent("runners"),
            FileManager.default.fileExists(atPath: bundleRunners.path) {
-            environment["MACAI_RUNNERS_DIR"] = bundleRunners.path
             process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
         } else {
             // 开发模式：binary 位于 <仓库>/target/<配置>/aiworkd，工作目录定为仓库根

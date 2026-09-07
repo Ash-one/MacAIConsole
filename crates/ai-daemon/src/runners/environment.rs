@@ -311,7 +311,8 @@ impl EnvironmentManager {
     }
 
     /// 定位并报告实际 uv executable。解析顺序：`MACAI_UV_PATH` 显式配置 →
-    /// 开发态 `PATH` fallback。版本来自实际 `uv --version` 输出。
+    /// App Bundle 内置产物 → 系统/开发态 `PATH` → 常见系统与用户路径 fallback。
+    /// 版本来自实际 `uv --version` 输出。
     pub fn resolve_uv(&self) -> Result<UvSource, EnvironmentError> {
         if let Some(cached) = self.uv.lock().expect("uv cache lock").clone() {
             return Ok(cached);
@@ -329,8 +330,20 @@ impl EnvironmentManager {
         if let Some(configured) = std::env::var_os("MACAI_UV_PATH") {
             candidates.push(PathBuf::from(configured));
         }
+        if let Some(bundle_uv) = search_bundle_for("uv") {
+            if !candidates.contains(&bundle_uv) {
+                candidates.push(bundle_uv);
+            }
+        }
         if let Some(path_uv) = search_path_for("uv") {
-            candidates.push(path_uv);
+            if !candidates.contains(&path_uv) {
+                candidates.push(path_uv);
+            }
+        }
+        for fallback in common_uv_fallback_paths() {
+            if fallback.is_file() && !candidates.contains(&fallback) {
+                candidates.push(fallback);
+            }
         }
         for candidate in candidates {
             let output = std::process::Command::new(&candidate)
@@ -339,12 +352,15 @@ impl EnvironmentManager {
             let output = match output {
                 Ok(output) if output.status.success() => output,
                 Ok(output) => {
+                    if is_path_fallback(&candidate) {
+                        continue;
+                    }
                     return Err(EnvironmentError::UvNotAvailable {
                         reason: format!("{} exited with {}", candidate.display(), output.status),
-                    })
+                    });
                 }
                 Err(error) => {
-                    // MACAI_UV_PATH 是显式配置，失败即报错；PATH fallback 失败
+                    // MACAI_UV_PATH 是显式配置，失败即报错；fallback 失败
                     // 则继续尝试下一个候选。
                     if is_path_fallback(&candidate) {
                         continue;
@@ -368,7 +384,7 @@ impl EnvironmentManager {
             });
         }
         Err(EnvironmentError::UvNotAvailable {
-            reason: "no 'uv' on PATH and MACAI_UV_PATH is not set".to_string(),
+            reason: "no 'uv' executable found (checked MACAI_UV_PATH, App Bundle, PATH, and standard directories ~/.local/bin/uv, /opt/homebrew/bin/uv)".to_string(),
         })
     }
 
@@ -935,7 +951,42 @@ fn search_path_for(program: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// 判断候选是否来自 PATH fallback（而非 MACAI_UV_PATH 显式配置）。
+/// 检查当前进程是否位于 macOS App Bundle 中并探测内置可执行文件：
+/// 1. 与当前可执行文件同目录（如 Contents/MacOS/<program>）
+/// 2. 资源目录（如 Contents/Resources/<program>）
+fn search_bundle_for(program: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe_dir = exe.parent()?;
+
+    // 1. 同级目录 (例如 Contents/MacOS/<program>)
+    let sibling = exe_dir.join(program);
+    if sibling.is_file() {
+        return Some(sibling);
+    }
+
+    // 2. Resources 目录 (例如 Contents/MacOS/../Resources/<program>)
+    if let Some(contents_dir) = exe_dir.parent() {
+        let res_prog = contents_dir.join("Resources").join(program);
+        if res_prog.is_file() {
+            return Some(res_prog);
+        }
+    }
+
+    None
+}
+
+/// 常见系统与用户安装目录中的 uv 候选路径。
+fn common_uv_fallback_paths() -> Vec<PathBuf> {
+    let home = dirs_home();
+    vec![
+        PathBuf::from("/opt/homebrew/bin/uv"),
+        PathBuf::from("/usr/local/bin/uv"),
+        home.join(".local/bin/uv"),
+        home.join(".cargo/bin/uv"),
+    ]
+}
+
+/// 判断候选是否来自 fallback（而非 MACAI_UV_PATH 显式配置）。
 fn is_path_fallback(candidate: &Path) -> bool {
     std::env::var_os("MACAI_UV_PATH")
         .map(|configured| PathBuf::from(&configured) != candidate)
@@ -1028,5 +1079,33 @@ fn failure_kind(error: &EnvironmentError) -> String {
         EnvironmentError::ProbeFailed { .. } => "probe_failed".to_string(),
         EnvironmentError::Fingerprint(_) | EnvironmentError::Io { .. } => "io_error".to_string(),
         EnvironmentError::UnsupportedRuntime { .. } => "unsupported_runtime".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn common_uv_fallback_paths_contain_standard_system_and_user_locations() {
+        let paths = common_uv_fallback_paths();
+        assert!(paths.iter().any(|p| p.ends_with(".local/bin/uv")));
+        assert!(paths.iter().any(|p| p.ends_with(".cargo/bin/uv")));
+        assert!(paths.iter().any(|p| p == Path::new("/opt/homebrew/bin/uv")));
+        assert!(paths.iter().any(|p| p == Path::new("/usr/local/bin/uv")));
+    }
+
+    #[test]
+    fn path_fallback_distinguishes_explicit_env_from_fallbacks() {
+        let dummy = Path::new("/custom/tools/uv");
+        // 当未设置 MACAI_UV_PATH 时，任何路径均视为 fallback
+        std::env::remove_var("MACAI_UV_PATH");
+        assert!(is_path_fallback(dummy));
+
+        // 当显式设置 MACAI_UV_PATH 时，与配置相同的路径不是 fallback，其余均为 fallback
+        std::env::set_var("MACAI_UV_PATH", "/custom/tools/uv");
+        assert!(!is_path_fallback(dummy));
+        assert!(is_path_fallback(Path::new("/other/bin/uv")));
+        std::env::remove_var("MACAI_UV_PATH");
     }
 }

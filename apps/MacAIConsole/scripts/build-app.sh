@@ -81,10 +81,49 @@ echo "==> 组装自包含 ${APP}"
 rm -rf "${APP}"
 mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 
+# 获取并准备内置 uv 二进制（固定版本 0.9.21，目标 aarch64-apple-darwin）
+UV_VERSION="0.9.21"
+UV_CACHE_DIR="${REPO_ROOT}/.build/tools/uv-${UV_VERSION}"
+UV_BIN="${UV_CACHE_DIR}/uv"
+
+prepare_uv() {
+    if [ -x "${UV_BIN}" ]; then
+        return 0
+    fi
+    echo "==> 准备内置 uv 二进制 (${UV_VERSION}, aarch64-apple-darwin)"
+    mkdir -p "${UV_CACHE_DIR}"
+
+    if [ -n "${MACAI_UV_BIN:-}" ] && [ -x "${MACAI_UV_BIN}" ]; then
+        echo "==> 使用 MACAI_UV_BIN 指定的 uv: ${MACAI_UV_BIN}"
+        cp "${MACAI_UV_BIN}" "${UV_BIN}"
+    elif command -v uv >/dev/null 2>&1; then
+        local sys_uv
+        sys_uv="$(command -v uv)"
+        if file "${sys_uv}" | grep -q "arm64"; then
+            echo "==> 使用系统已有 arm64 uv: ${sys_uv}"
+            cp "${sys_uv}" "${UV_BIN}"
+        fi
+    fi
+
+    if [ ! -x "${UV_BIN}" ]; then
+        echo "==> 从官方 Release 下载 uv ${UV_VERSION}..."
+        local download_url="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-aarch64-apple-darwin.tar.gz"
+        local tmp_tar="${UV_CACHE_DIR}/uv.tar.gz"
+        curl -fsSL --retry 3 "${download_url}" -o "${tmp_tar}"
+        tar -xzf "${tmp_tar}" -C "${UV_CACHE_DIR}" --strip-components=1
+        rm -f "${tmp_tar}"
+    fi
+
+    chmod +x "${UV_BIN}"
+}
+
 # 拷贝二进制
 cp "${GUI_BIN}" "${APP}/Contents/MacOS/MacAIConsole"
 cp "${DAEMON_BIN}" "${APP}/Contents/MacOS/aiworkd"
 cp "${CLI_BIN}" "${APP}/Contents/MacOS/macai"
+
+prepare_uv
+cp "${UV_BIN}" "${APP}/Contents/MacOS/uv"
 chmod +x "${APP}/Contents/MacOS/"*
 
 # 拷贝图标
