@@ -46,9 +46,10 @@ MacAI 是面向 Apple Silicon 的本地 AI Runtime：Rust daemon `aiworkd`（默
 3. **Python worker 常驻**：按可复用推理边界维持 persistent worker，禁止一请求一进程的 spawn → load → infer → exit。Python 环境由 `docs/decisions/2026-09-02-uv-python-environments.md` 的已落地决策约束，daemon 是环境安装与状态的唯一 owner。
 4. **卸载经过 lease / busy guard**：手动 unload、LRU 逐出和 keep-alive reaper 都不能中断 lease count > 0 的进行中请求。
 5. **禁止静默 fallback**：Provider 选择结果必须显式记录（requested / selected / effective device / reason）；显式指定 `--provider` 是硬选择，不可用时失败而非切换。UI 不得自行推断设备或可用性。
-6. **单一 owner**：keep_alive 字符串解析只有 `ai-daemon::scheduler::parse_keep_alive`；STT 上传音频格式裁决只有 daemon 入口 `crates/ai-daemon/src/audio.rs`（decode-on-ingest 归一化为 PCM WAV，Provider 契约始终是"只接收 PCM WAV"）；GUI 设置只有主窗口侧边栏一页（经 `AppRouter` 导航），没有独立 Settings scene。修改这些行为时改 owner，不要新增平行实现。
+6. **单一 owner**：keep_alive 字符串解析只有 `ai-daemon::scheduler::parse_keep_alive`；STT 上传音频格式裁决只有 daemon 入口 `crates/ai-daemon/src/audio.rs`（decode-on-ingest 归一化为 PCM WAV，Provider 契约始终是"只接收 PCM WAV"）；GUI 设置只有主窗口侧边栏一页（经 `AppRouter` 导航），没有独立 Settings scene；Runner 引擎环境与安装控制收敛于「管理」页（`ModelsView`）顶端，设置页不重复维护引擎状态。修改这些行为时改 owner，不要新增平行实现。
 7. **安全边界**：daemon 只绑 `127.0.0.1` 且无认证，不得默认暴露到局域网；日志不记录 API token 或模型内容，原始音频不写入任务历史。
 8. **Provider 必须诚实**：`available` / `ready` / `resident` 是不同状态；单个 Provider 探测失败时报告 unavailable + reason，不得让 `/api/providers` 整体 500。
+9. **自包含 App Bundle 与环境自适应**：发布版 `MacAIConsole.app` 自包含 `aiworkd`、`macai`、`uv`（`Contents/MacOS/`）与 `runners/`（`Contents/Resources/`）；daemon 启动自动探测 Bundle 内部 runners 与 uv 路径；`DaemonController` 自动注入 `MACAI_RUNNERS_DIR`、`MACAI_UV_PATH` 并补齐 GUI 子进程 PATH。
 
 ## 代码地图
 
@@ -58,7 +59,7 @@ MacAI 是面向 Apple Silicon 的本地 AI Runtime：Rust daemon `aiworkd`（默
 | `crates/ai-daemon` | `aiworkd` 本体。`main.rs` HTTP endpoints；`runtime.rs` 模型与 Provider 生命周期（lease）；`scheduler.rs` 内存预算（`min(ram*0.75, ram-8GB)`，`AIWORKD_MEMORY_BUDGET` 可覆盖）、LRU 与 keep-alive reaper；`registry.rs` SQLite 注册表（内存 HashMap 为唯一读路径）；`tasks.rs` 有界任务历史（终态保留最近 100 条）；`pull.rs` Hugging Face/ModelScope 下载（断点续传）；`audio.rs` STT 音频归一化；`providers/` 只保留 macos_say、mock 测试能力；`runners/` 提供所有生产 Provider 的发现、环境、协议和 Runtime bridge |
 | `runners/` | 七个 built-in Runner 包：`llama.cpp`（GGUF LLM + 受管引擎产物）、`whisper.cpp`（STT + 官方 source build 的常驻 server）、`mlx-lm`（MLX LLM）、`kokoro`（TTS）、`qwen3-asr`（STT）、`qwen3-tts`（TTS）、`sherpa-onnx`（STT）。daemon 启动时 `bootstrap_runners` 自动发现并装配为 `org.macai.*` provider |
 | `crates/ai-cli` | `macai` CLI（clap，单文件 `main.rs`），只调 daemon |
-| `apps/MacAIConsole` | SwiftUI 控制台。`DaemonAPI.swift`（HTTP 客户端）、`DaemonController.swift`（daemon 探测与启停：`AIWORKD_PATH` → `target/release` → `target/debug`）、`AppSettings.swift`、`AppRouter.swift`；运行环境页只消费 daemon `/api/runners`，视图在 `Views/` |
+| `apps/MacAIConsole` | SwiftUI 控制台。`DaemonAPI.swift`（HTTP 客户端）、`DaemonController.swift`（daemon 探测与启停：`AIWORKD_PATH` → `target/release` → `target/debug`）、`AppSettings.swift`、`AppRouter.swift`；「管理」页置顶消费 daemon `/api/runners` 与 `/api/providers` 提供引擎运维与模型管理，视图在 `Views/` |
 | `scripts/` | whisper.cpp 模型下载、llama.cpp 可选本地构建脚本与真实 Runner smoke；原生引擎安装统一由 daemon Runner install 拥有 |
 | `samples/` | Hermes TTS/STT 命令型 Provider 适配器与一键配置脚本 |
 
@@ -83,14 +84,14 @@ for runner in runners/*; do
 done
 ```
 
-构建 GUI app：先 `cargo build --release -p ai-daemon`，再在 `apps/MacAIConsole` 下 `scripts/build-app.sh release`，产物为 `build/MacAIConsole.app`。
+构建与打包 GUI app：在 `apps/MacAIConsole` 下执行 `scripts/build-app.sh release`（本地开发联动编译前后端并拉起）或 `scripts/build-app.sh dmg`（打包生成自包含 `MacAIConsole.dmg`，内置 `aiworkd`、`macai`、`uv` 与 `runners/`）。
 
 ## 约定与陷阱
 
 - **提交信息**：conventional commits + 中文描述（如 `feat: xxx`、`test: xxx`）。
 - **低依赖优先**：引入新依赖或外部二进制需要充分理由（先例：STT 格式归一化放弃 ffmpeg，选 symphonia 纯 Rust 解码）。
 - **测试哲学**：不写镜像字面量、clap derive 声明或系统框架往返的零防护力测试；同一契约只在单一位置固化（如 Kokoro 音色清单只在 DaemonAPIRequestTests 的 pull payload 测试固化）。发现死代码连同死测试时倾向删除，而不是补测试。
-- **本地产物不入库**：`target/`（Rust）、`.build/`（第三方引擎、Python venv）与模型权重都不在仓库；运行时数据在 `~/Library/Application Support/MacAIConsole/`（models.db、模型、日志）。
+- **本地产物不入库**：`target/`（Rust 编译产物）、`.build/`（本地构建临时缓存与工具）与模型权重都不在仓库；运行时受管引擎、环境与数据在 `~/Library/Application Support/MacAIConsole/`（Engines/、Models/、models.db、日志）。
 - **`.wt-qa/` 是 QA 用的 git worktree 副本**，已 gitignore，不属于本仓库：不要在其中工作，不要把它的变更算进本仓库。
-- **常用环境变量**：`AIWORKD_PATH`（daemon 二进制）、`MACAI_LLAMA_SERVER` / `MACAI_WHISPER_SERVER`（Runner 引擎显式覆盖）、`AIWORKD_MEMORY_BUDGET`（字节）、`MACAI_UV_PATH`、`MACAI_RUNNERS_DIR`、`MACAI_UV_PYTHON_INSTALL_MIRROR`。
+- **常用环境变量**：`AIWORKD_PATH`（daemon 二进制）、`MACAI_LLAMA_SERVER` / `MACAI_WHISPER_SERVER`（Runner 引擎显式覆盖）、`AIWORKD_MEMORY_BUDGET`（字节）、`MACAI_UV_PATH`、`MACAI_RUNNERS_DIR`、`MACAI_UV_PYTHON_INSTALL_MIRROR`、`AIWORKD_HF_ENDPOINT`。
 - **文档同步**：改动对外行为（endpoint、CLI 命令、环境变量、目录布局）时同步 `README.md`；非机械改动在 `docs/decisions/` 创建或更新唯一 owner，并同步它引用的 `docs/specs/`。
