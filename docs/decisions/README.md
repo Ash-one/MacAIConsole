@@ -30,8 +30,6 @@
 文件名使用 `YYYY-MM-DD-topic.md`。工作提案在交付后原地改写为已落地决策。
 已经交付的决策发生反转时创建新的交叉链接记录；只替换部分边界时，两份记录都明确各自继续拥有的条款。
 
-历史 `handoff.md` 可供追溯，不参与当前权威解析，也不接收新的工作提案或决策。
-
 ## 当前决策记录
 
 - [Runner 插件架构](2026-09-02-runner-plugin-architecture.md)——`implemented`
@@ -48,6 +46,12 @@
   （一个脚本停止旧进程、重建同一配置的前后端，并启动新 app。）
 - [模型管理页子条目详细设置与 Runner 识别展示](2026-09-06-model-management-detail-settings.md)——`implemented`
   （模型管理页全条目左键点击开启详细设置，透明展示 Runner 及识别依据，提供上下文与文件管理。）
+- [开源筹备阶段 1：环境解耦、脱敏与历史文档退役](2026-09-07-open-source-phase1-sanitization.md)——`implemented`
+  （DaemonController 消除开发者绝对路径、规范组织命名空间、补全 .gitignore、退役 handoff.md。）
+- [开源筹备阶段 2：社区治理规范、安全策略与第三方许可合规](2026-09-07-open-source-phase2-governance-and-compliance.md)——`implemented`
+  （落地 CONTRIBUTING、CODE_OF_CONDUCT、SECURITY、Issue/PR 模板、THIRD_PARTY_LICENSES 与模型免责声明。）
+- [开源筹备阶段 3：独立打包流水线与自动化发布 (DMG + CLI Release)](2026-09-07-open-source-phase3-packaging-and-release-pipeline.md)——`implemented`
+  （实现自包含 MacAIConsole.app、支持 DMG 制作与 hdiutil 降级、配置 GitHub Actions 自动化 Release 流水线。）
 
 已完成的 Kokoro 证据保存在
 [`docs/reference/kokoro-runner-verification.md`](../reference/kokoro-runner-verification.md)。

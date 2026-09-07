@@ -4,12 +4,12 @@
   <img src="logo.png" alt="MacAI logo" width="280">
 </p>
 
-MacAI 是一个跑在你 Mac 上的本地 AI Runtime。它的核心只有一个东西：Rust daemon `aiworkd`。模型注册、推理 worker、内存调度、HTTP API，全部归它管；CLI 和 SwiftUI 应用都是它的客户端。
+MacAI 是面向 Apple Silicon 的本地 AI 运行时。系统以 Rust 守护进程 `aiworkd` 为核心权威，统一管理模型注册、推理 worker 进程、内存调度与 HTTP API；CLI 与 SwiftUI 应用（MacAIConsole）均为无状态客户端。
 
-> 项目还在活跃开发中。现在适合本地开发、实验和个人工作流——发布安装、API 稳定性和向后兼容都还没承诺。
+> 项目处于活跃开发阶段，适合本地开发、实验与个人工作流；目前尚未承诺 API 稳定性和跨版本兼容。
 
 当前行为以本 README、代码和测试为准。工作提案、决策与契约草案位于
-[`docs/decisions/`](docs/decisions/README.md)；历史 `handoff.md` 不再作为当前设计权威。
+[`docs/decisions/`](docs/decisions/README.md)。
 
 ## 架构
 
@@ -24,7 +24,7 @@ OpenAI-compatible SDK ┘                                  └── MLX / Kokor
                                              └── local logs
 ```
 
-为什么要坚持「一个 daemon 管所有事」？因为客户端拥有模型状态的代价太高了：GUI 崩了模型跟着没，两个客户端看到的状态互相打架，内存调度各管各的最后一起爆。所以 MacAI 把这条路径砍掉了——GUI 和 CLI 不加载模型、不维护运行状态，屏幕上显示的每个状态值都来自 daemon 的 HTTP API。客户端崩了无所谓，模型还在 daemon 里驻着。
+架构坚持单守护进程管理全部状态，避免客户端持有模型生命周期：若由 GUI 或 CLI 直接加载模型，客户端异常会导致推理服务中断，多个客户端并存时亦容易引发状态分歧与内存竞争。在 MacAI 中，客户端不维护常驻运行状态，所有界面数据均从 daemon 的 HTTP API 实时拉取。客户端退出或重载不会影响后台已驻留的推理实例。
 
 ## 当前能力
 
@@ -33,13 +33,13 @@ OpenAI-compatible SDK ┘                                  └── MLX / Kokor
 - 默认监听 `127.0.0.1:11435`
 - OpenAI-compatible Chat、STT 和 TTS endpoints
 - Chat Completion 支持逐 token SSE streaming
-- STT 上传支持 wav / mp3 / flac / ogg / m4a，daemon 在入口统一解码为 PCM WAV——provider 只见 WAV，格式转换的脏活都在门口干完
-- SQLite 模型注册表，重启后注册记录还在
-- 模型 load / unload、busy guard 和请求期 model lease：卸载永远打断不了正在跑的请求
-- 内存预算默认 `min(RAM×0.75, RAM−8GB)`，LRU 逐出、keep-alive、空闲自动卸载都可配置
-- worker RSS、加速设备、活跃请求状态可查
-- Chat / STT / TTS 的有界会话内任务历史
-- GUI / daemon 本地日志
+- STT 音频上传支持 wav / mp3 / flac / ogg / m4a，由 daemon 在入口统一解码为 PCM WAV，下游 Provider 仅接收标准 PCM WAV 数据流
+- SQLite 模型注册表，重启后注册记录持久化保留
+- 模型 load / unload、busy guard 和请求期 model lease：模型卸载操作绝不打断正在处理中的请求
+- 内存预算默认 `min(RAM×0.75, RAM−8GB)`，支持 LRU 自动逐出、keep-alive 策略与空闲自动卸载
+- 支持查看 worker RSS 驻留内存、硬件加速设备与活跃请求状态
+- 维护 Chat / STT / TTS 的有界会话内任务历史
+- 提供 GUI 与 daemon 的本地持久化日志
 
 ### Provider
 
@@ -53,21 +53,20 @@ OpenAI-compatible SDK ┘                                  └── MLX / Kokor
 | TTS | org.macai.qwen3-tts（Runner） | Qwen3-TTS CustomVoice 模型目录 | MLX / Metal GPU |
 | TTS | org.macai.kokoro（Runner） | Kokoro 模型目录 | MLX / Metal GPU |
 
-生产推理引擎已全部收敛到 [Runner 架构](docs/decisions/2026-09-02-runner-plugin-architecture.md)：daemon 自动发现 `runners/` 下的 Runner 包并预先装配为动态 provider。Python 环境与原生引擎使用同一安装接口；`/api/model-profiles` 向 GUI 投影数据化 catalog，按 Profile ID 的下载动作由 daemon 展开 source、artifact 与 Runner 绑定。注册模型冻结当时的 Profile snapshot，后续 catalog 更新不会静默改写它。
+生产推理引擎已全部收敛到 [Runner 架构](docs/decisions/2026-09-02-runner-plugin-architecture.md)：daemon 自动发现 `runners/` 下的 Runner 包并装配为动态 Provider。Python 环境与原生 C++ 引擎共用同一套安装接口；`/api/model-profiles` 向客户端暴露数据化 catalog，按 Profile ID 下载时由 daemon 展开源地址、产物路径与 Runner 绑定。已注册模型会固化当时的 Profile 快照，不受后续 catalog 变更影响。
 
-`/api/models/load` 将调用者请求的 provider、daemon 选定的 provider 与裁决理由一同持久化；
-`/v1/models` 和 `/api/runtime` 返回 `requested_provider` / `provider` /
-`provider_selection_reason` / `effective_device`，便于审计缺省选择和兼容别名。
+`/api/models/load` 将调用方请求的 Provider、daemon 选定的 Provider 与裁决理由一并持久化记录；
+`/v1/models` 和 `/api/runtime` 暴露 `requested_provider`、`provider`、
+`provider_selection_reason` 及 `effective_device`，便于审计选择逻辑与兼容别名。
 
-本地目录通过 `POST /api/models/inspect` 由 daemon 的 trusted Runner manifest 检测；只有
-唯一匹配会返回短期 routing token。CLI 可用 `macai inspect <directory>` 查看结果，再用
-`macai load <directory> --routing-token <token>` 注册。GUI 展示同一诊断，不在 Swift 推断
-Runner。
+本地目录通过 `POST /api/models/inspect` 由 daemon 信任的 Runner manifest 静态探测；只有
+唯一匹配时才会颁发短期 routing token。CLI 可使用 `macai inspect <directory>` 查看检测结果，并通过
+`macai load <directory> --routing-token <token>` 完成注册。GUI 采用相同诊断，不自行推断 Runner。
 
-当前 Runner Protocol v1 是单实例、单活动推理。显式信任 Runner 等同信任本地代码以
-aiworkd 用户权限运行；digest、环境变量 allowlist 和输出路径校验不构成 OS 沙箱。
+当前 Runner Protocol v1 针对单实例、单活动推理设计。信任特定 Runner 意味着允许其以
+`aiworkd` 用户权限运行本地代码；digest 校验、环境变量白名单和输出路径检查不构成操作系统沙箱。
 
-每个 Provider 都是独立进程。这不是设计洁癖，是故障隔离的实际需要：某个推理引擎崩了——llama.cpp 段错误、Python worker OOM——`aiworkd` 本身保持存活，客户端收到的是 `backend_crashed` 这样的结构化错误，其他模型照常服务。另外有一点是刻意的：显式指定 `--provider` 是硬选择，provider 不可用就直接失败，绝不悄悄换一个。静默 fallback 会让「为什么变慢了」这种问题永远查不出原因。
+所有生产 Provider 均运行于独立 Runner 进程中，实现进程级故障隔离：当推理引擎发生段错误或 Python worker 发生 OOM 时，`aiworkd` 保持稳定存活并向客户端返回结构化的 `backend_crashed` 错误，其余模型服务不受影响。此外，系统坚持确定性调度：显式通过 `--provider` 指定引擎属于硬选择，若目标 Provider 不可用将直接失败并返回具体原因，不进行静默回退，确保推理延迟与硬件开销完全透明可溯。
 
 ### 客户端
 
@@ -80,7 +79,7 @@ keep-alive  pull        chat        run         transcribe
 speak       voice       logging     serve
 ```
 
-完整命令索引看 `macai --help`，参数和示例看 `macai <命令> --help`。几个容易混淆的：`start`、`unload`、`rename`、`keep-alive`、`remove` 操作的是 daemon 的运行状态或注册表；`remove` 删注册记录，磁盘上的模型文件保留。Runner-backed 模型 ID 来自稳定 Model Profile，不能 rename。
+完整命令索引可通过 `macai --help` 查询，具体参数与示例参见 `macai <命令> --help`。关键语义说明：`start`、`unload`、`rename`、`keep-alive` 与 `remove` 统一操作 daemon 的运行时状态或 SQLite 注册表；`remove` 仅注销模型条目，磁盘上的模型源文件保持不变。由 Model Profile 绑定的模型 ID 具有固定命名约束，不支持 rename。
 
 MacAIConsole 当前提供：
 
@@ -102,7 +101,7 @@ MacAIConsole 当前提供：
 - CMake
 - Python 3.12（Runner 的 uv 受管环境以 3.12 为基础解释器）
 
-仓库不含模型权重、编译好的第三方推理引擎和 Python 虚拟环境——这些都留在本机，仓库保持干净。
+仓库源码不包含模型权重、预编译第三方推理引擎及 Python 虚拟环境，所有运行时产物均在本地受管目录生成或存储。
 
 ## 快速开始
 
@@ -128,17 +127,16 @@ cargo build --release --workspace
 
 ### 3. 安装 llama.cpp 引擎（Runner）
 
-llama.cpp 已迁移 Runner 架构（`org.macai.llama.cpp`）。安装走 daemon 统一
-入口——GUI「设置 → 引擎」或直接调 API：
+llama.cpp 已收敛至 Runner 架构（`org.macai.llama.cpp`）。引擎安装通过 daemon 统一入口执行——可经由 GUI「设置 → 引擎」操作，或直接调用管理 API：
 
 ```bash
 curl -X POST http://127.0.0.1:11435/api/runners/org.macai.llama.cpp/install
 ```
 
-install 会同步 uv 受管的适配器环境，并下载经过验证的 llama.cpp 预编译
-产物（manifest `[engine]` 固定 tag + sha256 强制校验）到
+安装流程会自动同步 uv 受管的适配器环境，并下载验证过的 llama.cpp 预编译二进制（依赖 manifest `[engine]` 固定 tag 与 sha256 校验）到：
 `~/Library/Application Support/MacAIConsole/Engines/org.macai.llama.cpp/`。
-本机已经有合适的二进制的话，可以显式覆盖：
+
+若本地已有兼容版本的可执行文件，可通过环境变量显式覆盖：
 
 ```bash
 export MACAI_LLAMA_SERVER=/absolute/path/to/llama-server
@@ -163,7 +161,12 @@ export MACAI_LLAMA_SERVER=/absolute/path/to/llama-server
 ./target/release/macai unload local-model
 ```
 
-几个常用的后续操作：已注册但没在跑的模型用 `macai start <model>` 重新加载；`macai keep-alive <model> 30m` 调整空闲驻留时间；`macai rename` 改模型 ID，运行中的会先停；`macai remove` 删注册记录。TTS 模型可以用 `macai voice <model>` 看音色，`macai voice <model> <voice>` 设默认音色。
+常用生命周期管理：
+- 加载已注册模型：`./target/release/macai start <model>`
+- 调整空闲驻留时间：`./target/release/macai keep-alive <model> 30m`
+- 重命名模型 ID（运行中模型将先安全停用）：`./target/release/macai rename <old_id> <new_id>`
+- 注销模型记录（保留文件）：`./target/release/macai remove <model>`
+- TTS 音色查看与默认设置：`./target/release/macai voice <model>` 或 `./target/release/macai voice <model> <voice>`
 
 ### 4. 安装 whisper.cpp 引擎（Runner）
 
@@ -172,32 +175,29 @@ curl -X POST http://127.0.0.1:11435/api/runners/org.macai.whisper.cpp/install
 ./scripts/download-whisper-model.sh base
 ```
 
-install 会同步轻量适配器环境，校验 manifest 固定的 whisper.cpp 官方 source
-archive，并在 staging 中构建静态链接的常驻 `whisper-server`，随后原子提升到：
+安装流程会同步轻量适配器环境，校验 manifest 声明的 whisper.cpp 官方源码归档，并在临时暂存区构建静态链接的常驻 `whisper-server`，随后原子替换至：
 
 ```text
 ~/Library/Application Support/MacAIConsole/Engines/org.macai.whisper.cpp/build/bin/whisper-server
 .build/models/ggml-base.bin
 ```
 
-本机已有对应版本的 server 时可显式覆盖：
+若本机已有对应版本的 server 二进制，可通过环境变量覆盖：
 
 ```bash
 export MACAI_WHISPER_SERVER=/absolute/path/to/whisper-server
 ```
 
-注册 `.bin` STT 模型时省略 provider 会缺省选择
-`org.macai.whisper.cpp`；旧别名 `whisper.cpp` 仍会被规范化并记录选择原因。
-Runner 的常驻 server 在 load 时加载一次模型，后续转写复用该实例。
+注册 `.bin` 格式 STT 模型时若省略 `--provider`，将默认路由至 `org.macai.whisper.cpp`；旧别名 `whisper.cpp` 会被自动规范化并持久化记录选择依据。常驻 server 在加载时初始化模型，后续转写请求均复用该内存实例。
 
-Core ML encoder 是可选项，有它更快。把编译好的 `.mlmodelc` 目录放到 `.bin` 同目录、保持对应名称：
+Core ML encoder 为可选性能优化组件。将编译好的 `.mlmodelc` 目录置于与 `.bin` 模型同级的路径下并保持对应命名：
 
 ```text
 ggml-large-v3-turbo.bin
 ggml-large-v3-turbo-encoder.mlmodelc/
 ```
 
-没有 encoder 就走 Metal 路径，能用。
+若未提供 encoder 目录，引擎将自动走 Metal 计算路径。
 
 ### 5. 准备 Qwen3-ASR 0.6B
 
@@ -366,7 +366,7 @@ uv sync --project runners/mlx-lm --locked --no-dev
   --keep-alive 5m
 ```
 
-GGUF 和 MLX 格式互不通用：GGUF 走 llama.cpp，MLX 走 mlx-lm Runner。
+模型权重格式与 Runner 对应关系明确：GGUF 格式由 llama.cpp 加载，MLX 格式模型目录由 mlx-lm Runner 加载。
 
 ## MacAIConsole
 
@@ -431,7 +431,7 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-现有 OpenAI SDK 代码改个 `base_url` 就能接入，就这么简单。
+支持任何标准 OpenAI SDK，配置对应的 `base_url` 与模型 ID 即可接入。
 
 ### 主要 endpoints
 
@@ -592,9 +592,9 @@ stt:
       timeout: 300
 ```
 
-两个适配脚本的分工：TTS 脚本用 Python 标准库读取 Hermes 创建的 UTF-8 文本文件，调用 MacAI 后把音频写入 `{output_path}`；STT 脚本先把 Hermes 收到的 WAV、OGG、Opus 或其他 ffmpeg 支持的音频统一转成 MacAI 当前要求的 PCM WAV，再返回纯文本。
+两个适配脚本的分工：TTS 脚本使用 Python 标准库读取 Hermes 生成的 UTF-8 文本文件，请求 MacAI `/v1/audio/speech` 并将音频流写入 `{output_path}`；STT 脚本则将 Hermes 接收到的多格式音频（WAV、OGG、Opus 等）通过 ffmpeg 归一化为 PCM WAV，交由 MacAI 转写并输出纯文本。
 
-STT Provider 单独命名为 `macai` 还有另一个原因：Hermes 内置的 `openai` STT 路径可能把 `whisper-large-v3-turbo` 认成 Groq 模型名，改写成 `whisper-1`。命令型 Provider 会把 MacAI 的模型 ID 原样传递，绕开这个坑。
+STT Provider 显式命名为 `macai` 亦可规避模型名称改写：Hermes 原生 `openai` STT 逻辑可能将 `whisper-large-v3-turbo` 映射为特定云端厂商的 `whisper-1`。采用独立 command Provider 可确保本地模型 ID 被原样透传。
 
 ### 验证适配脚本
 
@@ -637,13 +637,13 @@ hermes config get stt.providers.macai
 
 配置完成后重启 Hermes Desktop；Gateway 用户执行 `/restart`。之后用 Hermes 的 `text_to_speech` 工具、CLI `/voice tts` 模式或消息平台的语音消息验证整条链路。
 
-### 常见问题
+### 常见排错
 
-- **`model_not_found`**：跑一下 `curl http://127.0.0.1:11435/v1/models`，把脚本配置里的模型 ID 改成返回的真实 `id`，或者重新跑一键配置。
-- **`Connection refused`**：先通过 MacAIConsole 启动 daemon，或者在仓库里跑 `./target/release/aiworkd`。
-- **`Required command is missing: ffmpeg`**：装好 ffmpeg 重新跑配置；STT 适配器靠它统一音频格式。
-- **Hermes 还显示旧 Provider**：重启 Hermes Desktop 或 Gateway。Hermes profile 相互隔离，确认跑配置脚本和启动 Hermes 用的是同一个 profile。
-- **模型第一次请求慢**：whisper.cpp 的 Core ML encoder 第一次做 ANE 特化需要额外时间，之后会复用缓存。
+- **`model_not_found`**：请求 `curl http://127.0.0.1:11435/v1/models` 确认已注册模型的准确 `id`，并将其填入脚本配置，或重新执行一键配置。
+- **`Connection refused`**：守护进程未启动。请在 MacAIConsole 中开启服务，或在终端运行 `./target/release/aiworkd`。
+- **`Required command is missing: ffmpeg`**：系统缺少 `ffmpeg` 依赖。请安装后重新执行配置脚本（STT 适配器依赖其归一化音频格式）。
+- **Hermes 仍沿用旧 Provider**：重启 Hermes Desktop 或在 Gateway 中执行 `/restart`；同时确认配置脚本写入的 profile 与运行中的 Hermes profile 一致。
+- **首次推理延迟偏高**：whisper.cpp 的 Core ML encoder 在首次调用时需完成 Apple Neural Engine (ANE) 架构特化，完成编译后将复用缓存。
 
 Hermes 命令型语音 Provider 的完整说明见 [Voice & TTS](https://hermes-agent.nousresearch.com/docs/user-guide/features/tts)。
 
@@ -668,9 +668,9 @@ MacAIConsole 使用以下目录：
 
 ## 安全边界
 
-`aiworkd` 现在只监听 loopback，也没有做局域网认证——所以请把它留在 `127.0.0.1` 上，走端口转发或反向代理暴露到不受信任网络之前，先想清楚。
+`aiworkd` 默认仅监听本地回环地址（`127.0.0.1`），且未内置身份鉴权机制。如需通过端口转发、反向代理或局域网访问，务必在前端配置健全的安全隔离与身份认证。
 
-任务历史可能包含 prompt、转写文本和 TTS 输入。原始音频不写入任务历史，日志也不记录 API token 或模型内容。
+任务历史可能包含 Prompt、转写结果与 TTS 文本输入。系统遵循数据最小化原则：原始音频数据不落盘写入任务历史，日志系统亦会主动过滤 API Token 与模型上下文内容。
 
 ## 开发与验证
 
@@ -718,3 +718,20 @@ docs/              # 当前工作提案、已落地决策、精确契约与验�
 - [whisper.cpp Runner 迁移决策](docs/decisions/2026-09-05-whisper-runner-migration.md)：官方 source build、常驻 server、兼容别名与验证证据。
 - readiness / deep-health、启动进度与完整可观测性
 - Homebrew、正式签名、公证与安装包
+
+## 社区与贡献
+
+我们欢迎社区贡献！无论是新模型 Runner 插件、功能建议还是缺陷修复：
+- 贡献指南请参见 [CONTRIBUTING.md](CONTRIBUTING.md)；
+- 行为准则请参见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
+
+## 安全政策
+
+MacAI 专注于本机私有推理：`aiworkd` 默认仅监听本地 `127.0.0.1:11435` 且无鉴权机制，切勿直接公网暴露。完整威胁模型与漏洞报告指引请参见 [SECURITY.md](SECURITY.md)。
+
+## 开源许可证与模型版权
+
+- **项目许可证**：MacAI 依据 [MIT License](LICENSE) 开源；
+- **第三方组件通知**：使用的第三方推理引擎与依赖库协议声明参见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)；
+- **AI 模型免责声明**：MacAI 仅提供本地运行时与任务调度能力，不拥有亦不分发模型权重；下载与使用各开源模型需严格遵守其原始权利人的授权许可协议。
+

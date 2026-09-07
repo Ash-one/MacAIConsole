@@ -1,9 +1,65 @@
+# Rust
 /target/
+Cargo.lock.bak
+
+# Swift / Xcode / MacAIConsole
 /.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcuserstate
+apps/MacAIConsole/build/
+
+# Local models and cache
 /model/
-.DS_Store
+/models/
+*.gguf
+*.bin
+*.safetensors
+*.onnx
+
+# Python
 __pycache__/
-*.pyc
-kokoro.wav
-/.wt-qa/
+*.py[cod]
+*$py.class
 .pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+.venv/
+env/
+venv/
+
+# macOS
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+
+# Editor / IDE
+.vscode/
+.idea/
+.zed/
+*.swp
+*.swo
+*~
+
+# QA and test artifacts
+/.wt-qa/
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.ogg
+
+# Environment variables
+.env
+.env.*
+!.env.example

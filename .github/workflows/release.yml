@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag (e.g. v0.1.0)'
+        required: false
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Release (macOS Apple Silicon)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Resolve Release Tag
+        id: release_tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Building release for tag: ${TAG}"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.9.21"
+          python-version: "3.12"
+
+      - name: Install create-dmg (optional)
+        run: |
+          brew install create-dmg || true
+
+      - name: Build standalone MacAIConsole.dmg
+        env:
+          DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+        run: |
+          ./apps/MacAIConsole/scripts/build-app.sh dmg
+
+      - name: Package CLI and Daemon distribution tarball
+        run: |
+          TAG="${{ steps.release_tag.outputs.tag }}"
+          DIST_DIR="dist"
+          CLI_STAGING="build/cli_staging"
+          TARBALL_NAME="macai-${TAG}-darwin-arm64.tar.gz"
+
+          rm -rf "${DIST_DIR}" "${CLI_STAGING}"
+          mkdir -p "${DIST_DIR}" "${CLI_STAGING}/bin" "${CLI_STAGING}/runners"
+
+          # 拷贝编译好的二进制
+          cp target/release/macai "${CLI_STAGING}/bin/"
+          cp target/release/aiworkd "${CLI_STAGING}/bin/"
+          chmod +x "${CLI_STAGING}/bin/"*
+
+          # 拷贝许可与文档
+          cp README.md LICENSE THIRD_PARTY_LICENSES.md "${CLI_STAGING}/"
+
+          # 拷贝内置 runners（排除本地缓存与虚拟环境）
+          rsync -a \
+            --exclude '.venv' \
+            --exclude '__pycache__' \
+            --exclude '*.pyc' \
+            --exclude '.pytest_cache' \
+            --exclude '.coverage' \
+            runners/ "${CLI_STAGING}/runners/"
+
+          # 打包 tarball 并归档 DMG
+          tar -czf "${DIST_DIR}/${TARBALL_NAME}" -C "${CLI_STAGING}" .
+          cp apps/MacAIConsole/build/MacAIConsole.dmg "${DIST_DIR}/"
+
+          # 计算 SHA256 校验和
+          cd "${DIST_DIR}"
+          shasum -a 256 MacAIConsole.dmg "${TARBALL_NAME}" > checksums.txt
+          echo "==> SHA-256 Checksums:"
+          cat checksums.txt
+          cd ..
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          files: |
+            dist/MacAIConsole.dmg
+            dist/macai-*-darwin-arm64.tar.gz
+            dist/checksums.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: false

@@ -1581,6 +1581,13 @@ fn builtin_runners_root() -> Option<PathBuf> {
         }
     }
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    // 检查 macOS App Bundle 资源目录（Contents/MacOS/../Resources/runners）
+    if let Some(contents_dir) = exe_dir.parent() {
+        let bundle_runners = contents_dir.join("Resources").join("runners");
+        if bundle_runners.join("kokoro").join("runner.toml").is_file() {
+            return Some(bundle_runners);
+        }
+    }
     for ancestor in exe_dir.ancestors().take(6) {
         let candidate = ancestor.join("runners");
         if candidate.join("kokoro").join("runner.toml").is_file() {

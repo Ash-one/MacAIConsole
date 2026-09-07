@@ -119,7 +119,7 @@ enum LogFiles {
 }
 
 enum AppLogger {
-    private static let queue = DispatchQueue(label: "com.guanxuzeng.MacAIConsole.file-log")
+    private static let queue = DispatchQueue(label: "org.macai.MacAIConsole.file-log")
     private static let formatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

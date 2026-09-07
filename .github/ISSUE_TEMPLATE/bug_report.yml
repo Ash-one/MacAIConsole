@@ -1,0 +1,65 @@
+name: 缺陷反馈 (Bug Report)
+description: 提交 MacAI 运行时的崩溃、错误或异常行为
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈问题！在提交之前，请确保已搜索过现有 Issue，并已在最新版本或 `main` 分支上验证。
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 清晰简洁地描述发生了什么问题。
+      placeholder: 在加载某个模型时，aiworkd 抛出异常并断开连接...
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 环境信息
+      description: 请提供您的硬件与系统版本。
+      placeholder: 例如：macOS 15.0 / Apple M3 Max 64GB / MacAI 0.1.0 (commit xxx)
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: 涉及组件
+      description: 问题出现在哪一个模块？
+      options:
+        - aiworkd (Daemon / HTTP API / Runtime)
+        - macai (CLI)
+        - MacAIConsole (GUI)
+        - Runner - llama.cpp
+        - Runner - whisper.cpp
+        - Runner - mlx-lm
+        - Runner - kokoro
+        - Runner - qwen3-asr / qwen3-tts
+        - Runner - sherpa-onnx
+        - 其他 / 未确定
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 请提供详细的复现步骤或可运行的命令。
+      value: |
+        1. 启动 daemon: `aiworkd`
+        2. 执行命令: `...`
+        3. 观察到的现象
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志 / 终端输出
+      description: 请粘贴相关的终端报错信息或 `MacAIConsole` 日志（请注意脱敏私密信息）。
+      render: shell
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+      description: 您期望的正常运行结果是什么？

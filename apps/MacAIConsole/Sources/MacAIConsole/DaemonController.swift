@@ -560,11 +560,22 @@ final class DaemonController {
         }
         process.environment = environment
 
-        // binary 位于 <仓库>/target/<配置>/aiworkd，工作目录定为仓库根
-        var cwd = binary.deletingLastPathComponent()
-        cwd = cwd.deletingLastPathComponent()
-        cwd = cwd.deletingLastPathComponent()
-        process.currentDirectoryURL = cwd
+        // 若处于独立 App Bundle，自动注入内置 runners 目录并使用用户主目录作为 cwd
+        if let bundleRunners = Bundle.main.resourceURL?.appendingPathComponent("runners"),
+           FileManager.default.fileExists(atPath: bundleRunners.path) {
+            environment["MACAI_RUNNERS_DIR"] = bundleRunners.path
+            process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        } else {
+            // 开发模式：binary 位于 <仓库>/target/<配置>/aiworkd，工作目录定为仓库根
+            var cwd = binary.deletingLastPathComponent()
+            if cwd.lastPathComponent == "release" || cwd.lastPathComponent == "debug" {
+                cwd = cwd.deletingLastPathComponent() // target
+                cwd = cwd.deletingLastPathComponent() // repo root
+                process.currentDirectoryURL = cwd
+            } else {
+                process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+            }
+        }
 
         let logURL = LogFiles.daemon
         let handle = try LogFiles.openForAppend(at: logURL)
@@ -595,17 +606,45 @@ final class DaemonController {
         AppLogger.error(message)
     }
 
-    /// 二进制探测顺序：AIWORKD_PATH 环境变量 → 仓库 target/release、target/debug。
+    /// 二进制探测顺序：
+    /// 1. AIWORKD_PATH 环境变量
+    /// 2. App Bundle 内置产物（Contents/MacOS 或 Contents/Resources）
+    /// 3. 当前工作目录及向上逐层寻找 target/release 或 target/debug
+    /// 4. 常见系统与用户安装路径（/opt/homebrew/bin, /usr/local/bin, ~/.cargo/bin, ~/.local/bin）
     static func resolveBinary() -> URL? {
-        var candidates: [String] = []
-        if let envPath = ProcessInfo.processInfo.environment["AIWORKD_PATH"] {
-            candidates.append(envPath)
+        let fm = FileManager.default
+        if let envPath = ProcessInfo.processInfo.environment["AIWORKD_PATH"],
+           fm.isExecutableFile(atPath: envPath) {
+            return URL(fileURLWithPath: envPath)
         }
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let repo = home.appendingPathComponent("Projects/MacAI")
-        candidates.append(repo.appendingPathComponent("target/release/aiworkd").path)
-        candidates.append(repo.appendingPathComponent("target/debug/aiworkd").path)
-        for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate) {
+
+        var candidates: [String] = []
+
+        // 1. App Bundle 内置产物
+        if let resourceURL = Bundle.main.resourceURL {
+            candidates.append(resourceURL.appendingPathComponent("aiworkd").path)
+        }
+        let bundleMacOS = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/aiworkd").path
+        candidates.append(bundleMacOS)
+
+        // 2. 当前目录及向上逐层寻找 target/release、target/debug（开发与测试环境）
+        var searchDir = URL(fileURLWithPath: fm.currentDirectoryPath)
+        for _ in 0..<5 {
+            candidates.append(searchDir.appendingPathComponent("target/release/aiworkd").path)
+            candidates.append(searchDir.appendingPathComponent("target/debug/aiworkd").path)
+            let parent = searchDir.deletingLastPathComponent()
+            if parent.path == searchDir.path { break }
+            searchDir = parent
+        }
+
+        // 3. 通用系统与用户安装路径
+        let home = fm.homeDirectoryForCurrentUser
+        candidates.append("/opt/homebrew/bin/aiworkd")
+        candidates.append("/usr/local/bin/aiworkd")
+        candidates.append(home.appendingPathComponent(".cargo/bin/aiworkd").path)
+        candidates.append(home.appendingPathComponent(".local/bin/aiworkd").path)
+
+        for candidate in candidates where fm.isExecutableFile(atPath: candidate) {
             return URL(fileURLWithPath: candidate)
         }
         return nil

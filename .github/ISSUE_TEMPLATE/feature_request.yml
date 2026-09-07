@@ -1,0 +1,36 @@
+name: 功能建议 (Feature Request)
+description: 建议为 MacAI 添加新功能、改进现有体验或提议新的 Runner 插件
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢为 MacAI 提出新想法！请尽可能详细地说明痛点与场景。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 解决的具体问题 / 痛点
+      description: 您遇到了什么阻碍，或者目前的哪种使用方式不够高效？
+      placeholder: 当我想使用某个特定的 Apple Silicon 本地推理引擎时...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议的解决方案
+      description: 清晰描述您希望看到的功能或行为。
+      placeholder: 增加一个新的 Runner 插件支持...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 考虑过的替代方案
+      description: 是否有任何替代的实现方式或临时 Workaround？
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: 贡献意愿
+      options:
+        - label: 我愿意提交 Pull Request 来实现这一功能
