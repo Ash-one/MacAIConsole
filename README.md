@@ -54,7 +54,7 @@ http：//127.0.0.1:11435
 
 <details>
 <summary><h2>
-方式二：从源码构建运行（开发者）</h3></summary>
+从源码构建运行（开发者）</h2></summary>
 
 #### 1. 构建 workspace
 
@@ -116,6 +116,10 @@ swift run
   - **「运行状态」**：实时查看系统内存压力、MacAI 内存预算、已加载模型常驻内存（RSS）与 Metal/ANE 加速状态。
   - **「任务」**：实时查看会话请求流（Chat / STT / TTS）与每个请求的耗时与输入输出。
   - **「日志」**：实时查看 daemon 与 GUI 的日志输出，支持按级别过滤和着色。
+
+<details>
+
+<summary>引擎与模型</summary>
 
 #### 4. 安装 llama.cpp 引擎（Runner）
 
@@ -360,6 +364,7 @@ uv sync --project runners/mlx-lm --locked --no-dev
 
 模型权重格式与 Runner 对应关系明确：GGUF 格式由 llama.cpp 加载，MLX 格式模型目录由 mlx-lm Runner 加载。
 
+</details>
 </details>
 
 ## 架构
