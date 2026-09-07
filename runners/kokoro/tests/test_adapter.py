@@ -161,7 +161,9 @@ class TestEspeakDataAndG2PResilience:
 
     def test_ensure_short_espeak_data_self_heals_when_pruned(self, tmp_path, monkeypatch):
         import hashlib
-        import espeakng_loader
+
+        espeakng_loader = pytest.importorskip("espeakng_loader")
+        pytest.importorskip("phonemizer")
 
         # 设置 XDG_CACHE_HOME 指向 tmp_path / "cache"
         cache_home = tmp_path / "cache"
@@ -197,6 +199,7 @@ class TestEspeakDataAndG2PResilience:
         assert (target / "phontab").read_bytes() == b"valid-content"
 
     def test_patch_misaki_zh_version_with_espeak_not_ready(self):
+        misaki = pytest.importorskip("misaki")
         # 当 espeak_ready=False 时，必须安全使用纯 Python fallback，不触发 espeak_Initialize
         _patch_misaki_zh_version(espeak_ready=False)
         from misaki import zh as misaki_zh
