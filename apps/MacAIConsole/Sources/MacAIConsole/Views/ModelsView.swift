@@ -17,6 +17,7 @@ struct ModelsView: View {
                 if let error = controller.lastError {
                     ErrorBanner(text: error)
                 }
+                engineSection
                 if !pendingRecommendations.isEmpty {
                     recommendedSection
                 }
@@ -25,7 +26,7 @@ struct ModelsView: View {
             }
             .padding(Theme.Space.page)
         }
-        .navigationTitle("模型管理")
+        .navigationTitle("管理")
         .toolbar {
             ToolbarItemGroup {
                 Button {
@@ -63,6 +64,7 @@ struct ModelsView: View {
         .task {
             controller.bootstrapIfNeeded()
             await rescanRepo()
+            try? await controller.refresh()
         }
     }
 
@@ -131,6 +133,61 @@ struct ModelsView: View {
         let provider = entry.ownedBy.split(separator: "/").last.map(String.init) ?? entry.ownedBy
         return controller.providers.first { $0.descriptor.id == provider }?
             .descriptor.isolation == "worker"
+    }
+
+    private func runnerTypeOrder(_ runner: RunnerEntry) -> Int {
+        let matchingProvider = controller.providers.first { $0.descriptor.id == runner.id }
+        let caps = matchingProvider?.descriptor.capabilities ?? runner.capabilities ?? []
+        if caps.contains("chat") || caps.contains("completion") {
+            return 0
+        } else if caps.contains("speech_to_text") {
+            return 1
+        } else if caps.contains("text_to_speech") {
+            return 2
+        }
+        return 3
+    }
+
+    private var sortedRunners: [RunnerEntry] {
+        controller.runners.sorted { a, b in
+            let orderA = runnerTypeOrder(a)
+            let orderB = runnerTypeOrder(b)
+            if orderA != orderB {
+                return orderA < orderB
+            }
+            return a.id < b.id
+        }
+    }
+
+    private var engineSection: some View {
+        SectionCard(
+            title: "引擎",
+            icon: "square.stack.3d.up",
+            subtitle: "由 daemon 管理的推理引擎环境，按需安装后即可运行对应类型的模型"
+        ) {
+            if sortedRunners.isEmpty {
+                EmptyHint(
+                    text: controller.phase == .online ? "正在探测 Runner 引擎…" : "守护进程离线，暂无引擎数据",
+                    systemImage: "square.stack.3d.up"
+                )
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(sortedRunners) { runner in
+                        let matchingProvider = controller.providers.first { $0.descriptor.id == runner.id }
+                        EngineRow(
+                            runner: runner,
+                            provider: matchingProvider,
+                            busy: controller.busyRunnerIDs.contains(runner.id)
+                        ) {
+                            Task { await controller.installRunner(runner.id) }
+                        }
+                        if runner.id != sortedRunners.last?.id {
+                            HairlineDivider()
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private var recommendedSection: some View {
@@ -758,16 +815,104 @@ struct RepoModelRow: View {
     }
 }
 
+/// 单个 Runner 引擎行：展示短名、完整 ID、能力类型（LLM/STT/TTS）、
+/// 就绪/未安装/失败状态与行内安装/重试按钮。
+struct EngineRow: View {
+    @Environment(DaemonController.self) private var controller
+    let runner: RunnerEntry
+    let provider: ProviderEntry?
+    let busy: Bool
+    let onInstall: () -> Void
+
+    private var shortName: String {
+        let raw = runner.id.components(separatedBy: ".").last ?? runner.id
+        if raw.hasSuffix("-cpp") {
+            return raw.replacingOccurrences(of: "-cpp", with: ".cpp")
+        }
+        return raw
+    }
+
+    private var typeTag: String? {
+        let caps = provider?.descriptor.capabilities ?? runner.capabilities ?? []
+        if caps.contains("chat") || caps.contains("completion") {
+            return "LLM"
+        } else if caps.contains("speech_to_text") {
+            return "STT"
+        } else if caps.contains("text_to_speech") {
+            return "TTS"
+        }
+        return nil
+    }
+
+    private var phaseStatus: (text: String, color: Color, canInstall: Bool) {
+        if runner.phase == "ready" {
+            var text = "已就绪"
+            if let device = provider?.status.effectiveDevice, !device.isEmpty {
+                text += " · \(device)"
+            }
+            return (text, Theme.success, false)
+        }
+        if runner.phase == "failed" {
+            return ("环境失败", Theme.danger, true)
+        }
+        return ("未安装", Color.secondary, true)
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ModelTypeIcon(type: (typeTag ?? "other").lowercased())
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(shortName)
+                        .font(.body.weight(.medium))
+                    if let typeTag {
+                        Chip(text: typeTag)
+                    }
+                }
+                Text(runner.id)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 12)
+            if busy {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("正在安装…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                let status = phaseStatus
+                HStack(spacing: 5) {
+                    StatusDot(color: status.color, size: 6, glow: status.color == Theme.success)
+                    Text(status.text)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(status.color)
+                }
+                if status.canInstall {
+                    Button(runner.phase == "failed" ? "重试" : "安装") {
+                        onInstall()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(controller.phase != .online)
+                }
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 4)
+    }
+}
+
+/// 精简后的推荐模型行：清晰展示模型名、短 Runner 标签、单行规格说明与操作按钮。
 struct ProfileModelRow: View {
     @Environment(DaemonController.self) private var controller
-    @Environment(AppRouter.self) private var router
     let model: ModelProfile
     let isRegistered: Bool
     let isLoaded: Bool
     let providerAvailable: Bool
-    /// true 表示 daemon 当前未装配 Profile 指定的 Runner。
     let providerMissing: Bool
-    /// Provider 不可用的具体原因，来自 daemon 的 reason / install_hint。
     let unavailableReason: String?
     let onSelect: () -> Void
     let action: () -> Void
@@ -784,35 +929,46 @@ struct ProfileModelRow: View {
         return "注册并启动"
     }
 
+    private var shortRunnerName: String {
+        let raw = model.runner.components(separatedBy: ".").last ?? model.runner
+        if raw.hasSuffix("-cpp") {
+            return raw.replacingOccurrences(of: "-cpp", with: ".cpp")
+        }
+        return raw
+    }
+
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .center, spacing: 10) {
             ModelTypeIcon(type: model.modelType)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 7) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
                     Text(model.name)
                         .font(.body.weight(.semibold))
-                    Chip(text: model.runner)
+                    Chip(text: shortRunnerName)
+                    if !providerAvailable {
+                        HStack(spacing: 3) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.caption2)
+                            Text("引擎未就绪")
+                                .font(.caption2.weight(.medium))
+                        }
+                        .foregroundStyle(Theme.warning)
+                        .help(unavailableReason ?? "对应的 Runner 引擎尚未安装，请在上方引擎列表中安装")
+                    }
                 }
-                Text("由 daemon Model Profile 提供")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 HStack(spacing: 5) {
                     if let estimate = model.memoryEstimateBytes {
                         Text("预计内存 \(Format.bytes(estimate))")
-                        Text("·")
                     }
                     if let repositoryURL = model.repositoryURL {
+                        if model.memoryEstimateBytes != nil {
+                            Text("·")
+                        }
                         Link("Hugging Face", destination: repositoryURL)
-                    }
-                    if !providerAvailable {
-                        Text("· 当前仅下载，无法启动")
                     }
                 }
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
-                if !providerAvailable {
-                    providerGuidance
-                }
             }
             Spacer(minLength: 12)
             if isLoaded {
@@ -836,30 +992,10 @@ struct ProfileModelRow: View {
                     .disabled(controller.phase != .online || (model.isDownloaded && !providerAvailable))
             }
         }
-        .padding(.vertical, 11)
+        .padding(.vertical, 8)
         .padding(.horizontal, 8)
         .hoverableRow()
         .onTapGesture { onSelect() }
         .help("点击查看详细设置")
-    }
-
-    /// Provider 不可用时的引导：统一指向设置页「引擎」区块——引擎安装
-    /// 所有 Runner 环境由 daemon /api/runners 统一管理。
-    @ViewBuilder
-    private var providerGuidance: some View {
-        HStack(spacing: 8) {
-            Label(
-                unavailableReason ?? "Provider 环境未就绪",
-                systemImage: "exclamationmark.triangle.fill"
-            )
-            .font(.caption2)
-            .foregroundStyle(Theme.warning)
-
-            Button("去设置安装引擎") {
-                router.goToSettings()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-        }
     }
 }

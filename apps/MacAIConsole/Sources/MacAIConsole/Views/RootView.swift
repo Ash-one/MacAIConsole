@@ -22,7 +22,7 @@ struct RootView: View {
                         .tag(Page.runtime)
                     Label("任务", systemImage: "list.bullet.rectangle.portrait")
                         .tag(Page.tasks)
-                    Label("模型管理", systemImage: "shippingbox")
+                    Label("管理", systemImage: "shippingbox")
                         .tag(Page.models)
                     Label("日志", systemImage: "doc.text.magnifyingglass")
                         .tag(Page.logs)

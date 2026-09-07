@@ -21,6 +21,7 @@ final class DaemonController {
     private(set) var phase: Phase = .offline
     var info: RuntimeInfo?
     var providers: [ProviderEntry] = []
+    var runners: [RunnerEntry] = []
     var modelProfiles: [ModelProfile] = []
     var registeredModels: [ModelEntry] = []
     private(set) var runningTasks: [InferenceTaskSummary] = []
@@ -45,6 +46,7 @@ final class DaemonController {
     }
     var busyModelIDs: Set<String> = []
     var busyRecommendationIDs: Set<String> = []
+    var busyRunnerIDs: Set<String> = []
 
     let api: DaemonAPI
 
@@ -156,6 +158,7 @@ final class DaemonController {
         async let modelsRequest = api.models()
         async let providersRequest = api.providers()
         async let profilesRequest = api.modelProfiles()
+        async let runnersRequest = api.runners()
         let tasksDue = forceTasks
             || lastTasksRefresh.map { Date.now.timeIntervalSince($0) >= Self.tasksRefreshInterval }
             ?? true
@@ -165,11 +168,13 @@ final class DaemonController {
         let models = try? await modelsRequest
         let providers = try? await providersRequest
         let profiles = try? await profilesRequest
+        let runners = try? await runnersRequest
         let tasks = try? await tasksRequest
         self.info = info
         if let models { registeredModels = models }
         if let providers { self.providers = providers }
         if let profiles { modelProfiles = profiles }
+        if let runners { self.runners = runners }
         if let tasks {
             runningTasks = tasks.running
             completedTasks = tasks.completed
@@ -209,6 +214,20 @@ final class DaemonController {
             await refreshAfterSuccessfulMutation()
         } catch {
             lastError = "卸载失败：\(Self.message(for: error))"
+        }
+    }
+
+    /// 安装 Runner 引擎（POST /api/runners/{id}/install）。
+    func installRunner(_ id: String) async {
+        guard !busyRunnerIDs.contains(id) else { return }
+        busyRunnerIDs.insert(id)
+        defer { busyRunnerIDs.remove(id) }
+        do {
+            _ = try await api.installRunner(id)
+            logInfo("已安装 Runner 引擎：\(id)")
+            await refreshAfterSuccessfulMutation()
+        } catch {
+            lastError = "\(id) 安装失败：\(Self.message(for: error))"
         }
     }
 

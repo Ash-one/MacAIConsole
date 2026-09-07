@@ -318,9 +318,9 @@ struct ModelDetailSheet: View {
 
                         Spacer()
 
-                        Button("去设置安装引擎") {
+                        Button("去安装引擎") {
                             dismiss()
-                            router.goToSettings()
+                            router.goToManagement()
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)

@@ -20,7 +20,6 @@ struct RuntimeStatusView: View {
                     )
                 }
                 loadedModelsSection
-                providerSection
             }
             .padding(Theme.Space.page)
         }
@@ -87,21 +86,6 @@ struct RuntimeStatusView: View {
                     text: controller.phase == .online ? "当前没有加载中的模型" : "守护进程离线，暂无数据",
                     systemImage: "cpu"
                 )
-            }
-        }
-    }
-
-    private var providerSection: some View {
-        SectionCard(title: "Runner", icon: "square.stack.3d.up") {
-            if controller.providers.isEmpty {
-                EmptyHint(text: "暂无 Runner 数据", systemImage: "square.stack.3d.up")
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(controller.providers) { provider in
-                        ProviderRow(entry: provider)
-                        if provider.id != controller.providers.last?.id { HairlineDivider() }
-                    }
-                }
             }
         }
     }
@@ -598,52 +582,4 @@ struct RunningModelSettingsView: View {
     }
 }
 
-struct ProviderRow: View {
-    let entry: ProviderEntry
 
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(entry.descriptor.id)
-                .font(.body.weight(.medium))
-                .lineLimit(1)
-            if entry.descriptor.isolation == "worker" {
-                Chip(text: "WORKER", color: Theme.info)
-            }
-            typeTag
-            Spacer(minLength: 12)
-            HStack(spacing: 5) {
-                StatusDot(
-                    color: entry.status.available ? Theme.success : Theme.danger,
-                    glow: entry.status.available
-                )
-                Text(statusText)
-                    .font(.caption.weight(.medium))
-                    .lineLimit(1)
-            }
-            .fixedSize()
-        }
-        .padding(.vertical, 7)
-        .padding(.horizontal, 2)
-    }
-
-    /// 类型 tag：按能力归类为 STT / TTS / LLM，中性灰与引擎 tag 区分。
-    @ViewBuilder
-    private var typeTag: some View {
-        let capabilities = entry.descriptor.capabilities ?? []
-        if capabilities.contains("speech_to_text") {
-            Chip(text: "STT")
-        } else if capabilities.contains("text_to_speech") {
-            Chip(text: "TTS")
-        } else if capabilities.contains("chat") || capabilities.contains("completion") {
-            Chip(text: "LLM")
-        }
-    }
-
-    private var statusText: String {
-        var text = entry.status.ready ? "就绪" : (entry.status.available ? "可用" : "不可用")
-        if let device = entry.status.effectiveDevice, !device.isEmpty {
-            text += " · \(device)"
-        }
-        return text
-    }
-}
