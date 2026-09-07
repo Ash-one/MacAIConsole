@@ -7,6 +7,7 @@
 //!
 //! uv 不可用（未安装或不在 PATH）时相关断言失败——CI 明确安装固定版本 uv。
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use ai_daemon::runners::{
@@ -87,6 +88,7 @@ fn manifest_of(package: &std::path::Path) -> ai_daemon::runners::RunnerManifest 
 fn manager(root: &std::path::Path) -> EnvironmentManager {
     EnvironmentManager::new(EnvironmentManagerConfig {
         runtime_root: root.join("Runtimes/python"),
+        uv_path: None,
     })
 }
 
@@ -434,14 +436,15 @@ async fn uv_resolution_reports_the_actual_version() {
 #[tokio::test]
 async fn uv_resolution_fails_with_descriptive_error_when_explicit_path_missing() {
     let root = temp_root("baduv");
-    let manager = manager(&root);
-    std::env::set_var("MACAI_UV_PATH", "/non/existent/uv_binary");
+    let manager = EnvironmentManager::new(EnvironmentManagerConfig {
+        runtime_root: root.join("Runtimes/python"),
+        uv_path: Some(PathBuf::from("/non/existent/uv_binary")),
+    });
     let err = manager
         .resolve_uv()
         .expect_err("must fail for nonexistent uv");
     assert!(err
         .to_string()
         .contains("cannot run /non/existent/uv_binary"));
-    std::env::remove_var("MACAI_UV_PATH");
     let _ = std::fs::remove_dir_all(root);
 }
