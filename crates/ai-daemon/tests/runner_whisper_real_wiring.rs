@@ -112,6 +112,7 @@ async fn whisper_runner_real_composition_load_infer_unload() {
     std::fs::create_dir_all(&temp).unwrap();
     let environments = EnvironmentManager::new(EnvironmentManagerConfig {
         runtime_root: root.join("Runtimes/python"),
+        uv_path: None,
     });
     let instances = Arc::new(RunnerInstanceManager::new(
         registry,

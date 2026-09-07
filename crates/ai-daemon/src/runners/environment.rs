@@ -205,12 +205,15 @@ pub struct EnvironmentManagerConfig {
     /// 受管环境根目录，例如
     /// `~/Library/Application Support/MacAIConsole/Runtimes/python`。
     pub runtime_root: PathBuf,
+    /// 可选显式 uv 可执行文件路径（优先于 MACAI_UV_PATH 与 fallback 路径）。
+    pub uv_path: Option<PathBuf>,
 }
 
 impl Default for EnvironmentManagerConfig {
     fn default() -> Self {
         Self {
             runtime_root: std::env::temp_dir().join("macai-runtimes/python"),
+            uv_path: None,
         }
     }
 }
@@ -220,7 +223,10 @@ impl EnvironmentManagerConfig {
     pub fn for_app_support() -> Self {
         let mut root = dirs_home();
         root.push("Library/Application Support/MacAIConsole/Runtimes/python");
-        Self { runtime_root: root }
+        Self {
+            runtime_root: root,
+            uv_path: None,
+        }
     }
 }
 
@@ -327,7 +333,9 @@ impl EnvironmentManager {
 
     fn locate_uv(&self) -> Result<UvSource, EnvironmentError> {
         let mut candidates = Vec::new();
-        if let Some(configured) = std::env::var_os("MACAI_UV_PATH") {
+        if let Some(configured) = &self.config.uv_path {
+            candidates.push(configured.clone());
+        } else if let Some(configured) = std::env::var_os("MACAI_UV_PATH") {
             candidates.push(PathBuf::from(configured));
         }
         if let Some(bundle_uv) = search_bundle_for("uv") {
@@ -352,7 +360,7 @@ impl EnvironmentManager {
             let output = match output {
                 Ok(output) if output.status.success() => output,
                 Ok(output) => {
-                    if is_path_fallback(&candidate) {
+                    if self.is_path_fallback(&candidate) {
                         continue;
                     }
                     return Err(EnvironmentError::UvNotAvailable {
@@ -362,7 +370,7 @@ impl EnvironmentManager {
                 Err(error) => {
                     // MACAI_UV_PATH 是显式配置，失败即报错；fallback 失败
                     // 则继续尝试下一个候选。
-                    if is_path_fallback(&candidate) {
+                    if self.is_path_fallback(&candidate) {
                         continue;
                     }
                     return Err(EnvironmentError::UvNotAvailable {
@@ -386,6 +394,16 @@ impl EnvironmentManager {
         Err(EnvironmentError::UvNotAvailable {
             reason: "no 'uv' executable found (checked MACAI_UV_PATH, App Bundle, PATH, and standard directories ~/.local/bin/uv, /opt/homebrew/bin/uv)".to_string(),
         })
+    }
+
+    /// 判断候选是否来自 fallback（而非显式配置）。
+    fn is_path_fallback(&self, candidate: &Path) -> bool {
+        if let Some(configured) = &self.config.uv_path {
+            return configured != candidate;
+        }
+        let env_val = std::env::var_os("MACAI_UV_PATH");
+        let env_path = env_val.as_ref().map(Path::new);
+        is_path_fallback_against(candidate, env_path)
     }
 
     /// 解析满足 manifest `python` 约束的解释器；缺失时由 uv 下载受管
@@ -986,11 +1004,9 @@ fn common_uv_fallback_paths() -> Vec<PathBuf> {
     ]
 }
 
-/// 判断候选是否来自 fallback（而非 MACAI_UV_PATH 显式配置）。
-fn is_path_fallback(candidate: &Path) -> bool {
-    std::env::var_os("MACAI_UV_PATH")
-        .map(|configured| PathBuf::from(&configured) != candidate)
-        .unwrap_or(true)
+/// 判断候选是否来自 fallback（而非显式配置）。
+fn is_path_fallback_against(candidate: &Path, configured: Option<&Path>) -> bool {
+    configured.map(|c| c != candidate).unwrap_or(true)
 }
 
 /// 运行解释器路径：`uv sync`（`UV_PROJECT_ENVIRONMENT`）创建的 venv 解释器。
@@ -1098,14 +1114,25 @@ mod tests {
     #[test]
     fn path_fallback_distinguishes_explicit_env_from_fallbacks() {
         let dummy = Path::new("/custom/tools/uv");
-        // 当未设置 MACAI_UV_PATH 时，任何路径均视为 fallback
-        std::env::remove_var("MACAI_UV_PATH");
-        assert!(is_path_fallback(dummy));
+        // 当未显式配置时，任何路径均视为 fallback
+        assert!(is_path_fallback_against(dummy, None));
 
-        // 当显式设置 MACAI_UV_PATH 时，与配置相同的路径不是 fallback，其余均为 fallback
-        std::env::set_var("MACAI_UV_PATH", "/custom/tools/uv");
-        assert!(!is_path_fallback(dummy));
-        assert!(is_path_fallback(Path::new("/other/bin/uv")));
-        std::env::remove_var("MACAI_UV_PATH");
+        // 当显式配置路径时，与配置相同的路径不是 fallback，其余均为 fallback
+        assert!(!is_path_fallback_against(dummy, Some(dummy)));
+        assert!(is_path_fallback_against(
+            Path::new("/other/bin/uv"),
+            Some(dummy)
+        ));
+    }
+
+    #[test]
+    fn manager_is_path_fallback_honors_config_uv_path() {
+        let dummy = PathBuf::from("/custom/tools/uv");
+        let manager = EnvironmentManager::new(EnvironmentManagerConfig {
+            runtime_root: std::env::temp_dir().join("test-root"),
+            uv_path: Some(dummy.clone()),
+        });
+        assert!(!manager.is_path_fallback(&dummy));
+        assert!(manager.is_path_fallback(Path::new("/other/bin/uv")));
     }
 }

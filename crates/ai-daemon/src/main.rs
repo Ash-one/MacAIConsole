@@ -1672,6 +1672,7 @@ async fn bootstrap_runners_from_root(
 
     let environments = EnvironmentManager::new(EnvironmentManagerConfig {
         runtime_root: app_support.join("Runtimes/python"),
+        uv_path: None,
     });
     let temp_root = app_support.join("Runtimes/tmp");
     if let Err(error) = std::fs::create_dir_all(&temp_root) {

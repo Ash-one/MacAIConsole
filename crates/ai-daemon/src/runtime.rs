@@ -1430,6 +1430,7 @@ mod tests {
         let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
         let environments = EnvironmentManager::new(EnvironmentManagerConfig {
             runtime_root: root.join("Runtimes/python"),
+            uv_path: None,
         });
         let instances = Arc::new(RunnerInstanceManager::new(
             registry,
@@ -1497,6 +1498,7 @@ mod tests {
         let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
         let environments = EnvironmentManager::new(EnvironmentManagerConfig {
             runtime_root: root.join("Runtimes/python"),
+            uv_path: None,
         });
         let instances = Arc::new(RunnerInstanceManager::new(
             registry,
