@@ -4,6 +4,7 @@ Cargo.lock.bak
 
 # Swift / Xcode / MacAIConsole
 /.build/
+/.swift-cache/
 .swiftpm/
 DerivedData/
 *.xcodeproj/xcuserdata/
@@ -63,3 +64,17 @@ venv/
 .env
 .env.*
 !.env.example
+
+# Local-only documentation, notes, and scratchpads
+/docs/icon-concepts/
+/docs/plans/*
+!/docs/plans/.gitkeep
+/docs/reference/
+*.local.md
+*.draft.md
+*.notes.md
+/notes/
+/TODO.md
+/NOTES.md
+/docs/local/
+/docs/internal/
