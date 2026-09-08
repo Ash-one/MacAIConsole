@@ -801,6 +801,15 @@ async fn register_and_load_model(
             )
         }
     };
+    let id = request.id.unwrap_or_else(|| default_model_id(&path));
+    if !valid_model_id(&id) {
+        return api_error(
+            AIError::InvalidRequest,
+            "model id may contain only letters, numbers, '.', '_' and '-'",
+        );
+    }
+    let existing_spec = state.runtime.get_model(&id).await;
+
     let inspected = match request.routing_token.as_deref() {
         Some(token) => {
             if request.provider.is_some() || request.model_type.is_some() {
@@ -852,6 +861,7 @@ async fn register_and_load_model(
         .as_ref()
         .and_then(|matched| capability_model_type(&matched.capability))
         .or(request.model_type.as_deref())
+        .or_else(|| existing_spec.as_ref().map(|s| s.model_type.as_str()))
     {
         Some("llm") | None => "llm",
         Some("stt") => "stt",
@@ -864,17 +874,36 @@ async fn register_and_load_model(
         }
     };
     let requested_provider = request.provider.as_deref().map(str::trim);
-    let requested_provider_audit = requested_provider.unwrap_or("auto");
-    let (provider, provider_selection_reason) = if let Some(matched) = &inspected {
+    let (provider, provider_selection_reason, requested_provider_audit) = if let Some(matched) =
+        &inspected
+    {
         (
             matched.runner.clone(),
             format!("local detector {}: {}", matched.detector_id, matched.reason),
+            "auto".to_string(),
         )
-    } else {
-        match select_provider(model_type, requested_provider, |provider, capability| {
+    } else if let Some(requested) = requested_provider {
+        match select_provider(model_type, Some(requested), |provider, capability| {
             state.runtime.provider_has_capability(provider, capability)
         }) {
-            Ok((provider, reason)) => (provider.into_owned(), reason.to_string()),
+            Ok((p, reason)) => (p.into_owned(), reason.to_string(), requested.to_string()),
+            Err(message) => return api_error(AIError::InvalidRequest, message),
+        }
+    } else if let Some(existing) = &existing_spec {
+        let audit = existing
+            .requested_provider
+            .clone()
+            .unwrap_or_else(|| "auto".to_string());
+        let reason = existing
+            .provider_selection_reason
+            .clone()
+            .unwrap_or_else(|| format!("preserved existing provider for registered model '{id}'"));
+        (existing.provider.clone(), reason, audit)
+    } else {
+        match select_provider(model_type, None, |provider, capability| {
+            state.runtime.provider_has_capability(provider, capability)
+        }) {
+            Ok((p, reason)) => (p.into_owned(), reason.to_string(), "auto".to_string()),
             Err(message) => return api_error(AIError::InvalidRequest, message),
         }
     };
@@ -918,13 +947,6 @@ async fn register_and_load_model(
         _ => {}
     }
 
-    let id = request.id.unwrap_or_else(|| default_model_id(&path));
-    if !valid_model_id(&id) {
-        return api_error(
-            AIError::InvalidRequest,
-            "model id may contain only letters, numbers, '.', '_' and '-'",
-        );
-    }
     let size_bytes = match recursive_path_size(&path) {
         Ok(size) => size,
         Err(error) => {
@@ -938,25 +960,39 @@ async fn register_and_load_model(
         // llama.cpp Runner 的本地 GGUF 注册默认驻留 5 分钟。
         "org.macai.llama.cpp" => (Some("gguf"), Some("5m"), Some(size_bytes)),
         "org.macai.whisper.cpp" => (Some("bin"), Some("always"), Some(size_bytes)),
-        _ => (None, Some("always"), Some(size_bytes)),
+        _ => (
+            existing_spec.as_ref().and_then(|s| s.format.as_deref()),
+            Some("always"),
+            Some(size_bytes),
+        ),
     };
     let spec = ai_core::model::ModelSpec {
         id: id.clone(),
-        name: request.name.unwrap_or_else(|| id.clone()),
+        name: request
+            .name
+            .or_else(|| existing_spec.as_ref().map(|s| s.name.clone()))
+            .unwrap_or_else(|| id.clone()),
         model_type: model_type.to_string(),
         provider: provider.to_string(),
-        requested_provider: Some(requested_provider_audit.to_string()),
-        provider_selection_reason: Some(provider_selection_reason.to_string()),
-        source: None,
+        requested_provider: Some(requested_provider_audit.clone()),
+        provider_selection_reason: Some(provider_selection_reason.clone()),
+        source: existing_spec.as_ref().and_then(|s| s.source.clone()),
         path: Some(path.to_string_lossy().into_owned()),
         format: format.map(String::from),
         size_bytes: Some(size_bytes),
-        memory_estimate,
+        memory_estimate: existing_spec
+            .as_ref()
+            .and_then(|s| s.memory_estimate)
+            .or(memory_estimate),
         keep_alive: request
             .keep_alive
+            .or_else(|| existing_spec.as_ref().and_then(|s| s.keep_alive.clone()))
             .or_else(|| keep_alive_default.map(String::from)),
-        context_length: request.context_length.or(Some(4096)),
-        default_voice: None,
+        context_length: request
+            .context_length
+            .or_else(|| existing_spec.as_ref().and_then(|s| s.context_length))
+            .or(Some(4096)),
+        default_voice: existing_spec.as_ref().and_then(|s| s.default_voice.clone()),
     };
 
     // ad-hoc 绑定：无 catalog Profile 的 Runner（如 llama.cpp）在注册路径上
@@ -2420,5 +2456,56 @@ runner = ">=0.1,<0.2"
             checked_profile_count, 7,
             "all 7 repo recommended model profiles must be checked"
         );
+    }
+
+    #[tokio::test]
+    async fn registered_directory_model_reloads_context_length_without_defaulting_to_llama_cpp() {
+        let runtime = Arc::new(Runtime::new());
+        let temp_dir = std::env::temp_dir().join(format!("mlx-test-model-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::fs::write(temp_dir.join("config.json"), b"{}").unwrap();
+
+        // 模拟已注册的目录型 MLX 模型
+        let initial_spec = ai_core::model::ModelSpec {
+            id: "mlx-test-model".to_string(),
+            name: "MLX Test Model".to_string(),
+            model_type: "llm".to_string(),
+            provider: "mock".to_string(),
+            requested_provider: Some("auto".to_string()),
+            provider_selection_reason: Some("local detector mlx-text-directory".to_string()),
+            source: None,
+            path: Some(temp_dir.to_string_lossy().into_owned()),
+            format: Some("directory".to_string()),
+            size_bytes: Some(2),
+            memory_estimate: Some(1024),
+            keep_alive: Some("always".to_string()),
+            context_length: Some(4096),
+            default_voice: None,
+        };
+        runtime.register(initial_spec).await;
+
+        // 重载上下文长度，未显式传递 provider 与 routing_token
+        let load_request = LoadModelRequest {
+            path: temp_dir.to_string_lossy().into_owned(),
+            id: Some("mlx-test-model".to_string()),
+            name: None,
+            context_length: Some(16384),
+            keep_alive: None,
+            model_type: None,
+            provider: None,
+            routing_token: None,
+        };
+
+        let response =
+            register_and_load_model(State(app_state(runtime.clone())), Json(load_request)).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let updated = runtime.get_model("mlx-test-model").await.unwrap();
+        assert_eq!(updated.provider, "mock");
+        assert_eq!(updated.format.as_deref(), Some("directory"));
+        assert_eq!(updated.context_length, Some(16384));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

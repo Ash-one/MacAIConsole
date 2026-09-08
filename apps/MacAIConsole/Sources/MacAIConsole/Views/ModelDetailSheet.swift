@@ -682,6 +682,13 @@ struct ModelDetailSheet: View {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    private var targetIsRepoDirectory: Bool {
+        if case .repo(let model) = target {
+            return model.isDirectory
+        }
+        return false
+    }
+
     private func applyContextLength() {
         guard let tokens = parsedContextTokens else { return }
         isApplyingContext = true
@@ -692,12 +699,17 @@ struct ModelDetailSheet: View {
             defer { isApplyingContext = false }
             if let path = filePath {
                 do {
+                    let isReg = controller.registeredModels.contains { $0.id == modelID }
+                    let token = (!isReg && targetIsRepoDirectory) ? inspection?.routingToken : nil
+                    let prov = token == nil ? runnerID : nil
                     try await controller.registerAndLoad(
                         path: path,
                         id: modelID,
                         contextLength: tokens,
                         keepAlive: nil,
-                        modelType: modelType == "llm" ? nil : modelType
+                        modelType: token != nil ? nil : (modelType == "llm" ? nil : modelType),
+                        provider: prov,
+                        routingToken: token
                     )
                     contextFeedback = "上下文设置已应用并生效（\(contextDraft)K）"
                     await onUpdate()

@@ -547,7 +547,8 @@ struct RunningModelSettingsView: View {
                     id: model.id,
                     contextLength: value,
                     keepAlive: keepAlive,
-                    modelType: nil
+                    modelType: nil,
+                    provider: model.provider
                 )
             } catch {
                 controller.lastError = "上下文重载失败：\(DaemonController.message(for: error))"
