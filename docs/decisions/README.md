@@ -56,4 +56,6 @@
   （实现自包含 MacAIConsole.app、支持 DMG 制作与 hdiutil 降级、配置 GitHub Actions 自动化 Release 流水线。）
 - [Kokoro G2P 容灾韧性与 Runner 退出诊断增强](2026-09-07-kokoro-g2p-resilience-and-runner-diagnostics.md)——`implemented`
   （将 espeak-ng 数据迁移至 `~/.cache/macai/espeak-<hash>` 免于 `/tmp` 清理，提供纯 Python 拼读降级机制，增强 Supervisor 子进程 stderr 退出诊断。）
+- [替换推荐 LLM 模型：以 MiniCPM5-2B-MLX 替代 Qwen3-8B-4bit](2026-09-08-replace-recommended-mlx-llm-with-minicpm5.md)——`implemented`
+  （将内置推荐 LLM 替换为更轻量、端侧表现优异的 MiniCPM5-2B-MLX，维持 7 个推荐模型 Profile 总数与全量文件可达性。）
 已完成的 Kokoro 证据保存在本地验证参考（`docs/reference/kokoro-runner-verification.md`）。

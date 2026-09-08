@@ -25,7 +25,7 @@ MacAI 原生支持大语言模型（LLM）、语音转文字（STT）和文字�
 
 | 类型 | 模型名称 / ID | 驱动引擎 | 来源 / 格式 | 预估内存 | 特点与说明 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **LLM**（对话/文本） | **Qwen3 8B MLX 4-bit**<br>`qwen3-8b-mlx-4bit` | `org.macai.mlx-lm` | `mlx-community/Qwen3-8B-4bit`<br>(MLX 目录) | ~4.6 GB | **[开箱推荐]** 高性能通用大模型，Metal 原生加速，响应迅速 |
+| **LLM**（对话/文本） | **MiniCPM5 2B MLX 4-bit**<br>`MiniCPM5-2B-MLX` | `org.macai.mlx-lm` | `openbmb/MiniCPM5-2B-MLX`<br>(MLX 目录) | ~2.5 GB | **[开箱推荐]** 端侧旗舰通用大模型，Metal 原生加速，长上下文与工具调用优化 |
 | **LLM**（对话/文本） | **SmolLM2 135M Instruct 8-bit**<br>`SmolLM2-135M-Instruct-8bit` | `org.macai.mlx-lm` | `mlx-community/SmolLM2-135M-Instruct-8bit`<br>(MLX 目录) | ~300 MB | **[轻量体验]** 极低内存占用，适合快速验证与低显存设备 |
 | **LLM**（对话/文本） | **通用 GGUF 模型**<br>*(如 Qwen / Llama / DeepSeek 等)* | `org.macai.llama.cpp` | 本地 `.gguf` 单文件 | 视权重而定 | 支持本地直接导入并运行任意兼容的 GGUF 格式模型 |
 | **STT**（语音转文字） | **Whisper Large v3 Turbo Q5**<br>`whisper-large-v3-turbo-q5` | `org.macai.whisper.cpp` | `ggerganov/whisper.cpp`<br>(ggml `.bin` 文件) | ~570 MB | **[开箱推荐]** 高速多语言转写，支持可选 Core ML / Metal 加速 |
@@ -51,7 +51,7 @@ MacAI 原生支持大语言模型（LLM）、语音转文字（STT）和文字�
 3. **首次配置与模型体验**：
    - 启动 `MacAIConsole`（应用内置自包含的 `aiworkd` 守护进程与 `uv` 环境工具）；
    - 在左侧进入**「管理」**页，顶端「引擎」区点击**「安装」**所需引擎（如 `llama.cpp` 或 `mlx-lm`；Python 依赖由内置 `uv` 自动隔离部署，无需系统预装 Python）；
-   - 在推荐模型列表点击**「下载」**（如 Qwen3 8B）；若网络较慢，可先在**「设置」**页将下载源切换为 `https://hf-mirror.com` 或配置代理；
+   - 在推荐模型列表点击**「下载」**（如 MiniCPM5 2B）；若网络较慢，可先在**「设置」**页将下载源切换为 `https://hf-mirror.com` 或配置代理；
    - 模型下载完成后即可直接在控制台加载启动，或通过本地 OpenAI 兼容 API（默认 `http://127.0.0.1:11435/v1`）接入任意客户端。
 
 > [!TIP]
@@ -130,7 +130,7 @@ swift run
 **通过 GUI 进行常用操作：**
 
 - **引擎一键安装**：进入侧边栏**「管理」**页，页面顶端「引擎」区块分类展示了全部 7 个 Runner 引擎（`llama.cpp`、`whisper.cpp`、`mlx-lm`、`kokoro`、`qwen3-asr`、`qwen3-tts`、`sherpa-onnx`）的环境状态。点击对应引擎右侧的「安装」按钮，daemon 会自动下载验证过的预编译产物或通过隔离的 `uv` 环境配置依赖，无需手动在终端执行 `curl .../install` 或 `uv sync`。
-- **推荐模型下载**：在「管理」页可浏览各引擎的精选推荐模型（如 Qwen3 8B、Kokoro-82M 等），点击「下载」即可由 daemon 在后台断点续传下载并存入本地受管目录（`~/Library/Application Support/MacAIConsole/Models/`）。如需使用国内镜像加速，可在**「设置」**页将下载源切换为 `https://hf-mirror.com`。
+- **推荐模型下载**：在「管理」页可浏览各引擎的精选推荐模型（如 MiniCPM5 2B、Kokoro-82M 等），点击「下载」即可由 daemon 在后台断点续传下载并存入本地受管目录（`~/Library/Application Support/MacAIConsole/Models/`）。如需使用国内镜像加速，可在**「设置」**页将下载源切换为 `https://hf-mirror.com`。
 - **模型生命周期与参数设置**：下载完成后可直接在模型卡片上一键「启动」加载到内存或「卸载」；点击模型条目可进入详情页调整 `keep-alive` 空闲驻留时间、上下文长度或默认 TTS 音色。
 - **状态与任务观测**：
   - **「运行状态」**：实时查看系统内存压力、MacAI 内存预算、已加载模型常驻内存（RSS）与 Metal/ANE 加速状态。
@@ -362,9 +362,9 @@ MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole「管理」页�
 uv sync --project runners/mlx-lm --locked --no-dev
 ```
 
-推荐模型（SmolLM2-135M-Instruct-8bit、Qwen3 8B · MLX 4-bit）可以在 MacAIConsole
+推荐模型（SmolLM2-135M-Instruct-8bit、MiniCPM5 2B · MLX 4-bit）可以在 MacAIConsole
 「管理」页一键下载；或者手动把 MLX 格式模型目录（含 `config.json` 与 safetensors 权重，
-例如 [mlx-community/Qwen3-8B-4bit](https://huggingface.co/mlx-community/Qwen3-8B-4bit)）
+例如 [openbmb/MiniCPM5-2B-MLX](https://huggingface.co/openbmb/MiniCPM5-2B-MLX)）
 放进：
 
 ```text

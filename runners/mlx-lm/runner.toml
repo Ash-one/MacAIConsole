@@ -37,7 +37,7 @@ profile = "profiles/SmolLM2-135M-Instruct-8bit.toml"
 adapter = "mlx-lm-chat"
 
 [[models]]
-profile = "profiles/qwen3-8b-mlx-4bit.toml"
+profile = "profiles/MiniCPM5-2B-MLX.toml"
 adapter = "mlx-lm-chat"
 
 [[local_detectors]]
