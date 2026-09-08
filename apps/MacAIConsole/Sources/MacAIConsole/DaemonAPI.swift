@@ -498,6 +498,16 @@ struct DaemonAPI {
         return try JSONDecoder().decode(Wrapper.self, from: try await postJSON("api/models/inspect", body: ["paths": paths], timeout: 15)).data
     }
 
+    /// POST /api/models/remote/inspect —— 获取公开远端模型的文件清单。
+    func inspectRemoteModel(source: RemoteModelSource, repo: String) async throws -> RemoteModelInspection {
+        let data = try await postJSON(
+            "api/models/remote/inspect",
+            body: ["source": source.rawValue, "repo": repo],
+            timeout: 30
+        )
+        return try JSONDecoder().decode(RemoteModelInspection.self, from: data)
+    }
+
     // MARK: Runner 管理面
 
     /// GET /api/runners —— 已发现/受信任 Runner + python 环境 phase。
@@ -566,6 +576,30 @@ struct DaemonAPI {
             body: ["auto_load": autoLoad],
             timeout: 7_200
         )
+        return try JSONDecoder().decode(LoadResponse.self, from: data)
+    }
+
+    /// POST /api/models/pull —— 下载用户从远端清单中选择的文件，不注册或加载。
+    func pullRemoteModel(
+        _ inspection: RemoteModelInspection,
+        modelType: String,
+        files: [RemoteModelFile],
+        singleFile: Bool
+    ) async throws -> LoadResponse {
+        var body: [String: Any] = [
+            "source": inspection.source.rawValue,
+            "repo": inspection.repo,
+            "revision": inspection.revision,
+            "model_type": modelType,
+            "auto_load": false,
+        ]
+        if singleFile, let file = files.first {
+            body["filename"] = file.path
+        } else {
+            body["directory"] = inspection.directory
+            body["files"] = files.map(\.path)
+        }
+        let data = try await postJSON("api/models/pull", body: body, timeout: 7_200)
         return try JSONDecoder().decode(LoadResponse.self, from: data)
     }
 

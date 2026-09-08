@@ -40,6 +40,8 @@
 - [whisper.cpp Runner 迁移](2026-09-05-whisper-runner-migration.md)——`implemented`
   （官方 source build、常驻 server、兼容别名和静态 Provider 删除已落地）
 - [模型下载链路修复](2026-09-02-download-link-fixes.md)——`implemented`
+- [GUI 公开远端模型下载](2026-09-08-gui-remote-model-download.md)——`implemented`
+  （输入 Hugging Face/ModelScope 仓库 ID，预览并选择文件后下载到模型仓库；不自动注册或加载。）
 - [本地模型目录检测与 Runner 路由](2026-09-06-local-directory-model-routing.md)——`implemented`
   （daemon-owned、无执行的目录签名检测与唯一匹配 routing token；GUI/CLI 消费同一管理 API。）
 - [GUI 与 daemon 的联合重建启动流程](2026-09-06-gui-daemon-rebuild-workflow.md)——`implemented`

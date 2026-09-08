@@ -464,6 +464,7 @@ MacAIConsole 当前提供：
 - 「管理」页顶端置顶展示全部 7 个 Runner 引擎环境状态与一键安装控制（按 LLM、STT、TTS 顺序分类排列）
 - 模型仓库、注册、加载、卸载、改名和详细设置
 - 从 daemon Profile catalog 展示并一键下载推荐模型；引擎未就绪时行内提示引导参考顶部引擎区块，安装完成后可直接注册启动，无需修改或重启 GUI
+- 「添加模型」支持输入公开 Hugging Face 或 ModelScope 仓库 ID/URL，预览文件与大小后下载到本地模型仓库；下载不会自动注册或加载
 - Chat / STT / TTS 任务记录与详情
 - GUI / daemon 最近日志，支持 Info / Debug 过滤和级别着色
 - 菜单栏状态与 daemon 启停
@@ -561,6 +562,7 @@ GET  /api/logging
 POST /api/logging
 POST /api/models/pull
 POST /api/models/inspect
+POST /api/models/remote/inspect
 POST /api/models/load
 POST /api/models/{id}/load
 POST /api/models/{id}/unload

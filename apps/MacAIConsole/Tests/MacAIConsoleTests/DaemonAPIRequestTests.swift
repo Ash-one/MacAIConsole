@@ -34,6 +34,52 @@ final class DaemonAPIRequestTests: XCTestCase {
         XCTAssertEqual(payload.count, 1)
     }
 
+    func testRemoteInspectAndPullUsePinnedRevisionWithoutAutoLoad() async throws {
+        let response = #"{"source":"modelscope","repo":"owner/model","revision":"abc123","directory":"owner--model","files":[{"path":"config.json","size_bytes":12},{"path":"weights/model.safetensors","size_bytes":34}]}"#
+        let api = try makeAPI(status: 200, body: response)
+        let inspection = try await api.inspectRemoteModel(source: .modelscope, repo: "owner/model")
+
+        let inspectPayload = try XCTUnwrap(RecordingURLProtocol.recorded.last?.bodyData).jsonDictionary
+        XCTAssertEqual(inspectPayload["source"] as? String, "modelscope")
+        XCTAssertEqual(inspectPayload["repo"] as? String, "owner/model")
+
+        RecordingURLProtocol.reset()
+        RecordingURLProtocol.enqueue(status: 200, body: #"{"id":"owner--model","state":"downloaded"}"#)
+        _ = try await api.pullRemoteModel(
+            inspection,
+            modelType: "llm",
+            files: inspection.files,
+            singleFile: false
+        )
+        let pullPayload = try XCTUnwrap(RecordingURLProtocol.recorded.last?.bodyData).jsonDictionary
+        XCTAssertEqual(pullPayload["source"] as? String, "modelscope")
+        XCTAssertEqual(pullPayload["revision"] as? String, "abc123")
+        XCTAssertEqual(pullPayload["directory"] as? String, "owner--model")
+        XCTAssertEqual(pullPayload["files"] as? [String], ["config.json", "weights/model.safetensors"])
+        XCTAssertEqual(pullPayload["auto_load"] as? Bool, false)
+        XCTAssertNil(pullPayload["filename"])
+    }
+
+    func testRemoteSingleFilePullUsesFilenameShape() async throws {
+        let response = #"{"source":"huggingface","repo":"owner/model","revision":"abc123","directory":"owner--model","files":[{"path":"weights/model-q4.gguf","size_bytes":12}]}"#
+        let api = try makeAPI(status: 200, body: response)
+        let inspection = try await api.inspectRemoteModel(source: .huggingface, repo: "owner/model")
+
+        RecordingURLProtocol.reset()
+        RecordingURLProtocol.enqueue(status: 200, body: #"{"id":"model-q4","state":"downloaded"}"#)
+        _ = try await api.pullRemoteModel(
+            inspection,
+            modelType: "llm",
+            files: inspection.files,
+            singleFile: true
+        )
+        let payload = try XCTUnwrap(RecordingURLProtocol.recorded.last?.bodyData).jsonDictionary
+        XCTAssertEqual(payload["filename"] as? String, "weights/model-q4.gguf")
+        XCTAssertNil(payload["files"])
+        XCTAssertNil(payload["directory"])
+        XCTAssertEqual(payload["auto_load"] as? Bool, false)
+    }
+
     func testRegisterAndLoadOmitsUnspecifiedFields() async throws {
         let api = try makeAPI(status: 200, body: #"{"id":"m","provider":"llama.cpp"}"#)
 

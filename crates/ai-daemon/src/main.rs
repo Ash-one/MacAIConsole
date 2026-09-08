@@ -148,6 +148,7 @@ async fn main() {
         .route("/api/providers", get(provider_statuses))
         .route("/api/runners", get(runner_statuses))
         .route("/api/models/inspect", post(inspect_models))
+        .route("/api/models/remote/inspect", post(inspect_remote_model))
         .route("/api/model-profiles", get(model_profiles))
         .route("/api/model-profiles/{id}/pull", post(pull_model_profile))
         .route(
@@ -387,7 +388,9 @@ fn pull_request_for_profile(
         ));
     };
     let request = pull::PullRequest {
+        source: pull::RemoteModelSource::Huggingface,
         repo: profile.source.repo.clone(),
+        revision: Some(profile.source.revision.clone()),
         filename,
         files,
         directory,
@@ -398,6 +401,17 @@ fn pull_request_for_profile(
     };
     pull::validate_pull_request(&request)?;
     Ok(request)
+}
+
+/// POST /api/models/remote/inspect —— 获取公开远端模型的文件清单。
+async fn inspect_remote_model(Json(request): Json<pull::RemoteInspectRequest>) -> Response {
+    if let Err(error) = pull::validate_repo_id(&request.repo) {
+        return api_error(AIError::InvalidRequest, error);
+    }
+    match pull::inspect_remote(request).await {
+        Ok(inspection) => Json(inspection).into_response(),
+        Err(error) => api_error(AIError::DownloadFailed, error),
+    }
 }
 
 fn profile_artifact_path(
@@ -655,14 +669,18 @@ async fn pull_model(
         Ok(value) => value,
         Err(error) => return api_error(AIError::InvalidRequest, error),
     };
-    let endpoint = match pull::configured_endpoint() {
+    let endpoint = match pull::endpoint_for(request.source) {
         Ok(endpoint) => endpoint,
         Err(error) => return api_error(AIError::InvalidRequest, error),
     };
-    tracing::info!(endpoint = %endpoint, repo = %request.repo, "starting model pull");
+    let revision = request.revision.as_deref().unwrap_or(match request.source {
+        pull::RemoteModelSource::Huggingface => "main",
+        pull::RemoteModelSource::Modelscope => "master",
+    });
+    tracing::info!(endpoint = %endpoint, repo = %request.repo, revision, "starting model pull");
     for (filename, destination) in targets {
         if let Err(error) =
-            pull::download_file(&endpoint, &request.repo, &filename, &destination).await
+            pull::download_file(&endpoint, &request.repo, revision, &filename, &destination).await
         {
             // 下载/TLS/UA 拒绝是传输层故障：映射 DownloadFailed（502）并保留底层
             // connect/response 错误链，供 UI 与日志诊断（不再伪装成内部 500）。
@@ -2019,6 +2037,32 @@ runner = ">=1,<2"
         assert_eq!(model["owned_by"], "aiworkd/mock");
     }
 
+    #[tokio::test]
+    async fn download_only_pull_does_not_register_or_load_model() {
+        let runtime = Arc::new(Runtime::new());
+        let request = pull::PullRequest {
+            source: pull::RemoteModelSource::Huggingface,
+            repo: "owner/model".to_string(),
+            revision: Some("abc123".to_string()),
+            filename: Some("model.gguf".to_string()),
+            files: Vec::new(),
+            directory: None,
+            model_type: "llm".to_string(),
+            id: Some("download-only".to_string()),
+            provider: None,
+            auto_load: Some(false),
+        };
+
+        let response = finish_pull(
+            app_state(Arc::clone(&runtime)),
+            request,
+            PathBuf::from("/Models/llm/model.gguf"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(runtime.get_model("download-only").await.is_none());
+    }
+
     fn qwen_tts_model() -> ai_core::model::ModelSpec {
         ai_core::model::ModelSpec {
             id: "qwen-tts".to_string(),
@@ -2446,6 +2490,10 @@ runner = ">=0.1,<0.2"
                 let request = pull_request_for_profile(profile, false).unwrap_or_else(|e| {
                     panic!("pull_request_for_profile failed for '{}': {e}", profile.id)
                 });
+                assert_eq!(
+                    request.revision.as_deref(),
+                    Some(profile.source.revision.as_str())
+                );
                 let (_, targets) = pull::pull_targets(&request)
                     .unwrap_or_else(|e| panic!("pull_targets failed for '{}': {e}", profile.id));
                 assert_eq!(targets.len(), profile.artifacts.files.len());

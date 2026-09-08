@@ -7,17 +7,32 @@ use std::path::{Path, PathBuf};
 
 use futures::StreamExt;
 use reqwest::{header, StatusCode};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
 pub const DEFAULT_ENDPOINT: &str = "https://huggingface.co";
+pub const MODELSCOPE_ENDPOINT: &str = "https://modelscope.cn/models";
 const ENDPOINT_ENV: &str = "AIWORKD_HF_ENDPOINT";
 const MAX_DOWNLOAD_ATTEMPTS: usize = 3;
+const MAX_REMOTE_FILES: usize = 10_000;
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RemoteModelSource {
+    #[default]
+    Huggingface,
+    Modelscope,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct PullRequest {
+    /// 远端仓库来源；缺省保持既有 Hugging Face 行为。
+    #[serde(default)]
+    pub source: RemoteModelSource,
     /// HF 仓库，如 "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
     pub repo: String,
+    /// inspect 返回的远端 revision；缺省使用平台默认分支。
+    pub revision: Option<String>,
     /// 仓库内文件路径，如 "qwen2.5-0.5b-instruct-q4_k_m.gguf"
     pub filename: Option<String>,
     /// 目录模型所需文件清单；与 directory 一起使用，并保留仓库内相对路径。
@@ -33,6 +48,42 @@ pub struct PullRequest {
     pub provider: Option<String>,
     /// 下载后是否立即注册加载；默认保持原有 pull 行为。
     pub auto_load: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RemoteInspectRequest {
+    pub source: RemoteModelSource,
+    pub repo: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RemoteFile {
+    pub path: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct RemoteInspection {
+    pub source: RemoteModelSource,
+    pub repo: String,
+    pub revision: String,
+    pub directory: String,
+    pub files: Vec<RemoteFile>,
+}
+
+pub fn validate_repo_id(repo: &str) -> Result<(), String> {
+    let mut parts = repo.split('/');
+    let valid = matches!((parts.next(), parts.next(), parts.next()), (Some(owner), Some(name), None)
+        if !owner.is_empty() && !name.is_empty());
+    if !valid {
+        return Err("model repo must use owner/name".to_string());
+    }
+    validate_pull_parts(repo, "placeholder")
+}
+
+pub fn remote_directory(repo: &str) -> Result<String, String> {
+    validate_repo_id(repo)?;
+    Ok(repo.replace('/', "--"))
 }
 
 /// 校验 repo/filename，防止路径穿越：只允许字母数字与 . _ - /
@@ -54,6 +105,10 @@ pub fn validate_pull_parts(repo: &str, filename: &str) -> Result<(), String> {
 
 /// 单文件与目录清单二选一，且所有相对路径都必须通过穿越校验。
 pub fn validate_pull_request(request: &PullRequest) -> Result<(), String> {
+    validate_repo_id(&request.repo)?;
+    if let Some(revision) = request.revision.as_deref() {
+        validate_pull_parts(&request.repo, revision)?;
+    }
     match (
         request.filename.as_deref(),
         request.files.is_empty(),
@@ -179,19 +234,240 @@ pub fn configured_endpoint() -> Result<String, String> {
     }
 }
 
+pub fn endpoint_for(source: RemoteModelSource) -> Result<String, String> {
+    match source {
+        RemoteModelSource::Huggingface => configured_endpoint(),
+        RemoteModelSource::Modelscope => Ok(MODELSCOPE_ENDPOINT.to_string()),
+    }
+}
+
 /// 组装下载 URL。huggingface.co（含 hf-mirror 等）与 modelscope.cn 的
 /// resolve 分支不同：HF 用 `resolve/main`，ModelScope 用 `resolve/master`。
 /// ModelScope 作为镜像源时，endpoint 填 `https://modelscope.cn/models`。
-pub fn resolve_url_with_endpoint(endpoint: &str, repo: &str, filename: &str) -> String {
-    let branch = if endpoint.contains("modelscope.cn") {
-        "resolve/master"
-    } else {
-        "resolve/main"
-    };
+pub fn resolve_url_with_endpoint(
+    endpoint: &str,
+    repo: &str,
+    revision: &str,
+    filename: &str,
+) -> String {
     format!(
-        "{}/{repo}/{branch}/{filename}",
+        "{}/{repo}/resolve/{revision}/{filename}",
         endpoint.trim_end_matches('/')
     )
+}
+
+fn next_link(value: &str) -> Option<&str> {
+    value
+        .split(',')
+        .find(|part| part.contains("rel=\"next\""))?
+        .split_once('<')?
+        .1
+        .split_once('>')
+        .map(|(url, _)| url)
+}
+
+#[derive(Deserialize)]
+struct HuggingFaceInfo {
+    sha: String,
+}
+
+#[derive(Deserialize)]
+struct HuggingFaceTreeEntry {
+    #[serde(rename = "type")]
+    entry_type: String,
+    path: String,
+    size: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ModelScopeResponse {
+    code: i64,
+    data: ModelScopeData,
+    message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ModelScopeData {
+    files: Vec<ModelScopeFile>,
+    latest_committer: Option<ModelScopeCommit>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ModelScopeFile {
+    #[serde(rename = "Type")]
+    entry_type: String,
+    path: String,
+    size: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ModelScopeCommit {
+    short_id: String,
+}
+
+/// 获取公开模型仓库的完整普通文件清单。远端地址由 source 与 daemon 配置决定，
+/// 不接受调用方提供任意 URL。
+pub async fn inspect_remote(request: RemoteInspectRequest) -> Result<RemoteInspection, String> {
+    validate_repo_id(&request.repo)?;
+    let directory = remote_directory(&request.repo)?;
+    let client = build_client()?;
+    match request.source {
+        RemoteModelSource::Huggingface => {
+            let endpoint = endpoint_for(request.source)?;
+            let info_url = format!(
+                "{}/api/models/{}",
+                endpoint.trim_end_matches('/'),
+                request.repo
+            );
+            let response = client
+                .get(&info_url)
+                .send()
+                .await
+                .map_err(|error| format!("cannot inspect Hugging Face model: {error}"))?;
+            if !response.status().is_success() {
+                return Err(format!(
+                    "Hugging Face returned {} for {info_url}",
+                    response.status()
+                ));
+            }
+            let info: HuggingFaceInfo = response
+                .json()
+                .await
+                .map_err(|error| format!("invalid Hugging Face model metadata: {error}"))?;
+            validate_pull_parts(&request.repo, &info.sha)?;
+
+            let mut next = Some(format!(
+                "{}/api/models/{}/tree/{}?recursive=true&expand=false&limit=1000",
+                endpoint.trim_end_matches('/'),
+                request.repo,
+                info.sha
+            ));
+            let expected_host = reqwest::Url::parse(&endpoint)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_string));
+            let mut files = Vec::new();
+            let mut pages = 0;
+            while let Some(url) = next.take() {
+                pages += 1;
+                if pages > 100 {
+                    return Err("Hugging Face file list exceeds 100 pages".to_string());
+                }
+                let response = client
+                    .get(&url)
+                    .send()
+                    .await
+                    .map_err(|error| format!("cannot list Hugging Face files: {error}"))?;
+                if !response.status().is_success() {
+                    return Err(format!(
+                        "Hugging Face returned {} for {url}",
+                        response.status()
+                    ));
+                }
+                let following = response
+                    .headers()
+                    .get(header::LINK)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(next_link)
+                    .map(str::to_string);
+                let entries: Vec<HuggingFaceTreeEntry> = response
+                    .json()
+                    .await
+                    .map_err(|error| format!("invalid Hugging Face file list: {error}"))?;
+                files.extend(
+                    entries
+                        .into_iter()
+                        .filter(|entry| entry.entry_type == "file")
+                        .map(|entry| RemoteFile {
+                            path: entry.path,
+                            size_bytes: entry.size,
+                        }),
+                );
+                if files.len() > MAX_REMOTE_FILES {
+                    return Err(format!(
+                        "remote model contains more than {MAX_REMOTE_FILES} files"
+                    ));
+                }
+                next = match following {
+                    Some(url)
+                        if reqwest::Url::parse(&url)
+                            .ok()
+                            .and_then(|parsed| parsed.host_str().map(str::to_string))
+                            == expected_host =>
+                    {
+                        Some(url)
+                    }
+                    Some(_) => return Err("Hugging Face pagination changed host".to_string()),
+                    None => None,
+                };
+            }
+            Ok(RemoteInspection {
+                source: request.source,
+                repo: request.repo,
+                revision: info.sha,
+                directory,
+                files,
+            })
+        }
+        RemoteModelSource::Modelscope => {
+            let endpoint = "https://modelscope.cn";
+            let url = format!(
+                "{endpoint}/api/v1/models/{}/repo/files?Revision=master&Recursive=true",
+                request.repo
+            );
+            let response = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|error| format!("cannot inspect ModelScope model: {error}"))?;
+            if !response.status().is_success() {
+                return Err(format!(
+                    "ModelScope returned {} for {url}",
+                    response.status()
+                ));
+            }
+            let payload: ModelScopeResponse = response
+                .json()
+                .await
+                .map_err(|error| format!("invalid ModelScope file list: {error}"))?;
+            if payload.code != 200 {
+                return Err(format!(
+                    "ModelScope returned {}: {}",
+                    payload.code, payload.message
+                ));
+            }
+            let files: Vec<_> = payload
+                .data
+                .files
+                .into_iter()
+                .filter(|entry| entry.entry_type == "blob")
+                .map(|entry| RemoteFile {
+                    path: entry.path,
+                    size_bytes: entry.size,
+                })
+                .collect();
+            if files.len() > MAX_REMOTE_FILES {
+                return Err(format!(
+                    "remote model contains more than {MAX_REMOTE_FILES} files"
+                ));
+            }
+            let revision = payload
+                .data
+                .latest_committer
+                .and_then(|commit| (!commit.short_id.is_empty()).then_some(commit.short_id))
+                .unwrap_or_else(|| "master".to_string());
+            Ok(RemoteInspection {
+                source: request.source,
+                repo: request.repo,
+                revision,
+                directory,
+                files,
+            })
+        }
+    }
 }
 
 /// 已存在的字节数（用于断点续传）。目标文件已完整存在时返回 None。
@@ -261,6 +537,7 @@ pub fn build_client() -> Result<reqwest::Client, String> {
 pub async fn download_file(
     endpoint: &str,
     repo: &str,
+    revision: &str,
     filename: &str,
     dest: &Path,
 ) -> Result<(), String> {
@@ -273,7 +550,7 @@ pub async fn download_file(
     let client = build_client()?;
     let mut last_error = None;
     for attempt in 1..=MAX_DOWNLOAD_ATTEMPTS {
-        match download_file_once(&client, &endpoint, repo, filename, dest).await {
+        match download_file_once(&client, &endpoint, repo, revision, filename, dest).await {
             Ok(()) => return Ok(()),
             Err(error) if error.retryable && attempt < MAX_DOWNLOAD_ATTEMPTS => {
                 tracing::warn!(
@@ -303,11 +580,12 @@ async fn download_file_once(
     client: &reqwest::Client,
     endpoint: &str,
     repo: &str,
+    revision: &str,
     filename: &str,
     dest: &Path,
 ) -> Result<(), DownloadError> {
     let part = part_path(dest);
-    let url = resolve_url_with_endpoint(endpoint, repo, filename);
+    let url = resolve_url_with_endpoint(endpoint, repo, revision, filename);
     let expected_len =
         match tokio::time::timeout(std::time::Duration::from_secs(30), client.head(&url).send())
             .await
@@ -363,9 +641,15 @@ async fn download_file_once(
                 | StatusCode::GATEWAY_TIMEOUT
         );
         return Err(if retryable {
-            DownloadError::retryable(format!("HF returned {} for {url}", response.status()))
+            DownloadError::retryable(format!(
+                "remote source returned {} for {url}",
+                response.status()
+            ))
         } else {
-            DownloadError::permanent(format!("HF returned {} for {url}", response.status()))
+            DownloadError::permanent(format!(
+                "remote source returned {} for {url}",
+                response.status()
+            ))
         });
     }
     let append = offset > 0 && response.status() == StatusCode::PARTIAL_CONTENT;
@@ -451,21 +735,47 @@ mod tests {
         assert!(validate_pull_parts("ok/repo", "../escape.bin").is_err());
         assert!(validate_pull_parts("", "x.gguf").is_err());
         assert!(validate_pull_parts("r", "/abs/path").is_err());
+        assert!(validate_repo_id("owner/model").is_ok());
+        assert!(validate_repo_id("model").is_err());
+        assert_eq!(remote_directory("owner/model").unwrap(), "owner--model");
     }
 
     #[test]
     fn builds_urls_and_targets() {
         assert_eq!(
-            resolve_url_with_endpoint(DEFAULT_ENDPOINT, "a/b", "c.gguf"),
-            "https://huggingface.co/a/b/resolve/main/c.gguf"
+            resolve_url_with_endpoint(DEFAULT_ENDPOINT, "a/b", "abc123", "c.gguf"),
+            "https://huggingface.co/a/b/resolve/abc123/c.gguf"
         );
         assert_eq!(
-            resolve_url_with_endpoint("https://hf-mirror.com/", "a/b", "c.gguf"),
+            resolve_url_with_endpoint("https://hf-mirror.com/", "a/b", "main", "c.gguf"),
             "https://hf-mirror.com/a/b/resolve/main/c.gguf"
         );
         let (dest, part) = pull_target("llm", "m.gguf");
         assert!(dest.ends_with("Models/llm/m.gguf"));
         assert!(part.to_string_lossy().ends_with("m.gguf.part"));
+    }
+
+    #[test]
+    fn decodes_remote_file_lists_and_pagination() {
+        assert_eq!(
+            next_link("<https://huggingface.co/next?cursor=x>; rel=\"next\""),
+            Some("https://huggingface.co/next?cursor=x")
+        );
+        let hf: Vec<HuggingFaceTreeEntry> = serde_json::from_str(
+            r#"[{"type":"directory","path":"weights","size":0},{"type":"file","path":"weights/model.gguf","size":12}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            hf.iter().filter(|entry| entry.entry_type == "file").count(),
+            1
+        );
+
+        let modelscope: ModelScopeResponse = serde_json::from_str(
+            r#"{"Code":200,"Data":{"Files":[{"Type":"blob","Path":"config.json","Size":12}],"LatestCommitter":{"ShortId":"abc123"}},"Message":"success"}"#,
+        )
+        .unwrap();
+        assert_eq!(modelscope.data.files[0].path, "config.json");
+        assert_eq!(modelscope.data.latest_committer.unwrap().short_id, "abc123");
     }
 
     #[test]
@@ -486,7 +796,9 @@ mod tests {
     #[test]
     fn builds_directory_model_targets_and_rejects_mixed_shapes() {
         let request = PullRequest {
+            source: RemoteModelSource::Huggingface,
             repo: "mlx-community/Qwen3-ASR-0.6B-8bit".to_string(),
+            revision: Some("abc123".to_string()),
             filename: None,
             files: vec![
                 "config.json".to_string(),
@@ -511,7 +823,9 @@ mod tests {
 
     fn directory_request(files: Vec<&str>, directory: &str) -> PullRequest {
         PullRequest {
-            repo: "r".to_string(),
+            source: RemoteModelSource::Huggingface,
+            repo: "owner/repo".to_string(),
+            revision: None,
             filename: None,
             files: files.into_iter().map(str::to_string).collect(),
             directory: Some(directory.to_string()),
@@ -614,7 +928,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         let dest = root.join("model.bin");
-        let result = download_file(&endpoint, "repo", "model.bin", &dest).await;
+        let result = download_file(&endpoint, "owner/repo", "main", "model.bin", &dest).await;
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(std::fs::read(&dest).unwrap(), b"1234567890");
         server.await.unwrap();
