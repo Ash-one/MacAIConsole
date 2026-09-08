@@ -78,3 +78,9 @@ venv/
 /NOTES.md
 /docs/local/
 /docs/internal/
+
+# Database & Runtime Logs
+*.db
+*.sqlite
+*.sqlite3
+*.log
