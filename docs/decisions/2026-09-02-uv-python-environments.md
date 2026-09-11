@@ -59,6 +59,11 @@ runners/<runner-id>/
 必须提交并一起评审。Runner 安装不得临时拼接包名，也不得在首次运行时重新解析
 未锁定版本。
 
+单文件 Script Runner 是本地作者入口的受控例外：用户点击“信任并添加”后，daemon 在
+staging 中从 PEP 723 依赖生成 `pyproject.toml` 与 `uv.lock`，校验 package 并记录 digest；
+后续环境安装仍只消费该 lock，不在首次推理时解析依赖。该边界由
+[`单文件 Script Runner`](2026-09-08-single-file-script-runner.md) 拥有。
+
 `uv sync` 默认执行 exact sync，会移除 lock 外包。MacAI 使用：
 
 ```bash

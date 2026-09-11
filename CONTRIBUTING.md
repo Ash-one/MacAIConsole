@@ -81,6 +81,12 @@ apps/MacAIConsole/scripts/build-app.sh release
 
 ## 如何贡献新的 Runner 扩展
 
+只需接入 Python 库且能力属于 Chat、STT 或 TTS 时，可先在 MacAIConsole「管理」页点击
+“新建 Runner”，从预设选择推理库或粘贴官方安装命令，再用一个带 PEP 723 metadata 的
+Python 文件实现返回模型对象的 `load` 与对应推理 hook；`unload(model)` 可选。应用会生成
+manifest、uv project、lock 和协议 host；需要多文件、原生资产或多 capability 时再使用
+完整 Runner 包。
+
 若要接入新的开源模型推理引擎，建议按照 [Runner 插件架构决策](docs/decisions/2026-09-02-runner-plugin-architecture.md) 进行：
 
 1. 在 `runners/<engine-name>/` 下创建 Runner 包；

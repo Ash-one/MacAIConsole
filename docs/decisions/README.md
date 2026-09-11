@@ -33,8 +33,10 @@
 ## 当前决策记录
 
 - [Runner 插件架构](2026-09-02-runner-plugin-architecture.md)——`implemented`
-  （built-in Runner、通用协议、Runtime/GUI 环境与 Model Profile catalog 管理面、选择审计已落地；第三方
-  Plugins、并发/cancel 和 OS 沙箱仍是独立后续边界）
+  （built-in Runner、通用协议、Runtime/GUI 环境与 Model Profile catalog 管理面、选择审计已落地；完整
+  第三方 package 导入、并发/cancel 和 OS 沙箱仍是独立后续边界）
+- [单文件 Script Runner 创建](2026-09-08-single-file-script-runner.md)——`implemented`
+  （PEP 723 单文件、GUI 编辑/预览、uv lock 生成、digest trust 与重启装配已落地。）
 - [uv 管理全部 Python 环境](2026-09-02-uv-python-environments.md)——`implemented`
   （daemon-owned uv environment manager、七个独立 lock 与 GUI API 消费已落地）
 - [whisper.cpp Runner 迁移](2026-09-05-whisper-runner-migration.md)——`implemented`

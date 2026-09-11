@@ -55,6 +55,12 @@ CREATE TABLE IF NOT EXISTS registered_model_profiles (
     snapshot TEXT NOT NULL,
     registered_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS runner_packages (
+    runner_id TEXT PRIMARY KEY,
+    version TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    installed_at INTEGER NOT NULL
+);
 ";
 
 /// 持久化的 Runner Model Profile snapshot。`digest` 是 profile 规范 JSON 的
@@ -67,6 +73,14 @@ pub struct StoredProfile {
     pub compatibility: String,
     pub digest: String,
     pub snapshot: String,
+    pub installed_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredRunnerPackage {
+    pub runner_id: String,
+    pub version: String,
+    pub digest: String,
     pub installed_at: u64,
 }
 
@@ -104,6 +118,50 @@ impl RegistryStore {
         Ok(Self {
             conn: Mutex::new(conn),
         })
+    }
+
+    pub fn runner_packages(&self) -> Vec<StoredRunnerPackage> {
+        let connection = self.conn.lock().expect("registry lock");
+        let mut statement = match connection.prepare(
+            "SELECT runner_id, version, digest, installed_at FROM runner_packages ORDER BY runner_id",
+        ) {
+            Ok(statement) => statement,
+            Err(_) => return Vec::new(),
+        };
+        statement
+            .query_map([], |row| {
+                Ok(StoredRunnerPackage {
+                    runner_id: row.get(0)?,
+                    version: row.get(1)?,
+                    digest: row.get(2)?,
+                    installed_at: row.get::<_, i64>(3)?.max(0) as u64,
+                })
+            })
+            .map(|rows| rows.filter_map(Result::ok).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn trust_runner_package(
+        &self,
+        runner_id: &str,
+        version: &str,
+        digest: &str,
+        installed_at: u64,
+    ) -> Result<(), String> {
+        self.conn
+            .lock()
+            .expect("registry lock")
+            .execute(
+                "INSERT INTO runner_packages (runner_id, version, digest, installed_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(runner_id) DO UPDATE SET
+                    version = excluded.version,
+                    digest = excluded.digest,
+                    installed_at = excluded.installed_at",
+                rusqlite::params![runner_id, version, digest, installed_at as i64],
+            )
+            .map(|_| ())
+            .map_err(|error| format!("cannot persist Runner package trust: {error}"))
     }
 
     /// 启动时全量加载。状态一律重置为 unloaded：daemon 重启后没有任何
@@ -534,6 +592,26 @@ mod tests {
         assert_eq!(
             persisted(&path, "SELECT state FROM models WHERE id = ?1", "m").as_deref(),
             Some("unloaded")
+        );
+        drop(store);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn runner_package_trust_roundtrips() {
+        let path = temp_db("runner-packages");
+        let store = RegistryStore::open(&path).unwrap();
+        store
+            .trust_runner_package("org.example.echo", "0.1.0", "digest-a", 123)
+            .unwrap();
+        assert_eq!(
+            store.runner_packages(),
+            vec![StoredRunnerPackage {
+                runner_id: "org.example.echo".to_string(),
+                version: "0.1.0".to_string(),
+                digest: "digest-a".to_string(),
+                installed_at: 123,
+            }]
         );
         drop(store);
         cleanup(&path);

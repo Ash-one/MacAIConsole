@@ -49,6 +49,7 @@ type LogFilterHandle =
 #[derive(Clone)]
 struct AppState {
     runtime: Arc<Runtime>,
+    app_support: PathBuf,
     log_filter: LogFilterHandle,
     log_level: Arc<AtomicU8>,
     routing_tokens: Arc<StdMutex<HashMap<String, RoutingToken>>>,
@@ -110,18 +111,31 @@ struct InspectModelsRequest {
     paths: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ScriptRunnerSourceRequest {
+    source: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateScriptRunnerRequest {
+    source: String,
+    expected_digest: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct NormalizeScriptDependenciesRequest {
+    preset: String,
+    input: String,
+}
+
 #[tokio::main]
 async fn main() {
     let initial_log_level = configured_log_level();
     let log_filter = init_tracing();
 
     // 注册表数据库与 GUI 模型仓库同根（~/Library/Application Support/MacAIConsole）。
-    let db_path = std::env::var("HOME")
-        .map(|home| {
-            std::path::PathBuf::from(home)
-                .join("Library/Application Support/MacAIConsole/models.db")
-        })
-        .unwrap_or_else(|_| std::path::PathBuf::from("models.db"));
+    let app_support = application_support_root();
+    let db_path = app_support.join("models.db");
     let mut runtime = Runtime::with_store(&db_path);
     // 装配仓库随附 built-in Runner（无 Runner/模型时静默跳过；生产 Provider
     // 全部从此边界进入，测试 provider 只由 Runtime::new 注入）。
@@ -131,6 +145,7 @@ async fn main() {
 
     let state = AppState {
         runtime: Arc::clone(&runtime),
+        app_support,
         log_filter,
         log_level: Arc::new(AtomicU8::new(initial_log_level)),
         routing_tokens: Arc::new(StdMutex::new(HashMap::new())),
@@ -147,6 +162,20 @@ async fn main() {
         .route("/api/tasks/{id}", get(task_detail))
         .route("/api/providers", get(provider_statuses))
         .route("/api/runners", get(runner_statuses))
+        .route(
+            "/api/runner-scripts/template/{kind}",
+            get(script_runner_template),
+        )
+        .route(
+            "/api/runner-scripts/dependency-presets",
+            get(script_dependency_presets),
+        )
+        .route(
+            "/api/runner-scripts/dependencies",
+            post(normalize_script_dependencies),
+        )
+        .route("/api/runner-scripts/inspect", post(inspect_script_runner))
+        .route("/api/runner-scripts", post(create_script_runner))
         .route("/api/models/inspect", post(inspect_models))
         .route("/api/models/remote/inspect", post(inspect_remote_model))
         .route("/api/model-profiles", get(model_profiles))
@@ -537,6 +566,320 @@ async fn runner_statuses(State(state): State<AppState>) -> Json<Value> {
         }));
     }
     Json(json!({ "data": data }))
+}
+
+async fn script_runner_template(AxumPath(kind): AxumPath<String>) -> Response {
+    match ai_daemon::runners::script_runner_template(&kind) {
+        Some(source) => Json(json!({ "source": source })).into_response(),
+        None => api_error(
+            AIError::InvalidRequest,
+            "script Runner template kind must be chat, stt or tts",
+        ),
+    }
+}
+
+async fn script_dependency_presets() -> Json<Value> {
+    Json(json!({ "data": ai_daemon::runners::script_dependency_presets() }))
+}
+
+async fn normalize_script_dependencies(
+    Json(request): Json<NormalizeScriptDependenciesRequest>,
+) -> Response {
+    match ai_daemon::runners::normalize_script_dependencies(&request.preset, &request.input) {
+        Ok(dependencies) => Json(json!({ "dependencies": dependencies })).into_response(),
+        Err(error) => api_error(AIError::InvalidRequest, error),
+    }
+}
+
+async fn inspect_script_runner(Json(request): Json<ScriptRunnerSourceRequest>) -> Response {
+    match ai_daemon::runners::inspect_script_runner(&request.source) {
+        Ok(preview) => Json(json!({ "valid": true, "runner": preview })).into_response(),
+        Err(error) => api_error(AIError::InvalidRequest, error),
+    }
+}
+
+async fn create_script_runner(
+    State(state): State<AppState>,
+    Json(request): Json<CreateScriptRunnerRequest>,
+) -> Response {
+    let preview = match ai_daemon::runners::inspect_script_runner(&request.source) {
+        Ok(preview) => preview,
+        Err(error) => return api_error(AIError::InvalidRequest, error),
+    };
+    if preview.source_digest != request.expected_digest {
+        return api_error(
+            AIError::InvalidRequest,
+            "script changed after inspection; inspect it again",
+        );
+    }
+
+    let plugins_root = state.app_support.join("Plugins");
+    let built_in_conflict = state.runtime.runner_instances().is_some_and(|manager| {
+        manager.discovered().into_iter().any(|entry| {
+            entry
+                .manifest
+                .as_ref()
+                .is_some_and(|manifest| manifest.id == preview.id)
+                && !entry.root.starts_with(&plugins_root)
+        })
+    });
+    if built_in_conflict {
+        return api_error(
+            AIError::InvalidRequest,
+            format!("Runner '{}' conflicts with a built-in Runner", preview.id),
+        );
+    }
+
+    let destination = plugins_root.join(&preview.id);
+    if destination.is_dir() {
+        let same_source = std::fs::read_to_string(destination.join("runner.py"))
+            .ok()
+            .and_then(|source| ai_daemon::runners::inspect_script_runner(&source).ok())
+            .is_some_and(|current| current.source_digest == preview.source_digest);
+        let installed_digest = ai_daemon::runners::RunnerRegistry::discover(
+            &[],
+            std::slice::from_ref(&destination),
+            &std::collections::HashSet::new(),
+        )
+        .entries()
+        .first()
+        .and_then(|entry| entry.package_digest.clone());
+        let trusted = installed_digest.as_deref().is_some_and(|digest| {
+            state
+                .runtime
+                .runner_packages()
+                .iter()
+                .any(|package| package.runner_id == preview.id && package.digest == digest)
+        });
+        if same_source && trusted {
+            return Json(json!({
+                "id": preview.id,
+                "version": preview.version,
+                "state": "added",
+                "restart_required": true,
+            }))
+            .into_response();
+        }
+        return api_error(
+            AIError::InvalidRequest,
+            format!(
+                "Runner '{}' already exists with different content",
+                preview.id
+            ),
+        );
+    }
+
+    if let Err(error) = std::fs::create_dir_all(&plugins_root) {
+        return api_error(
+            AIError::Internal,
+            format!("cannot create Plugins directory: {error}"),
+        );
+    }
+    let staging = state.app_support.join("Runtimes/tmp").join(format!(
+        ".staging-{}-{}",
+        std::process::id(),
+        unix_nanos()
+    ));
+    if let Err(error) = ai_daemon::runners::materialize_script_runner(&request.source, &staging) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return api_error(AIError::InvalidRequest, error);
+    }
+
+    if let Err(response) = prepare_script_runner_package(&state, &staging).await {
+        let _ = std::fs::remove_dir_all(&staging);
+        return response;
+    }
+
+    let registry = ai_daemon::runners::RunnerRegistry::discover(
+        &[],
+        std::slice::from_ref(&staging),
+        &std::collections::HashSet::new(),
+    );
+    let descriptor = registry
+        .entries()
+        .iter()
+        .find(|entry| entry.root == staging)
+        .cloned();
+    let Some(descriptor) = descriptor else {
+        let _ = std::fs::remove_dir_all(&staging);
+        return api_error(
+            AIError::InvalidRequest,
+            "generated Runner package could not be discovered",
+        );
+    };
+    if matches!(
+        descriptor.state,
+        ai_daemon::runners::RunnerState::Unavailable
+    ) {
+        let message = descriptor
+            .reason
+            .unwrap_or_else(|| "generated Runner package is invalid".to_string());
+        let _ = std::fs::remove_dir_all(&staging);
+        return api_error(AIError::InvalidRequest, message);
+    }
+    let Some(package_digest) = descriptor.package_digest else {
+        let _ = std::fs::remove_dir_all(&staging);
+        return api_error(AIError::Internal, "generated Runner package has no digest");
+    };
+    if let Err(error) = std::fs::rename(&staging, &destination) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return api_error(
+            AIError::Internal,
+            format!("cannot install Runner package: {error}"),
+        );
+    }
+    if let Err(error) =
+        state
+            .runtime
+            .trust_runner_package(&preview.id, &preview.version, &package_digest)
+    {
+        let _ = std::fs::remove_dir_all(&destination);
+        return api_error(AIError::Internal, error);
+    }
+
+    Json(json!({
+        "id": preview.id,
+        "version": preview.version,
+        "package_digest": package_digest,
+        "state": "added",
+        "restart_required": true,
+    }))
+    .into_response()
+}
+
+async fn prepare_script_runner_package(
+    state: &AppState,
+    package: &FilePath,
+) -> Result<(), Response> {
+    let uv = state
+        .runtime
+        .runner_instances()
+        .and_then(|manager| manager.environments().resolve_uv().ok())
+        .or_else(|| {
+            ai_daemon::runners::EnvironmentManager::new(
+                ai_daemon::runners::EnvironmentManagerConfig {
+                    runtime_root: state.app_support.join("Runtimes/python"),
+                    uv_path: None,
+                },
+            )
+            .resolve_uv()
+            .ok()
+        })
+        .ok_or_else(|| {
+            api_error(
+                AIError::ProviderUnavailable,
+                "uv is required to lock Script Runner dependencies",
+            )
+        })?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(600),
+        tokio::process::Command::new(&uv.path)
+            .args(["lock", "--project"])
+            .arg(package)
+            .env("UV_NO_PROGRESS", "1")
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| api_error(AIError::Timeout, "uv lock timed out"))?
+    .map_err(|error| {
+        api_error(
+            AIError::ProviderUnavailable,
+            format!("cannot run uv lock: {error}"),
+        )
+    })?;
+    if !output.status.success() {
+        return Err(api_error(
+            AIError::ProviderUnavailable,
+            format!(
+                "uv lock failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+
+    let probe_environment = package.join(".venv");
+    let sync = tokio::time::timeout(
+        Duration::from_secs(600),
+        tokio::process::Command::new(&uv.path)
+            .args(["sync", "--locked", "--no-dev", "--project"])
+            .arg(package)
+            .env("UV_PROJECT_ENVIRONMENT", &probe_environment)
+            .env("UV_NO_PROGRESS", "1")
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| api_error(AIError::Timeout, "uv dependency validation timed out"))?
+    .map_err(|error| {
+        api_error(
+            AIError::ProviderUnavailable,
+            format!("cannot validate Script Runner dependencies: {error}"),
+        )
+    })?;
+    if !sync.status.success() {
+        return Err(api_error(
+            AIError::ProviderUnavailable,
+            format!(
+                "uv dependency validation failed: {}",
+                String::from_utf8_lossy(&sync.stderr).trim()
+            ),
+        ));
+    }
+
+    let probe = tokio::time::timeout(
+        Duration::from_secs(120),
+        tokio::process::Command::new(probe_environment.join("bin/python"))
+            .args([
+                "script_host.py",
+                "runner.py",
+                "script_config.json",
+                "--probe",
+            ])
+            .current_dir(package)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await;
+    let cleanup = std::fs::remove_dir_all(&probe_environment);
+    let probe = probe
+        .map_err(|_| api_error(AIError::Timeout, "Script Runner probe timed out"))?
+        .map_err(|error| {
+            api_error(
+                AIError::ProviderUnavailable,
+                format!("cannot run Script Runner probe: {error}"),
+            )
+        })?;
+    if !probe.status.success() {
+        return Err(api_error(
+            AIError::ProviderUnavailable,
+            format!(
+                "Script Runner probe failed: {}",
+                String::from_utf8_lossy(&probe.stderr).trim()
+            ),
+        ));
+    }
+    cleanup.map_err(|error| {
+        api_error(
+            AIError::Internal,
+            format!("cannot clean Script Runner validation environment: {error}"),
+        )
+    })?;
+    Ok(())
+}
+
+fn application_support_root() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join("Library/Application Support/MacAIConsole"))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn unix_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
 }
 
 /// 显式安装 Runner python 环境（唯一网络/安装入口，daemon 拥有 uv）。幂等：
@@ -1616,7 +1959,7 @@ fn api_error(error: AIError, message: impl Into<String>) -> Response {
 ///
 /// 找不到 Runner 目录、无 python-uv Runner 或模型目录缺失时静默跳过，保留纯
 /// 内置 Provider 路径；模型目录缺失表示用户尚未下载 artifact，不假装 ready。
-/// Plugins 目录与显式信任留到安装 slice。
+/// 受信 Plugins 目录与 built-in root 在同一次 discovery 中装配。
 /// 定位 built-in Runner 目录：`MACAI_RUNNERS_DIR` → cwd `runners`/`../runners`
 /// → daemon 可执行文件祖先中的仓库 `runners/`。最后一条让 Finder/launchd
 /// 启动（cwd 不可靠）也能发现仓库随附 Runner。
@@ -1683,7 +2026,17 @@ async fn bootstrap_runners_from_root(
         RunnerModelBinding, RunnerProvider, RunnerRegistry, RunnerState,
     };
 
-    let registry = RunnerRegistry::discover(&[runner_root.clone()], &[], &HashSet::new());
+    let trusted_package_digests: HashSet<_> = runtime
+        .runner_packages()
+        .into_iter()
+        .map(|package| package.digest)
+        .collect();
+    let plugin_root = app_support.join("Plugins");
+    let registry = RunnerRegistry::discover(
+        &[runner_root.clone()],
+        &[plugin_root],
+        &trusted_package_digests,
+    );
     // 诊断：打印非可用/非 trusted 条目及其原因，便于定位 manifest/校验拒绝点。
     for entry in registry.entries() {
         let id = entry
@@ -2017,10 +2370,76 @@ runner = ">=1,<2"
             tracing_subscriber::reload::Layer::new(tracing_subscriber::EnvFilter::new("info"));
         AppState {
             runtime,
+            app_support: std::env::temp_dir()
+                .join(format!("macai-main-tests-{}", std::process::id())),
             log_filter,
             log_level: Arc::new(AtomicU8::new(LOG_LEVEL_INFO)),
             routing_tokens: Arc::new(StdMutex::new(HashMap::new())),
         }
+    }
+
+    #[tokio::test]
+    async fn script_runner_inspection_is_parse_only_and_digest_bound() {
+        let source = format!(
+            "{}\nraise RuntimeError('inspection executed user code')\n",
+            ai_daemon::runners::script_runner_template("chat").unwrap()
+        );
+        let response = inspect_script_runner(Json(ScriptRunnerSourceRequest {
+            source: source.clone(),
+        }))
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = create_script_runner(
+            State(app_state(Arc::new(Runtime::new()))),
+            Json(CreateScriptRunnerRequest {
+                source,
+                expected_digest: "stale".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("changed after inspection"));
+    }
+
+    #[tokio::test]
+    async fn script_runner_create_locks_probes_and_persists_trust() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "macai-script-create-{}-{unique}",
+            std::process::id()
+        ));
+        let runtime = Arc::new(Runtime::with_store(&root.join("models.db")));
+        let mut state = app_state(Arc::clone(&runtime));
+        state.app_support = root.clone();
+        let source = ai_daemon::runners::script_runner_template("chat")
+            .unwrap()
+            .to_string();
+        let digest = ai_daemon::runners::inspect_script_runner(&source)
+            .unwrap()
+            .source_digest;
+
+        let response = create_script_runner(
+            State(state),
+            Json(CreateScriptRunnerRequest {
+                source,
+                expected_digest: digest,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let package = root.join("Plugins/org.example.echo");
+        assert!(package.join("uv.lock").is_file());
+        assert!(!package.join(".venv").exists());
+        assert_eq!(runtime.runner_packages().len(), 1);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -2372,6 +2791,48 @@ runner = ">=0.1,<0.2"
         let error = runtime.load_model("fresh-ad-hoc").await.unwrap_err();
         assert!(error.message.contains("artifact"), "{error}");
         assert!(!error.message.contains("not bound"), "{error}");
+        runtime.shutdown_all().await;
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn trusted_script_runner_attaches_from_plugins_after_restart() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "macai-script-plugin-{}-{unique}",
+            std::process::id()
+        ));
+        let app_support = root.join("Application Support/MacAIConsole");
+        let plugin = app_support.join("Plugins/org.example.echo");
+        std::fs::create_dir_all(root.join("runners")).unwrap();
+        ai_daemon::runners::materialize_script_runner(
+            ai_daemon::runners::script_runner_template("chat").unwrap(),
+            &plugin,
+        )
+        .unwrap();
+        std::fs::write(
+            plugin.join("uv.lock"),
+            "version = 1\nrevision = 3\nrequires-python = '>=3.12,<3.13'\n",
+        )
+        .unwrap();
+        let registry = ai_daemon::runners::RunnerRegistry::discover(
+            &[],
+            std::slice::from_ref(&plugin),
+            &std::collections::HashSet::new(),
+        );
+        let digest = registry.entries()[0].package_digest.as_deref().unwrap();
+
+        let mut runtime = Runtime::with_store(&app_support.join("models.db"));
+        runtime
+            .trust_runner_package("org.example.echo", "0.1.0", digest)
+            .unwrap();
+        bootstrap_runners_from_root(&mut runtime, root.join("runners"), app_support).await;
+
+        assert!(runtime
+            .provider_has_capability("org.example.echo", ai_core::provider::Capability::Chat));
         runtime.shutdown_all().await;
         let _ = std::fs::remove_dir_all(root);
     }

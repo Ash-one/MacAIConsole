@@ -150,12 +150,15 @@ Worker Instance 是加载某个模型后的实际进程和运行状态。daemon 
 
 ## Discovery and trust
 
-Runner discovery 当前实现只读取一个来源：
+Runner discovery 当前实现读取两个来源：
 
 1. 应用或仓库随附的 built-in Runner（`runners/` 目录，由 daemon 启动时的
    `bootstrap_runners` 发现、持久化 Model Profile 并装配）。
+2. MacAIConsole 创建并显式信任的单文件 Script Runner（受管 `Plugins/` 目录，由 daemon
+   生成标准 package、记录 digest，并在下次启动时装配）。
 
-当前没有第三方 Runner 安装目录或显式信任 UI；未来引入该能力需要独立安全决策。
+任意完整第三方 Runner package 的导入、更新和分发尚未提供 UI；当前插件入口只接受
+[`单文件 Script Runner`](2026-09-08-single-file-script-runner.md) 的受限 metadata 与 hook 契约。
 
 发现不等于信任或执行。daemon 在启动 Runner 前验证：
 
@@ -232,8 +235,8 @@ WAV、长请求、模型家族 workaround、常驻 worker、RSS、故障隔离�
   Qwen3-TTS 和 sherpa-onnx；它们全部经 `bootstrap_runners` 动态装配；
 - GUI 通过 `/api/runners` 观察和安装环境，通过 `/api/model-profiles` 获取推荐目录并按 Profile ID 下载；不存在本地 venv/脚本安装 manager、Swift Profile catalog 或目录到 Provider 推断；
 - mock / macos-say 仅由测试 Runtime 注入，不进入生产 Provider 表；
-- 第三方 Plugins、OS 级沙箱、多实例/多并发和 daemon→Runner 主动 cancel 均未实现；
-  它们需要独立的安全或协议决策。
+- 单文件 Script Runner 已提供受管 Plugins 与显式 digest trust；任意完整第三方 package
+  导入、OS 级沙箱、多实例/多并发和 daemon→Runner 主动 cancel 仍需独立决策。
 
 ## Alternatives considered
 

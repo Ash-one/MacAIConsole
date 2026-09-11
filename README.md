@@ -431,6 +431,13 @@ CLI 与 SwiftUI 应用（MacAIConsole）均为无状态客户端。在 MacAI 中
 
 Runner 架构中 daemon 自动发现 `runners/` 下的 Runner 包并装配为动态 Provider。Python 环境与原生 C++ 引擎共用同一套安装接口；`/api/model-profiles` 向客户端暴露数据化 catalog，按 Profile ID 下载时由 daemon 展开源地址、产物路径与 Runner 绑定。已注册模型会固化当时的 Profile 快照，不受后续 catalog 变更影响。
 
+简单的 Python 后端可在「管理」页点击“新建 Runner”，从 Chat / STT / TTS 模板编辑一个
+带 PEP 723 metadata 的 `.macai.py`。推理库可从预设选择，也可粘贴官方 `pip install` /
+`uv add` 命令；用户只需给出直接依赖，uv 自动解析完整依赖树。daemon 静态检查并展示依赖、
+权限与源码摘要；确认后在临时环境完成 lock、sync 和 import/hook probe，再将标准 Runner
+package 保存到应用支持目录 `Plugins/<runner-id>/`。重启 `aiworkd` 后，该 Runner 走现有
+进程隔离、环境安装和模型生命周期链路。
+
 `/api/models/load` 将调用方请求的 Provider、daemon 选定的 Provider 与裁决理由一并持久化记录；
 `/v1/models` 和 `/api/runtime` 暴露 `requested_provider`、`provider`、
 `provider_selection_reason` 及 `effective_device`，便于审计选择逻辑与兼容别名。
@@ -556,6 +563,11 @@ GET  /api/runtime
 GET  /api/providers
 GET  /api/runners
 POST /api/runners/{runner}/install
+GET  /api/runner-scripts/template/{chat|stt|tts}
+GET  /api/runner-scripts/dependency-presets
+POST /api/runner-scripts/dependencies
+POST /api/runner-scripts/inspect
+POST /api/runner-scripts
 GET  /api/tasks
 GET  /api/tasks/{id}
 GET  /api/logging
@@ -644,10 +656,11 @@ docs/              # 当前工作提案、已落地决策与精确契约
 - [uv Python 环境决策](docs/decisions/2026-09-02-uv-python-environments.md)：所有 Python Runner 使用可复现、可探测的受管 `uv` 环境。
 - [whisper.cpp 与 llama.cpp 原生 Runner 迁移](docs/decisions/2026-09-05-whisper-runner-migration.md)：官方源码/二进制、常驻 server 与进程级隔离。
 - [管理页置顶 Runner 引擎状态与安装](docs/decisions/2026-09-07-management-view-engine-status-and-compact-recommendations.md)：一站式管理引擎环境与模型生命周期。
+- [单文件 Script Runner](docs/decisions/2026-09-08-single-file-script-runner.md)：在 GUI 中用一个 PEP 723 Python 文件创建受管 Runner。
 
 ### 后续规划
 
-- Runner 插件化，可自定义插拔
+- 完整第三方 Runner package 的导入、更新与分发
 - Homebrew 分发、正式签名、公证与安装包
 - VAD 与 streaming STT / TTS 进阶支持
 

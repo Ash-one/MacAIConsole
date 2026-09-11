@@ -6,6 +6,7 @@ struct ModelsView: View {
     @State private var repoModels: [RepoModel] = []
     @State private var inspections: [String: LocalInspection] = [:]
     @State private var showingAddSheet = false
+    @State private var showingRunnerEditor = false
     @State private var selectedModel: ModelDetailTarget?
 
     var body: some View {
@@ -37,6 +38,13 @@ struct ModelsView: View {
                 .disabled(controller.phase != .online)
 
                 Button {
+                    showingRunnerEditor = true
+                } label: {
+                    Label("新建 Runner", systemImage: "hammer")
+                }
+                .disabled(controller.phase != .online)
+
+                Button {
                     Task {
                         await rescanRepo()
                         try? await controller.refresh()
@@ -48,6 +56,10 @@ struct ModelsView: View {
         }
         .sheet(isPresented: $showingAddSheet, onDismiss: { Task { await rescanRepo() } }) {
             AddModelSheet()
+        }
+        .sheet(isPresented: $showingRunnerEditor) {
+            ScriptRunnerEditorSheet()
+                .environment(controller)
         }
         .sheet(item: $selectedModel) { target in
             ModelDetailSheet(

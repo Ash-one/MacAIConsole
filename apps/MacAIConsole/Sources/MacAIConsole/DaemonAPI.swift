@@ -524,6 +524,63 @@ struct DaemonAPI {
         )
     }
 
+    func runnerScriptTemplate(kind: String) async throws -> String {
+        struct Wrapper: Decodable { var source: String }
+        return try JSONDecoder().decode(
+            Wrapper.self,
+            from: try await get("api/runner-scripts/template/\(kind)")
+        ).source
+    }
+
+    func runnerDependencyPresets() async throws -> [RunnerDependencyPreset] {
+        struct Wrapper: Decodable { var data: [RunnerDependencyPreset] }
+        return try JSONDecoder().decode(
+            Wrapper.self,
+            from: try await get("api/runner-scripts/dependency-presets")
+        ).data
+    }
+
+    func normalizeRunnerDependencies(preset: String, input: String) async throws -> [String] {
+        struct Wrapper: Decodable { var dependencies: [String] }
+        return try JSONDecoder().decode(
+            Wrapper.self,
+            from: try await postJSON(
+                "api/runner-scripts/dependencies",
+                body: ["preset": preset, "input": input]
+            )
+        ).dependencies
+    }
+
+    func inspectRunnerScript(source: String) async throws -> RunnerScriptPreview {
+        struct Wrapper: Decodable { var runner: RunnerScriptPreview }
+        return try JSONDecoder().decode(
+            Wrapper.self,
+            from: try await postJSON(
+                "api/runner-scripts/inspect",
+                body: ["source": source],
+                timeout: 15
+            )
+        ).runner
+    }
+
+    func createRunnerScript(source: String, expectedDigest: String) async throws -> Bool {
+        struct Response: Decodable {
+            var restartRequired: Bool
+
+            enum CodingKeys: String, CodingKey {
+                case restartRequired = "restart_required"
+            }
+        }
+        return try JSONDecoder().decode(
+            Response.self,
+            from: try await postJSON(
+                "api/runner-scripts",
+                body: ["source": source, "expected_digest": expectedDigest],
+                timeout: 1_440
+            )
+        ).restartRequired
+    }
+
     /// POST /api/logging —— 运行时切换 daemon 的 Info / Debug 过滤级别。
     func setLogLevel(_ level: LogLevel) async throws -> LoggingLevelResponse {
         let data = try await postJSON("api/logging", body: ["level": level.rawValue], timeout: 4)

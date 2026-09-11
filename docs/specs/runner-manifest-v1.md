@@ -249,7 +249,9 @@ pointer = "/model_type"
 equals = "qwen3_asr"
 ```
 
-ID、capability、adapter 和 reason 必填；adapter 必须出现在该 Runner 的 `[[models]]`。
+ID、capability、adapter 和 reason 必填；adapter 必须出现在该 Runner 的 `[[models]]`，
+或等于该 Runner 的 `runtime.default_adapter`（用于没有 bundled Profile 的 ad-hoc
+模型绑定）。
 paths 与 glob 是安全相对路径，glob 只支持 `*`（不跨目录）。JSON predicate 只接受
 以 `/` 开头的 JSON Pointer 与标量等值。未知字段、command、正则与脚本 hook 一律拒绝。
 daemon 对目录执行有界读取并拒绝 symlink；Runner 或模型代码不参与检测。

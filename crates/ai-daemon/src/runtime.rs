@@ -135,6 +135,29 @@ impl Runtime {
         runtime
     }
 
+    pub fn runner_packages(&self) -> Vec<crate::registry::StoredRunnerPackage> {
+        self.store
+            .as_ref()
+            .map(crate::registry::RegistryStore::runner_packages)
+            .unwrap_or_default()
+    }
+
+    pub fn trust_runner_package(
+        &self,
+        runner_id: &str,
+        version: &str,
+        digest: &str,
+    ) -> Result<(), String> {
+        let store = self.store.as_ref().ok_or_else(|| {
+            "Runner package trust requires persistent registry storage".to_string()
+        })?;
+        let installed_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        store.trust_runner_package(runner_id, version, digest, installed_at)
+    }
+
     fn with_options_and_seed(
         store: Option<RegistryStore>,
         seed: Vec<(ModelSpec, Option<u64>)>,

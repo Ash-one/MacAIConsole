@@ -328,9 +328,11 @@ impl RunnerManifest {
                 .models
                 .iter()
                 .any(|model| model.adapter == detector.adapter)
+                && self.runtime.default_adapter.as_deref() != Some(detector.adapter.as_str())
             {
                 return Err(ManifestError(
-                    "local detector adapter must be declared by this Runner".to_string(),
+                    "local detector adapter must be declared by a model or runtime.default_adapter"
+                        .to_string(),
                 ));
             }
             for path in detector

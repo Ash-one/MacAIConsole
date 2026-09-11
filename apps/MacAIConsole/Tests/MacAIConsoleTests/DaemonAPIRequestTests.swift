@@ -187,6 +187,57 @@ final class DaemonAPIRequestTests: XCTestCase {
         XCTAssertEqual(RecordingURLProtocol.recorded.first?.httpMethod, "POST")
     }
 
+    func testScriptRunnerInspectionAndCreationKeepSourceBoundToDigest() async throws {
+        let api = try makeAPI(
+            status: 200,
+            body: #"{"valid":true,"runner":{"id":"org.example.echo","version":"0.1.0","capability":"chat.v1","adapter":"echo-chat","model_format":"directory","requires_python":">=3.12,<3.13","dependencies":[],"network_during_runtime":false,"source_digest":"abc123","local_detector_ids":[]}}"#
+        )
+        let preview = try await api.inspectRunnerScript(source: "print('hello')")
+        XCTAssertEqual(preview.id, "org.example.echo")
+        XCTAssertEqual(preview.sourceDigest, "abc123")
+        let inspectPayload = try XCTUnwrap(RecordingURLProtocol.recorded.last?.bodyData).jsonDictionary
+        XCTAssertEqual(inspectPayload["source"] as? String, "print('hello')")
+
+        RecordingURLProtocol.enqueue(
+            status: 200,
+            body: #"{"id":"org.example.echo","state":"added","restart_required":true}"#
+        )
+        let restartRequired = try await api.createRunnerScript(
+            source: "print('hello')",
+            expectedDigest: preview.sourceDigest
+        )
+        XCTAssertTrue(restartRequired)
+        let createPayload = try XCTUnwrap(RecordingURLProtocol.recorded.last?.bodyData).jsonDictionary
+        XCTAssertEqual(createPayload["source"] as? String, "print('hello')")
+        XCTAssertEqual(createPayload["expected_digest"] as? String, "abc123")
+    }
+
+    func testScriptRunnerDependencyAssistantUsesDaemonNormalization() async throws {
+        let api = try makeAPI(
+            status: 200,
+            body: #"{"data":[{"id":"mlx-lm","title":"MLX-LM","requirements":["mlx-lm"]}]}"#
+        )
+        let presets = try await api.runnerDependencyPresets()
+        XCTAssertEqual(presets.first?.requirements, ["mlx-lm"])
+        XCTAssertEqual(
+            RecordingURLProtocol.recorded.last?.url?.path,
+            "/api/runner-scripts/dependency-presets"
+        )
+
+        RecordingURLProtocol.enqueue(
+            status: 200,
+            body: #"{"dependencies":["mlx-lm","sentencepiece"]}"#
+        )
+        let dependencies = try await api.normalizeRunnerDependencies(
+            preset: "mlx-lm",
+            input: "pip install sentencepiece"
+        )
+        XCTAssertEqual(dependencies, ["mlx-lm", "sentencepiece"])
+        let payload = try XCTUnwrap(RecordingURLProtocol.recorded.last?.bodyData).jsonDictionary
+        XCTAssertEqual(payload["preset"] as? String, "mlx-lm")
+        XCTAssertEqual(payload["input"] as? String, "pip install sentencepiece")
+    }
+
     private func makeAPI(status: Int, body: String) throws -> DaemonAPI {
         RecordingURLProtocol.enqueue(status: status, body: body)
         let configuration = URLSessionConfiguration.ephemeral

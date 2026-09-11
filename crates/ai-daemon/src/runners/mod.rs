@@ -12,6 +12,7 @@ mod profile;
 mod protocol;
 mod provider;
 mod registry;
+mod script;
 mod supervisor;
 
 pub use engine_asset::{
@@ -41,5 +42,9 @@ pub use protocol::{
 pub use provider::{RunnerModelBinding, RunnerProvider};
 pub use registry::{
     BundledProfile, RunnerDescriptor, RunnerRegistry, RunnerRegistryError, RunnerState,
+};
+pub use script::{
+    inspect_script_runner, materialize_script_runner, normalize_script_dependencies,
+    script_dependency_presets, script_runner_template, ScriptDependencyPreset, ScriptRunnerPreview,
 };
 pub use supervisor::{RunnerProcess, SupervisorError};
