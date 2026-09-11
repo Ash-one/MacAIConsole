@@ -240,6 +240,10 @@ uv sync --project runners/qwen3-asr --locked --no-dev
   --language zh
 ```
 
+直接调用 HTTP API 时，音频必须以 multipart 文件字节上传，例如
+`-F 'file=@/path/to/audio.wav'`。若 `file` 中是路径字符串、URL、空文件或截断数据，
+daemon 返回 HTTP 400，并在 JSON 错误中说明收到的字节数和正确 curl 用法。
+
 #### 7. 准备 sherpa-onnx zh-int8-2025（Runner）
 
 sherpa-onnx 由 daemon 的 sherpa-onnx Runner（`org.macai.sherpa-onnx`）提供服务，

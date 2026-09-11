@@ -80,6 +80,10 @@ whisper.cpp 官方 release 直接证明。本决策选择固定官方 source arc
 真实安装与组合测试需要网络、模型和目标机硬件，因此保持显式 opt-in；CI 固化 manifest、
 协议、adapter、选择、迁移与音频归一化边界。
 
+容器探测遇到 EOF 或无法识别格式时，daemon 将其作为输入错误返回 HTTP 400；
+响应消息包含实际上传字节数、支持格式和 `curl -F 'file=@...'` 提示，避免将
+Symphonia 的 `probe reach EOF` 误诊为 Runner 环境或模型错误。
+
 ### 2026-09-05 target-machine evidence
 
 - 官方 source archive SHA-256：`89051d8fca516a3ad1f5c2f8f9d2fccb089afbaec338fca3f8731999babc6f81`；

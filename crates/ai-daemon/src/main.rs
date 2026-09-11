@@ -1684,7 +1684,10 @@ async fn audio_transcriptions(State(state): State<AppState>, mut multipart: Mult
                     }
                 };
                 if bytes.is_empty() {
-                    return api_error(AIError::InvalidRequest, "uploaded audio is empty");
+                    return api_error(
+                        AIError::InvalidRequest,
+                        "uploaded audio is empty (0 bytes); send the actual audio file in multipart field 'file' (curl: -F 'file=@/path/to/audio.wav')",
+                    );
                 }
                 let upload_size = bytes.len() as u64;
                 let extension = FilePath::new(&file_name)

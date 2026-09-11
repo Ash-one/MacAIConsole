@@ -34,6 +34,7 @@ pub fn normalize_to_pcm_wav(
     bytes: Vec<u8>,
     extension: Option<&str>,
 ) -> Result<Vec<u8>, NormalizeError> {
+    let input_len = bytes.len();
     let mss = MediaSourceStream::new(Box::new(Cursor::new(bytes)), Default::default());
     let mut hint = Hint::new();
     if let Some(extension) = extension {
@@ -48,7 +49,10 @@ pub fn normalize_to_pcm_wav(
         )
         .map_err(|error| {
             NormalizeError(format!(
-                "unsupported audio format (supported: {SUPPORTED_FORMATS}); the file may also be corrupt ({error})"
+                "could not decode an audio container from the uploaded {input_len} bytes; \
+                 send the actual audio file in multipart field 'file' \
+                 (curl: -F 'file=@/path/to/audio.wav'); supported formats: {SUPPORTED_FORMATS}; \
+                 decoder detail: {error}"
             ))
         })?;
     let mut format = probed.format;
@@ -256,7 +260,8 @@ mod tests {
     fn rejects_garbage_and_empty_input() {
         let error =
             normalize_to_pcm_wav(b"definitely not audio".to_vec(), Some("wav")).unwrap_err();
-        assert!(error.0.contains("unsupported audio format"));
+        assert!(error.0.contains("uploaded 20 bytes"));
+        assert!(error.0.contains("-F 'file=@/path/to/audio.wav'"));
         assert!(normalize_to_pcm_wav(Vec::new(), None).is_err());
     }
 
@@ -264,7 +269,7 @@ mod tests {
     fn rejects_truncated_wav_header() {
         let full = raw_pcm_wav(&[42i16; 1_000], 8_000, 1);
         let error = normalize_to_pcm_wav(full[..30].to_vec(), Some("wav")).unwrap_err();
-        assert!(error.0.contains("unsupported audio format"));
+        assert!(error.0.contains("uploaded 30 bytes"));
     }
 
     // 下方 fixtures 由 scripts/tests/generate_audio_fixtures.py 生成并提交；
