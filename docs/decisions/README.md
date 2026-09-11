@@ -45,7 +45,8 @@
   （daemon-owned uv environment manager、七个独立 lock 与 GUI API 消费已落地）
 - [whisper.cpp Runner 迁移](2026-09-05-whisper-runner-migration.md)——`implemented`
   （官方 source build、常驻 server、兼容别名和静态 Provider 删除已落地）
-- [模型下载链路修复](2026-09-02-download-link-fixes.md)——`implemented`
+- [模型下载链路与进度可观测性](2026-09-02-download-link-fixes.md)——`implemented`
+  （daemon 提供活动下载百分比，GUI 展示当前文件进度，日志按 5% 台阶记录。）
 - [GUI 公开远端模型下载](2026-09-08-gui-remote-model-download.md)——`implemented`
   （输入 Hugging Face/ModelScope 仓库 ID，预览并选择文件后下载到模型仓库；不自动注册或加载。）
 - [本地模型目录检测与 Runner 路由](2026-09-06-local-directory-model-routing.md)——`implemented`

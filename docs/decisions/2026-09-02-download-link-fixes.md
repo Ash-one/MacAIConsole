@@ -1,4 +1,4 @@
-# 模型下载链路缺陷修复（TLS/UA/错误映射/Profile revision）
+# 模型下载链路与进度可观测性
 
 Status: implemented
 
@@ -25,6 +25,8 @@ HTTP 500 / “error sending request”，日志显示 ModelScope LFS CDN 403。
    已有 `DownloadFailed/502` 枚举未使用。
 4. **Profile 缺 immutable revision**：parser 要求 40/64-hex commit；qwen3-asr
    profile 无 revision → daemon 启动拒绝该 Runner。
+5. **下载过程不可见**：pull HTTP 请求只在全部文件完成后返回；GUI 只能显示无限转圈，
+   daemon 日志只记录字节数，用户无法判断当前文件的完成比例。
 
 ## Decision
 
@@ -35,11 +37,21 @@ HTTP 500 / “error sending request”，日志显示 ModelScope LFS CDN 403。
 - ModelScope profile 补 immutable revision
   `3478f178e267548f04a6b616ff10beeb1e644e54`（git ls-remote master HEAD）与
   完整七文件 artifact 清单。
+- pull 请求可携带短生命周期 `progress_id`；daemon 用它拥有活动下载状态，
+  `GET /api/downloads/{id}` 返回当前文件序号、字节数和百分比，结束或失败后立即清理。
+  GUI 对推荐模型与在线仓库下载轮询该只读状态，显示当前文件/总文件及百分比。
+- daemon 进度日志使用同一百分比计算，并按 5% 台阶记录；未知响应长度时保留不定进度。
 - 不再建议“关代理/直连绕过”作为修复（curl 直连成功不能证明 reqwest 可直连）。
 
 ## Verification
 
 - `cargo test` 相关（lib + bin discovery 回归）通过；
+- `progress_percent` 覆盖正常值、上限钳制和未知总大小；Swift API 请求测试覆盖
+  `progress_id` 的两条 GUI 下载路径；
+- 2026-09-12：`cargo test --workspace` 的本改动相关下载测试及其余已执行项通过；
+  1 项既有 Script Runner 环境测试因返回 503 失败，单独重跑结果相同；
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --enable-xctest`
+  通过（51/51）。
 - 真实链：ModelScope 无代理拉取 693M 全目录成功 → Runner
   `org.macai.qwen3-asr` ready 且模型绑定 → 注册加载（capability 由 manifest
   推导 stt.v1）→ **Kokoro 合成 WAV 经 Runner 转写逐字还原**（

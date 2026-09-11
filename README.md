@@ -509,7 +509,8 @@ GUI 可以连接已经在跑的 `aiworkd`。GUI 自动启动 daemon 时按顺序
 模型下载默认使用 `https://huggingface.co`。MacAIConsole 的「设置 → 模型下载源」可切换
 到 `https://hf-mirror.com` 或填写自定义 HTTP(S) 地址；修改后点击「应用设置并重启
 aiworkd」。下载由 daemon 统一执行，使用 HTTP/1.1、`.part` 断点续传，并在响应体中断
-时自动重试。手动启动 daemon 时可设置：
+时自动重试；管理页和在线仓库下载窗口会显示当前文件序号与百分比，daemon 日志按
+5% 台阶记录百分比。手动启动 daemon 时可设置：
 
 ```bash
 AIWORKD_HF_ENDPOINT=https://hf-mirror.com ./target/release/aiworkd
@@ -585,6 +586,7 @@ POST /api/logging
 POST /api/models/pull
 POST /api/models/inspect
 POST /api/models/remote/inspect
+GET  /api/downloads/{progress_id}
 POST /api/models/load
 POST /api/models/{id}/load
 POST /api/models/{id}/unload

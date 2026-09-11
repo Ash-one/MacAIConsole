@@ -17,7 +17,9 @@ immutable commit revision、typed defaults/resources 与 SemVer compatibility）
 更新只影响未来注册。
 
 GUI 通过 `GET /api/model-profiles` 读取 catalog 投影，并通过
-`POST /api/model-profiles/{id}/pull` 提交 `auto_load` 意图。source、artifact 清单、
+`POST /api/model-profiles/{id}/pull` 提交 `auto_load` 意图，并可携带仅用于活动下载查询的
+`progress_id`；`GET /api/downloads/{progress_id}` 返回当前文件序号、字节数与百分比。
+source、artifact 清单、
 model type 与 Runner 选择均由 daemon 从可信 Profile 构造；客户端不得复制或重组
 Profile 下载请求。
 

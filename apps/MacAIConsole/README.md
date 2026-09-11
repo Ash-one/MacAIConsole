@@ -77,6 +77,7 @@ GET  /v1/models
 POST /api/models/pull
 POST /api/models/inspect
 POST /api/models/remote/inspect
+GET  /api/downloads/{progress_id}
 POST /api/models/load
 POST /api/models/{id}/load
 POST /api/models/{id}/unload
@@ -93,6 +94,7 @@ POST /api/runner-scripts
 在线目录模型保存为 `Models/<type>/<owner>--<repo>/` 并保留仓库相对路径；单个
 LLM `.gguf` 或 Whisper `ggml-*.bin` 直接保存到对应类型根目录。远端下载只支持公开
 仓库，且文件进入仓库并不代表当前 Runner 一定兼容。
+推荐模型和在线仓库下载会显示当前文件/总文件及百分比；进度由 daemon 的活动下载状态提供。
 
 `/v1/models` 与 `/api/runtime` 会返回 daemon 记录的 Provider 选择结果：
 `requested_provider`、实际 `provider`、`provider_selection_reason` 及已加载模型的
