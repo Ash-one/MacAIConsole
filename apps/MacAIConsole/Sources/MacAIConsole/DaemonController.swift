@@ -46,6 +46,7 @@ final class DaemonController {
     }
     var busyModelIDs: Set<String> = []
     var busyRecommendationIDs: Set<String> = []
+    var recommendationDownloadProgress: [String: DownloadProgress] = [:]
     var busyRunnerIDs: Set<String> = []
     var uninstallingRunnerIDs: Set<String> = []
 
@@ -343,7 +344,20 @@ final class DaemonController {
                 logInfo("已启动推荐模型：\(model.id)")
             } else {
                 let autoLoad = providerIsAvailable(model.runner)
-                _ = try await api.pullProfile(model.id, autoLoad: autoLoad)
+                let progressID = UUID().uuidString
+                let poll = Task { [weak self] in
+                    while !Task.isCancelled {
+                        if let progress = try? await self?.api.downloadProgress(progressID) {
+                            self?.recommendationDownloadProgress[model.id] = progress
+                        }
+                        try? await Task.sleep(for: .milliseconds(250))
+                    }
+                }
+                defer {
+                    poll.cancel()
+                    recommendationDownloadProgress.removeValue(forKey: model.id)
+                }
+                _ = try await api.pullProfile(model.id, autoLoad: autoLoad, progressID: progressID)
                 logInfo(autoLoad
                     ? "已下载并启动推荐模型：\(model.id)"
                     : "已下载推荐模型：\(model.id)")

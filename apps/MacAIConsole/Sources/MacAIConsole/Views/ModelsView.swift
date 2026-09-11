@@ -1031,11 +1031,19 @@ struct ProfileModelRow: View {
                 }
             } else if isBusy {
                 HStack(spacing: 7) {
-                    ProgressView().controlSize(.small)
-                    Text(model.isDownloaded ? "正在启动…" : "正在下载…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if let progress = controller.recommendationDownloadProgress[model.id],
+                       let percent = progress.percent {
+                        ProgressView(value: Double(percent), total: 100)
+                            .frame(width: 56)
+                            .controlSize(.small)
+                        Text("\(progress.fileIndex)/\(progress.fileCount) · \(percent)%")
+                    } else {
+                        ProgressView().controlSize(.small)
+                        Text(model.isDownloaded ? "正在启动…" : "正在下载…")
+                    }
                 }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             } else {
                 Button(buttonTitle, action: action)
                     .buttonStyle(ProminentButtonStyle())

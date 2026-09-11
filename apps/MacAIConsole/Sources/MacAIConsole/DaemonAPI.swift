@@ -177,6 +177,23 @@ struct RunnerInstallResponse: Decodable {
     }
 }
 
+struct DownloadProgress: Decodable, Equatable {
+    var filename: String
+    var fileIndex: Int
+    var fileCount: Int
+    var downloadedBytes: UInt64
+    var totalBytes: UInt64?
+    var percent: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case filename, percent
+        case fileIndex = "file_index"
+        case fileCount = "file_count"
+        case downloadedBytes = "downloaded_bytes"
+        case totalBytes = "total_bytes"
+    }
+}
+
 struct LocalDetectorMatch: Decodable, Hashable {
     var runner: String
     var adapter: String
@@ -653,10 +670,12 @@ struct DaemonAPI {
     }
 
     /// POST /api/model-profiles/{id}/pull —— daemon 根据 Profile 下载并可选加载。
-    func pullProfile(_ id: String, autoLoad: Bool) async throws -> LoadResponse {
+    func pullProfile(_ id: String, autoLoad: Bool, progressID: String? = nil) async throws -> LoadResponse {
+        var body: [String: Any] = ["auto_load": autoLoad]
+        if let progressID { body["progress_id"] = progressID }
         let data = try await postJSON(
             "api/model-profiles/\(id)/pull",
-            body: ["auto_load": autoLoad],
+            body: body,
             timeout: 7_200
         )
         return try JSONDecoder().decode(LoadResponse.self, from: data)
@@ -667,7 +686,8 @@ struct DaemonAPI {
         _ inspection: RemoteModelInspection,
         modelType: String,
         files: [RemoteModelFile],
-        singleFile: Bool
+        singleFile: Bool,
+        progressID: String? = nil
     ) async throws -> LoadResponse {
         var body: [String: Any] = [
             "source": inspection.source.rawValue,
@@ -682,8 +702,14 @@ struct DaemonAPI {
             body["directory"] = inspection.directory
             body["files"] = files.map(\.path)
         }
+        if let progressID { body["progress_id"] = progressID }
         let data = try await postJSON("api/models/pull", body: body, timeout: 7_200)
         return try JSONDecoder().decode(LoadResponse.self, from: data)
+    }
+
+    func downloadProgress(_ id: String) async throws -> DownloadProgress {
+        let data = try await get("api/downloads/\(id)")
+        return try JSONDecoder().decode(DownloadProgress.self, from: data)
     }
 
     /// POST /api/models/{id}/load

@@ -25,13 +25,14 @@ final class DaemonAPIRequestTests: XCTestCase {
 
     func testProfilePullDoesNotDuplicateProfileFieldsInGUIRequest() async throws {
         let api = try makeAPI(status: 200, body: #"{"id":"future","state":"downloaded"}"#)
-        _ = try await api.pullProfile("future", autoLoad: false)
+        _ = try await api.pullProfile("future", autoLoad: false, progressID: "progress-1")
 
         let request = try XCTUnwrap(RecordingURLProtocol.recorded.first)
         XCTAssertEqual(request.url?.path, "/api/model-profiles/future/pull")
         let payload = try XCTUnwrap(request.bodyData).jsonDictionary
         XCTAssertEqual(payload["auto_load"] as? Bool, false)
-        XCTAssertEqual(payload.count, 1)
+        XCTAssertEqual(payload["progress_id"] as? String, "progress-1")
+        XCTAssertEqual(payload.count, 2)
     }
 
     func testRemoteInspectAndPullUsePinnedRevisionWithoutAutoLoad() async throws {
@@ -49,7 +50,8 @@ final class DaemonAPIRequestTests: XCTestCase {
             inspection,
             modelType: "llm",
             files: inspection.files,
-            singleFile: false
+            singleFile: false,
+            progressID: "progress-2"
         )
         let pullPayload = try XCTUnwrap(RecordingURLProtocol.recorded.last?.bodyData).jsonDictionary
         XCTAssertEqual(pullPayload["source"] as? String, "modelscope")
@@ -57,6 +59,7 @@ final class DaemonAPIRequestTests: XCTestCase {
         XCTAssertEqual(pullPayload["directory"] as? String, "owner--model")
         XCTAssertEqual(pullPayload["files"] as? [String], ["config.json", "weights/model.safetensors"])
         XCTAssertEqual(pullPayload["auto_load"] as? Bool, false)
+        XCTAssertEqual(pullPayload["progress_id"] as? String, "progress-2")
         XCTAssertNil(pullPayload["filename"])
     }
 

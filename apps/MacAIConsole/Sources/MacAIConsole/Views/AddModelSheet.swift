@@ -18,6 +18,7 @@ struct AddModelSheet: View {
     @State private var selectedPaths = Set<String>()
     @State private var isInspecting = false
     @State private var isWorking = false
+    @State private var downloadProgress: DownloadProgress?
     @State private var errorMessage: String?
 
     private let types: [(id: String, label: String, ext: String)] = [
@@ -50,6 +51,15 @@ struct AddModelSheet: View {
 
             if let errorMessage {
                 ErrorBanner(text: errorMessage)
+            }
+
+            if isWorking, mode == .remote, let progress = downloadProgress,
+               let percent = progress.percent {
+                ProgressView(
+                    "正在下载 \(progress.fileIndex)/\(progress.fileCount) · \(percent)%",
+                    value: Double(percent),
+                    total: 100
+                )
             }
 
             HStack {
@@ -293,19 +303,32 @@ struct AddModelSheet: View {
     private func downloadRemote() {
         guard let inspection else { return }
         isWorking = true
+        downloadProgress = nil
         errorMessage = nil
+        let progressID = UUID().uuidString
         Task {
+            let poll = Task {
+                while !Task.isCancelled {
+                    if let progress = try? await controller.api.downloadProgress(progressID) {
+                        downloadProgress = progress
+                    }
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
+            }
+            defer { poll.cancel() }
             do {
                 _ = try await controller.api.pullRemoteModel(
                     inspection,
                     modelType: modelType,
                     files: selectedFiles,
-                    singleFile: singleFileMode
+                    singleFile: singleFileMode,
+                    progressID: progressID
                 )
                 dismiss()
             } catch {
                 errorMessage = DaemonController.message(for: error)
                 isWorking = false
+                downloadProgress = nil
             }
         }
     }
