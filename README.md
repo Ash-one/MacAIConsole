@@ -446,6 +446,9 @@ package 保存到应用支持目录 `Plugins/<runner-id>/`。重启 `aiworkd` �
 `/api/models/load` 将调用方请求的 Provider、daemon 选定的 Provider 与裁决理由一并持久化记录；
 `/v1/models` 和 `/api/runtime` 暴露 `requested_provider`、`provider`、
 `provider_selection_reason` 及 `effective_device`，便于审计选择逻辑与兼容别名。
+LLM 注册项还持久化默认 `temperature`（1.0）与 `top_p`（0.95）；可通过
+`POST /api/models/{id}/generation` 更新。Chat 请求显式参数优先，省略时由 daemon
+注入该模型的默认值。
 
 本地目录通过 `POST /api/models/inspect` 由 daemon 信任的 Runner manifest 静态探测；只有
 唯一匹配时才会颁发短期 routing token。CLI 可使用 `macai inspect <directory>` 查看检测结果，并通过
@@ -534,7 +537,8 @@ curl http://127.0.0.1:11435/v1/chat/completions \
   }'
 ```
 
-流式请求把 `stream` 设为 `true`，响应以 `data: [DONE]` 结束。
+流式请求把 `stream` 设为 `true`，响应以 `data: [DONE]` 结束。请求可显式传入
+`temperature` 与 `top_p`；省略时使用模型注册项保存的默认值。
 
 ### OpenAI Python SDK
 
@@ -610,7 +614,7 @@ MacAIConsole 使用以下目录：
     └── gui.log
 ```
 
-日志到 5 MB 轮换，保留一份 `.1` 文件。日志页面默认显示 Info 及以上级别；启用 Debug 会同时调整 GUI 和 daemon 的运行时日志级别。
+日志到 5 MB 轮换，保留一份 `.1` 文件。日志页面默认显示 Info 及以上级别；启用 Debug 会同时调整 GUI 和 daemon 的运行时日志级别。Debug 模式下，daemon 使用同一 `request_id` 记录每个 HTTP 请求的开始与完成结果；记录方法、路径、响应状态码和耗时，不记录查询参数、请求体或响应体。
 
 ## 安全边界
 

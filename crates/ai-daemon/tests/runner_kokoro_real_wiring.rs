@@ -162,6 +162,8 @@ async fn kokoro_runner_real_composition_load_infer_unload() {
         memory_estimate: Some(400_000_000),
         keep_alive: Some("always".to_string()),
         context_length: None,
+        temperature: None,
+        top_p: None,
         default_voice: Some("zf_001".to_string()),
     };
 

@@ -88,6 +88,8 @@ struct ModelEntry: Decodable, Identifiable, Hashable {
     var modelType: String
     /// 注册时的模型文件路径。改名不影响它——GUI 用它推导原始/默认 ID。
     var path: String?
+    var temperature: Double?
+    var topP: Double?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -97,6 +99,8 @@ struct ModelEntry: Decodable, Identifiable, Hashable {
         // /v1/models 实际返回的字段名是 "type"（OpenAI 兼容格式）。
         case modelType = "type"
         case path
+        case temperature
+        case topP = "top_p"
     }
 
     /// 原始 ID：文件去掉最后扩展名，目录保留完整名称。与改名无关。
@@ -272,6 +276,7 @@ struct InferenceTaskRequest: Decodable {
     var speed: Double?
     var stream: Bool?
     var temperature: Double?
+    var topP: Double?
     var maxTokens: UInt64?
 
     enum CodingKeys: String, CodingKey {
@@ -281,6 +286,7 @@ struct InferenceTaskRequest: Decodable {
         case fileSizeBytes = "file_size_bytes"
         case audioDurationMs = "audio_duration_ms"
         case language, voice, format, speed, stream, temperature
+        case topP = "top_p"
         case maxTokens = "max_tokens"
     }
 }
@@ -636,6 +642,14 @@ struct DaemonAPI {
         if let keepAlive { body["keep_alive"] = keepAlive }
         let data = try await postJSON("api/models/load", body: body, timeout: 180)
         return try JSONDecoder().decode(LoadResponse.self, from: data)
+    }
+
+    /// POST /api/models/{id}/generation —— 更新 LLM 每模型默认采样参数。
+    func setGenerationSettings(_ id: String, temperature: Double, topP: Double) async throws {
+        _ = try await postJSON(
+            "api/models/\(id)/generation",
+            body: ["temperature": temperature, "top_p": topP]
+        )
     }
 
     /// POST /api/model-profiles/{id}/pull —— daemon 根据 Profile 下载并可选加载。

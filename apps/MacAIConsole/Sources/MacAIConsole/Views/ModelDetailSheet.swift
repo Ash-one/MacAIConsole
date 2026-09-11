@@ -30,6 +30,10 @@ struct ModelDetailSheet: View {
     @State private var contextDraft = ""
     @State private var isApplyingContext = false
     @State private var contextFeedback: String?
+    @State private var temperatureDraft = 1.0
+    @State private var topPDraft = 0.95
+    @State private var isApplyingGeneration = false
+    @State private var generationFeedback: String?
 
     // 注册 ID 更改状态（针对已注册模型）
     @State private var idDraft = ""
@@ -210,6 +214,9 @@ struct ModelDetailSheet: View {
                 fileSpecificationCard
                 if modelType == "llm" {
                     contextSettingsCard
+                    if case .registered = target {
+                        generationSettingsCard
+                    }
                 }
                 if case .registered = target {
                     identifierManagementCard
@@ -518,6 +525,40 @@ struct ModelDetailSheet: View {
         }
     }
 
+    private var generationSettingsCard: some View {
+        SectionCard(title: "生成参数", icon: "slider.horizontal.3") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("请求未显式传入参数时，daemon 使用这里保存的模型默认值。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                LabeledContent("Temperature") {
+                    TextField("Temperature", value: $temperatureDraft, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                }
+                LabeledContent("Top P") {
+                    TextField("Top P", value: $topPDraft, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                }
+
+                HStack {
+                    if let generationFeedback {
+                        Text(generationFeedback)
+                            .font(.caption)
+                            .foregroundStyle(Theme.success)
+                    }
+                    Spacer()
+                    Button(isApplyingGeneration ? "保存中…" : "保存生成参数", action: applyGenerationSettings)
+                        .buttonStyle(ProminentButtonStyle())
+                        .controlSize(.small)
+                        .disabled(isApplyingGeneration || !generationSettingsAreValid || controller.phase != .online)
+                }
+            }
+        }
+    }
+
     // MARK: - 模型 ID 管理卡片（已注册模型专属）
 
     private var identifierManagementCard: some View {
@@ -651,6 +692,35 @@ struct ModelDetailSheet: View {
         let kilo = Double(currentTokens) / 1024.0
         contextDraft = kilo.rounded() == kilo ? String(Int(kilo)) : String(format: "%.2f", kilo)
         idDraft = modelID
+        if case .registered(let entry) = target {
+            temperatureDraft = entry.temperature ?? 1.0
+            topPDraft = entry.topP ?? 0.95
+        }
+    }
+
+    private var generationSettingsAreValid: Bool {
+        temperatureDraft.isFinite && (0...2).contains(temperatureDraft)
+            && topPDraft.isFinite && (0...1).contains(topPDraft)
+    }
+
+    private func applyGenerationSettings() {
+        guard generationSettingsAreValid else { return }
+        isApplyingGeneration = true
+        generationFeedback = nil
+        Task {
+            defer { isApplyingGeneration = false }
+            do {
+                try await controller.setGenerationSettings(
+                    modelID,
+                    temperature: temperatureDraft,
+                    topP: topPDraft
+                )
+                generationFeedback = "生成参数已保存"
+                await onUpdate()
+            } catch {
+                actionError = "保存生成参数失败：\(DaemonController.message(for: error))"
+            }
+        }
     }
 
     private var parsedContextTokens: Int? {

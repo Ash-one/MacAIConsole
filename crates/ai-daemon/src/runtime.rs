@@ -1003,6 +1003,27 @@ impl Runtime {
         found
     }
 
+    /// 更新 LLM 默认采样参数；下一次请求立即生效，无需重载模型。
+    pub async fn set_generation_settings(&self, id: &str, temperature: f64, top_p: f64) -> bool {
+        let found = {
+            let mut registry = self.registry.write().await;
+            match registry.get_mut(id) {
+                Some(entry) => {
+                    entry.spec.temperature = Some(temperature);
+                    entry.spec.top_p = Some(top_p);
+                    true
+                }
+                None => false,
+            }
+        };
+        if found {
+            if let Some(store) = &self.store {
+                store.set_generation_settings(id, temperature, top_p);
+            }
+        }
+        found
+    }
+
     async fn set_state(&self, id: &str, state: &str, loaded: bool) {
         let now = unix_now();
         if let Some(entry) = self.registry.write().await.get_mut(id) {
@@ -1228,6 +1249,8 @@ impl Runtime {
                 loaded_at: entry.loaded_at,
                 last_used_at: entry.last_used_at,
                 context_length: entry.spec.context_length,
+                temperature: entry.spec.temperature,
+                top_p: entry.spec.top_p,
                 model_type: Some(entry.spec.model_type),
                 default_voice: entry.spec.default_voice,
                 effective_device,
@@ -1320,6 +1343,8 @@ mod tests {
             memory_estimate: Some(0),
             keep_alive: Some("always".to_string()),
             context_length: Some(4096),
+            temperature: Some(1.0),
+            top_p: Some(0.95),
             default_voice: None,
         }
     }
@@ -1719,6 +1744,8 @@ runner = ">=0.1,<0.2"
             memory_estimate: profile.resources.memory_estimate_bytes,
             keep_alive: profile.defaults.keep_alive.clone(),
             context_length: None,
+            temperature: None,
+            top_p: None,
             default_voice: profile.defaults.voice.clone(),
         };
         let frozen = runtime

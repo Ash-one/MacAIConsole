@@ -140,6 +140,8 @@ async fn whisper_runner_real_composition_load_infer_unload() {
         memory_estimate: Some(model.metadata().unwrap().len()),
         keep_alive: Some("always".to_string()),
         context_length: None,
+        temperature: None,
+        top_p: None,
         default_voice: None,
     };
 

@@ -644,6 +644,7 @@ impl ai_core::provider::ChatProvider for RunnerProvider {
             "messages": request.messages,
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
+            "top_p": request.top_p,
         });
         let (deadline, _) = self.deadlines(&binding)?;
         let instances = self.instances.clone();

@@ -166,6 +166,8 @@ fn model_spec() -> ModelSpec {
         memory_estimate: Some(1000),
         keep_alive: Some("always".to_string()),
         context_length: None,
+        temperature: None,
+        top_p: None,
         default_voice: Some("zf_001".to_string()),
     }
 }
@@ -367,6 +369,7 @@ async fn chat_stream_maps_delta_events_and_result_usage() {
         }],
         stream: true,
         temperature: Some(0.7),
+        top_p: Some(0.95),
         max_tokens: Some(64),
     };
 

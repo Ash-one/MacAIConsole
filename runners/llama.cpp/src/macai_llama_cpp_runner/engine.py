@@ -260,6 +260,8 @@ def _chat_payload(request: dict) -> dict:
     payload: dict = {"messages": messages, "stream": True}
     if "temperature" in request and request["temperature"] is not None:
         payload["temperature"] = request["temperature"]
+    if "top_p" in request and request["top_p"] is not None:
+        payload["top_p"] = request["top_p"]
     if "max_tokens" in request and request["max_tokens"] is not None:
         payload["max_tokens"] = request["max_tokens"]
     return payload

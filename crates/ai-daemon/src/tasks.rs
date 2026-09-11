@@ -331,6 +331,7 @@ pub fn chat_request_detail(request: &ChatRequest) -> TaskRequestDetail {
         messages: request.messages.clone(),
         stream: Some(request.stream),
         temperature: request.temperature,
+        top_p: request.top_p,
         max_tokens: request.max_tokens,
         ..TaskRequestDetail::default()
     }

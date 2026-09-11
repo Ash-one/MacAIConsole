@@ -28,12 +28,14 @@ def test_chat_payload_maps_openai_fields() -> None:
         {
             "messages": [{"role": "user", "content": "hi"}],
             "temperature": 0.2,
+            "top_p": 0.95,
             "max_tokens": 128,
         }
     )
     assert payload["stream"] is True
     assert payload["messages"] == [{"role": "user", "content": "hi"}]
     assert payload["temperature"] == 0.2
+    assert payload["top_p"] == 0.95
     assert payload["max_tokens"] == 128
 
 

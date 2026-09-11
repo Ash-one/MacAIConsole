@@ -34,10 +34,11 @@ class FakeTokenizer:
 
 def test_valid_request_applies_defaults():
     request = {"messages": [{"role": "user", "content": "hi"}]}
-    messages, max_tokens, temperature = validate_chat_request(request)
+    messages, max_tokens, temperature, top_p = validate_chat_request(request)
     assert messages == [{"role": "user", "content": "hi"}]
     assert max_tokens == 1024
     assert temperature == 0.7
+    assert top_p == 1.0
 
 
 def test_temperature_zero_is_greedy_and_boundary_is_two():
@@ -46,12 +47,24 @@ def test_temperature_zero_is_greedy_and_boundary_is_two():
         "temperature": 0,
         "max_tokens": 16,
     }
-    _, max_tokens, temperature = validate_chat_request(request)
+    _, max_tokens, temperature, top_p = validate_chat_request(request)
     assert (max_tokens, temperature) == (16, 0.0)
+    assert top_p == 1.0
     with pytest.raises(ChatRequestError):
         validate_chat_request({**request, "temperature": 2.1})
     with pytest.raises(ChatRequestError):
         validate_chat_request({**request, "temperature": -0.1})
+
+
+def test_top_p_is_validated_and_returned():
+    request = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "top_p": 0.95,
+    }
+    *_, top_p = validate_chat_request(request)
+    assert top_p == 0.95
+    with pytest.raises(ChatRequestError):
+        validate_chat_request({**request, "top_p": 1.1})
 
 
 def test_invalid_messages_raise():

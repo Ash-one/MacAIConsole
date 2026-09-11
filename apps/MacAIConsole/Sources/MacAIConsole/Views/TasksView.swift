@@ -340,6 +340,7 @@ private struct TaskDetailSheet: View {
             Divider()
             metadataLine("流式", value: request.stream == true ? "是" : "否")
             metadataLine("temperature", value: request.temperature.map { String(format: "%.2f", $0) } ?? "—")
+            metadataLine("top_p", value: request.topP.map { String(format: "%.2f", $0) } ?? "—")
             metadataLine("max_tokens", value: request.maxTokens.map(String.init) ?? "—")
             truncationNotice(isTruncated: detail?.requestTruncated == true)
         }

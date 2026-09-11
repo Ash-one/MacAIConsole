@@ -316,6 +316,12 @@ final class DaemonController {
         await refreshAfterSuccessfulMutation()
     }
 
+    func setGenerationSettings(_ id: String, temperature: Double, topP: Double) async throws {
+        try await api.setGenerationSettings(id, temperature: temperature, topP: topP)
+        logInfo("已更新 LLM 默认采样参数：\(id)")
+        await refreshAfterSuccessfulMutation()
+    }
+
     func providerIsAvailable(_ providerID: String) -> Bool {
         providers.first { $0.descriptor.id == providerID }?.status.available == true
     }

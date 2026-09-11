@@ -99,6 +99,18 @@ final class DaemonAPIRequestTests: XCTestCase {
         XCTAssertEqual(minimal.count, 1)
     }
 
+    func testGenerationSettingsRequestUsesDaemonContract() async throws {
+        let api = try makeAPI(status: 200, body: #"{"id":"m","temperature":1.0,"top_p":0.95}"#)
+
+        try await api.setGenerationSettings("m", temperature: 1.0, topP: 0.95)
+
+        let request = try XCTUnwrap(RecordingURLProtocol.recorded.last)
+        XCTAssertEqual(request.url?.path, "/api/models/m/generation")
+        let payload = try XCTUnwrap(request.bodyData).jsonDictionary
+        XCTAssertEqual(payload["temperature"] as? Double, 1.0)
+        XCTAssertEqual(payload["top_p"] as? Double, 0.95)
+    }
+
     func testDirectoryRoutingUsesDaemonTokenWithoutDuplicatingProviderRules() async throws {
         let api = try makeAPI(status: 200, body: #"{"id":"qwen","provider":"org.macai.qwen3-asr"}"#)
         _ = try await api.registerAndLoad(

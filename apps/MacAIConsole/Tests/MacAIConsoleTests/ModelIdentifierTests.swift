@@ -4,11 +4,13 @@ import XCTest
 
 final class ModelIdentifierTests: XCTestCase {
     func testModelEntryDecodesProviderSelectionAuditFields() throws {
-        let data = Data(#"{"id":"local","owned_by":"aiworkd/org.macai.llama.cpp","type":"llm","requested_provider":"llama.cpp","provider_selection_reason":"legacy alias"}"#.utf8)
+        let data = Data(#"{"id":"local","owned_by":"aiworkd/org.macai.llama.cpp","type":"llm","requested_provider":"llama.cpp","provider_selection_reason":"legacy alias","temperature":1.0,"top_p":0.95}"#.utf8)
         let model = try JSONDecoder().decode(ModelEntry.self, from: data)
 
         XCTAssertEqual(model.requestedProvider, "llama.cpp")
         XCTAssertEqual(model.providerSelectionReason, "legacy alias")
+        XCTAssertEqual(model.temperature, 1.0)
+        XCTAssertEqual(model.topP, 0.95)
     }
 
     func testFileModelIDRemovesOnlyLastExtensionAndDirectoryIDIsPreserved() throws {

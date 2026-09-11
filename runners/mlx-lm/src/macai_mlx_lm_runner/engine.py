@@ -14,6 +14,7 @@ from typing import Any, Iterator
 
 DEFAULT_MAX_TOKENS = 1024
 DEFAULT_TEMPERATURE = 0.7
+DEFAULT_TOP_P = 1.0
 MAX_TEMPERATURE = 2.0
 
 
@@ -28,8 +29,10 @@ class LoadedModel:
     device: str = "metal"
 
 
-def validate_chat_request(request: dict[str, Any]) -> tuple[list[dict[str, str]], int, float]:
-    """Return validated (messages, max_tokens, temperature) or raise ChatRequestError."""
+def validate_chat_request(
+    request: dict[str, Any],
+) -> tuple[list[dict[str, str]], int, float, float]:
+    """Return validated sampling inputs or raise ChatRequestError."""
     messages = request.get("messages")
     if not isinstance(messages, list) or not messages:
         raise ChatRequestError("messages must be a non-empty list")
@@ -60,7 +63,16 @@ def validate_chat_request(request: dict[str, Any]) -> tuple[list[dict[str, str]]
     if temperature < 0 or temperature > MAX_TEMPERATURE:
         raise ChatRequestError(f"temperature must be within [0, {MAX_TEMPERATURE}]")
 
-    return normalized, max_tokens, temperature
+    top_p = request.get("top_p", DEFAULT_TOP_P)
+    if top_p is None:
+        top_p = DEFAULT_TOP_P
+    if not isinstance(top_p, (int, float)) or isinstance(top_p, bool):
+        raise ChatRequestError("top_p must be a number")
+    top_p = float(top_p)
+    if top_p < 0 or top_p > 1:
+        raise ChatRequestError("top_p must be within [0, 1]")
+
+    return normalized, max_tokens, temperature, top_p
 
 
 def build_prompt_tokens(tokenizer: Any, messages: list[dict[str, str]]) -> list[int]:
@@ -103,7 +115,7 @@ class MlxLmEngine:
     def stream_chat(
         self,
         request: dict[str, Any],
-    ) -> tuple[Iterator[Any], list[int], int, float]:
+    ) -> tuple[Iterator[Any], list[int], int, float, float]:
         """Validate the request and return the raw generation iterator.
 
         返回 (responses, prompt_tokens, max_tokens, temperature)；调用方逐
@@ -113,7 +125,7 @@ class MlxLmEngine:
         loaded = self._loaded
         if loaded is None:
             raise RuntimeError("model is not loaded")
-        messages, max_tokens, temperature = validate_chat_request(request)
+        messages, max_tokens, temperature, top_p = validate_chat_request(request)
         prompt = build_prompt_tokens(loaded.tokenizer, messages)
         with contextlib.redirect_stdout(sys.stderr):
             from mlx_lm import stream_generate
@@ -126,9 +138,9 @@ class MlxLmEngine:
                 loaded.tokenizer,
                 prompt=prompt,
                 max_tokens=max_tokens,
-                sampler=make_sampler(temp=temperature),
+                sampler=make_sampler(temp=temperature, top_p=top_p),
             )
-        return responses, prompt, max_tokens, temperature
+        return responses, prompt, max_tokens, temperature, top_p
 
 
 def next_response(responses: Iterator[Any]) -> Any | None:

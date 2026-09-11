@@ -119,7 +119,7 @@ def main() -> int:
             request = payload.get("request") or {}
             _send({"protocol": PROTOCOL_VERSION, "type": "accepted", "id": frame_id, "payload": {}})
             try:
-                responses, prompt, _max_tokens, _temperature = engine.stream_chat(request)
+                responses, prompt, _max_tokens, _temperature, _top_p = engine.stream_chat(request)
                 emitted = ""
                 generation_tokens: int | None = None
                 finish_reason: str | None = None

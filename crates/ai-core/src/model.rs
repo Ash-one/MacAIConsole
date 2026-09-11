@@ -27,6 +27,12 @@ pub struct ModelSpec {
     /// keep_alive 语义：0 / 5m / 30m / always
     pub keep_alive: Option<String>,
     pub context_length: Option<u64>,
+    /// LLM 请求未显式指定时使用的采样温度。
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    /// LLM 请求未显式指定时使用的 nucleus sampling 阈值。
+    #[serde(default)]
+    pub top_p: Option<f64>,
     /// TTS 默认音色（如 zf_001）。None 时 provider 用自己的内置缺省。
     #[serde(default)]
     pub default_voice: Option<String>,

@@ -20,6 +20,10 @@ pub struct ModelEntry {
     /// 注册时的模型文件路径（OpenAI 兼容扩展字段）。GUI 用它推导原始/默认 ID。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
 }
 
 /// Chat 用量统计（文档 §46）。
@@ -133,6 +137,7 @@ pub struct TaskRequestDetail {
     pub speed: Option<f64>,
     pub stream: Option<bool>,
     pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
     pub max_tokens: Option<u64>,
 }
 
@@ -257,6 +262,11 @@ pub struct LoadedModelInfo {
     /// 当前注册规格的上下文长度（LLM 使用）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_length: Option<u64>,
+    /// 当前注册规格的 LLM 默认采样参数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
     /// llm / stt / tts —— GUI 右键菜单按类型区分。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_type: Option<String>,

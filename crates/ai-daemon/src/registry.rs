@@ -36,7 +36,9 @@ CREATE TABLE IF NOT EXISTS models (
     state TEXT NOT NULL DEFAULT 'unloaded',
     installed_at INTEGER NOT NULL,
     last_used_at INTEGER,
-    default_voice TEXT
+    default_voice TEXT,
+    temperature REAL,
+    top_p REAL
 );
 CREATE TABLE IF NOT EXISTS model_profiles (
     profile_id TEXT PRIMARY KEY,
@@ -98,6 +100,8 @@ impl RegistryStore {
         let _ = conn.execute_batch("ALTER TABLE models ADD COLUMN default_voice TEXT;");
         let _ = conn.execute_batch("ALTER TABLE models ADD COLUMN requested_provider TEXT;");
         let _ = conn.execute_batch("ALTER TABLE models ADD COLUMN provider_selection_reason TEXT;");
+        let _ = conn.execute_batch("ALTER TABLE models ADD COLUMN temperature REAL;");
+        let _ = conn.execute_batch("ALTER TABLE models ADD COLUMN top_p REAL;");
         let _ = conn.execute(
             "UPDATE models SET requested_provider = 'unknown'
              WHERE requested_provider IS NULL",
@@ -173,7 +177,7 @@ impl RegistryStore {
         let mut stmt = match conn.prepare(
             "SELECT id, name, type, provider, requested_provider, provider_selection_reason,
                     source, path, format, size_bytes, memory_estimate, keep_alive,
-                    context_length, last_used_at, default_voice
+                    context_length, last_used_at, default_voice, temperature, top_p
              FROM models ORDER BY id",
         ) {
             Ok(stmt) => stmt,
@@ -196,11 +200,14 @@ impl RegistryStore {
                 row.get::<_, Option<i64>>(12)?,
                 row.get::<_, Option<i64>>(13)?,
                 row.get::<_, Option<String>>(14)?,
+                row.get::<_, Option<f64>>(15)?,
+                row.get::<_, Option<f64>>(16)?,
             ))
         });
         let mut result = Vec::new();
         if let Ok(rows) = rows {
             for row in rows.flatten() {
+                let is_llm = row.2 == "llm";
                 let spec = ModelSpec {
                     id: row.0,
                     name: row.1,
@@ -215,6 +222,8 @@ impl RegistryStore {
                     memory_estimate: row.10.map(|v| v.max(0) as u64),
                     keep_alive: row.11,
                     context_length: row.12.map(|v| v.max(0) as u64),
+                    temperature: row.15.or(is_llm.then_some(1.0)),
+                    top_p: row.16.or(is_llm.then_some(0.95)),
                     default_voice: row.14,
                 };
                 result.push((spec, row.13.map(|v| v.max(0) as u64)));
@@ -233,14 +242,15 @@ impl RegistryStore {
             "INSERT INTO models (id, name, type, provider, requested_provider,
                                  provider_selection_reason, source, path, format, size_bytes,
                                  memory_estimate, keep_alive, context_length, state,
-                                 installed_at, last_used_at, default_voice)
+                                 installed_at, last_used_at, default_voice, temperature, top_p)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                     'unloaded', ?14, ?15, ?16)
+                     'unloaded', ?14, ?15, ?16, ?17, ?18)
              ON CONFLICT(id) DO UPDATE SET
                 name = ?2, type = ?3, provider = ?4, requested_provider = ?5,
                 provider_selection_reason = ?6, source = ?7, path = ?8,
                 format = ?9, size_bytes = ?10, memory_estimate = ?11,
-                keep_alive = ?12, context_length = ?13, default_voice = ?16",
+                keep_alive = ?12, context_length = ?13, default_voice = ?16,
+                temperature = ?17, top_p = ?18",
             rusqlite::params![
                 spec.id,
                 spec.name,
@@ -258,6 +268,8 @@ impl RegistryStore {
                 installed_at as i64,
                 last_used_at.map(|v| v as i64),
                 spec.default_voice,
+                spec.temperature,
+                spec.top_p,
             ],
         );
     }
@@ -294,6 +306,15 @@ impl RegistryStore {
             let _ = conn.execute(
                 "UPDATE models SET default_voice = ?2 WHERE id = ?1",
                 rusqlite::params![id, voice],
+            );
+        }
+    }
+
+    pub fn set_generation_settings(&self, id: &str, temperature: f64, top_p: f64) {
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute(
+                "UPDATE models SET temperature = ?2, top_p = ?3 WHERE id = ?1",
+                rusqlite::params![id, temperature, top_p],
             );
         }
     }
@@ -476,6 +497,8 @@ mod tests {
             memory_estimate: Some(2048),
             keep_alive: Some("5m".to_string()),
             context_length: Some(4096),
+            temperature: Some(1.0),
+            top_p: Some(0.95),
             default_voice: None,
         }
     }
@@ -520,6 +543,8 @@ mod tests {
         assert_eq!(loaded_spec.path.as_deref(), Some("/Models/llm/qwen3.gguf"));
         assert_eq!(loaded_spec.format.as_deref(), Some("gguf"));
         assert_eq!(loaded_spec.size_bytes, Some(1024));
+        assert_eq!(loaded_spec.temperature, Some(1.0));
+        assert_eq!(loaded_spec.top_p, Some(0.95));
         assert_eq!(loaded_spec.memory_estimate, Some(2048));
         assert_eq!(loaded_spec.keep_alive.as_deref(), Some("5m"));
         assert_eq!(loaded_spec.context_length, Some(4096));
@@ -660,12 +685,15 @@ mod tests {
 
         store.set_keep_alive("a", None);
         store.set_default_voice("a", Some("zf_001"));
+        store.set_generation_settings("a", 0.6, 0.8);
         store.touch("a", 777);
         let loaded: Vec<(ModelSpec, Option<u64>)> = store
             .load_all()
             .into_iter()
             .filter(|(spec, _)| spec.id == "a")
             .collect();
+        assert_eq!(loaded[0].0.temperature, Some(0.6));
+        assert_eq!(loaded[0].0.top_p, Some(0.8));
         assert_eq!(loaded[0].0.keep_alive, None);
         assert_eq!(loaded[0].0.default_voice.as_deref(), Some("zf_001"));
         assert_eq!(loaded[0].1, Some(777));

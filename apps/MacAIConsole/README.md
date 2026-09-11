@@ -13,7 +13,7 @@ MacAIConsole 是 MacAI 的原生 macOS 控制台。应用只通过本地 HTTP AP
   - 引擎：daemon `/api/runners` 动态提供 Runner 安装与状态，入口位于「管理」页顶端，GUI 不保留旧引擎环境管理器或本地脚本安装
 - 引擎和推荐模型子条目均可通过右键菜单忽略，后续启动不再显示；设置页可分别恢复全部引擎或推荐模型，其中已下载的推荐模型仍保持隐藏
 
-运行状态中的模型条目可进入详细设置页，调整 keep-alive、LLM 上下文长度和 TTS 默认音色。
+运行状态中的模型条目可进入详细设置页，调整 keep-alive、LLM 上下文长度、默认 `temperature` / `top_p` 和 TTS 默认音色。
 
 ## 系统要求
 

@@ -18,6 +18,7 @@ pub struct ChatRequest {
     /// 必须支持 stream=true（文档 §14：Streaming 是第一版必需功能）。
     pub stream: bool,
     pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
     pub max_tokens: Option<u64>,
 }
 
@@ -56,6 +57,7 @@ mod tests {
         assert!(chat.messages.is_empty());
         assert!(!chat.stream);
         assert!(chat.temperature.is_none());
+        assert!(chat.top_p.is_none());
         assert!(chat.max_tokens.is_none());
 
         let speech: SpeechRequest =

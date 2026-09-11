@@ -13,13 +13,14 @@ mod tasks;
 
 use std::collections::HashMap;
 use std::path::{Path as FilePath, PathBuf};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, Request, State};
 use axum::http::{header, StatusCode};
+use axum::middleware::Next;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -42,6 +43,7 @@ use crate::tasks::{chat_request_detail, speech_request_detail, transcription_req
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const LOG_LEVEL_INFO: u8 = 0;
 const LOG_LEVEL_DEBUG: u8 = 1;
+static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 type LogFilterHandle =
     tracing_subscriber::reload::Handle<tracing_subscriber::EnvFilter, tracing_subscriber::Registry>;
@@ -104,6 +106,12 @@ struct LoadModelRequest {
     routing_token: Option<String>,
     context_length: Option<u64>,
     keep_alive: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetGenerationSettingsRequest {
+    temperature: f64,
+    top_p: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,8 +200,13 @@ async fn main() {
         .route("/api/models/{id}/rename", post(rename_model))
         .route("/api/models/{id}/keep-alive", post(set_model_keep_alive))
         .route("/api/models/{id}/voice", post(set_model_voice))
+        .route(
+            "/api/models/{id}/generation",
+            post(set_model_generation_settings),
+        )
         .route("/api/models/{id}/voices", get(list_model_voices))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
+        .layer(axum::middleware::from_fn(debug_http_request))
         .with_state(state);
 
     // 端口默认 11435；测试/并行场景可用 AIWORKD_PORT 覆盖（生产 GUI 拉起时不设置）。
@@ -228,6 +241,25 @@ async fn main() {
             runtime.shutdown_all().await;
         }
     }
+}
+
+async fn debug_http_request(request: Request, next: Next) -> Response {
+    let request_id = REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    let started = Instant::now();
+    tracing::debug!(request_id, %method, %path, "http request");
+
+    let response = next.run(request).await;
+    tracing::debug!(
+        request_id,
+        %method,
+        %path,
+        status = response.status().as_u16(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "http response"
+    );
+    response
 }
 
 fn configured_log_level() -> u8 {
@@ -316,6 +348,8 @@ async fn list_models(State(state): State<AppState>) -> Json<Value> {
             provider_selection_reason: entry.spec.provider_selection_reason,
             model_type: entry.spec.model_type,
             path: entry.spec.path,
+            temperature: entry.spec.temperature,
+            top_p: entry.spec.top_p,
         })
         .collect();
     Json(json!({"object": "list", "data": models}))
@@ -1403,6 +1437,14 @@ async fn register_and_load_model(
             .context_length
             .or_else(|| existing_spec.as_ref().and_then(|s| s.context_length))
             .or(Some(4096)),
+        temperature: existing_spec
+            .as_ref()
+            .and_then(|s| s.temperature)
+            .or((model_type == "llm").then_some(1.0)),
+        top_p: existing_spec
+            .as_ref()
+            .and_then(|s| s.top_p)
+            .or((model_type == "llm").then_some(0.95)),
         default_voice: existing_spec.as_ref().and_then(|s| s.default_voice.clone()),
     };
 
@@ -1571,6 +1613,38 @@ async fn set_model_voice(
     }
 }
 
+async fn set_model_generation_settings(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Json(request): Json<SetGenerationSettingsRequest>,
+) -> Response {
+    let Some(spec) = state.runtime.get_model(&id).await else {
+        return api_error(AIError::ModelNotFound, format!("model '{id}' not found"));
+    };
+    if spec.model_type != "llm" {
+        return api_error(
+            AIError::InvalidRequest,
+            "generation settings require an LLM model",
+        );
+    }
+    if !request.temperature.is_finite() || !(0.0..=2.0).contains(&request.temperature) {
+        return api_error(AIError::InvalidRequest, "temperature must be within [0, 2]");
+    }
+    if !request.top_p.is_finite() || !(0.0..=1.0).contains(&request.top_p) {
+        return api_error(AIError::InvalidRequest, "top_p must be within [0, 1]");
+    }
+    state
+        .runtime
+        .set_generation_settings(&id, request.temperature, request.top_p)
+        .await;
+    Json(json!({
+        "id": id,
+        "temperature": request.temperature,
+        "top_p": request.top_p,
+    }))
+    .into_response()
+}
+
 /// 列出 TTS 模型可用的音色：Qwen3-TTS 使用 provider 内置 speaker，其他
 /// 目录模型扫描 voices/*.safetensors。
 async fn list_model_voices(
@@ -1614,7 +1688,18 @@ async fn list_model_voices(
     Json(json!({"id": id, "voices": voices, "default_voice": default_voice})).into_response()
 }
 
-async fn chat_completions(State(state): State<AppState>, Json(req): Json<ChatRequest>) -> Response {
+async fn chat_completions(
+    State(state): State<AppState>,
+    Json(mut req): Json<ChatRequest>,
+) -> Response {
+    if let Some(spec) = state.runtime.get_model(&req.model).await {
+        if req.temperature.is_none() {
+            req.temperature = spec.temperature.or(Some(1.0));
+        }
+        if req.top_p.is_none() {
+            req.top_p = spec.top_p.or(Some(0.95));
+        }
+    }
     let task = state
         .runtime
         .start_task("chat", req.model.clone(), chat_request_detail(&req));
@@ -2414,6 +2499,8 @@ runner = ">=1,<2"
             memory_estimate: Some(0),
             keep_alive: Some("always".to_string()),
             context_length: Some(4096),
+            temperature: Some(1.0),
+            top_p: Some(0.95),
             default_voice: None,
         }
     }
@@ -2507,6 +2594,8 @@ runner = ">=1,<2"
             "test provider selection"
         );
         assert_eq!(model["owned_by"], "aiworkd/mock");
+        assert_eq!(model["temperature"], 1.0);
+        assert_eq!(model["top_p"], 0.95);
     }
 
     #[tokio::test]
@@ -2550,6 +2639,8 @@ runner = ">=1,<2"
             memory_estimate: None,
             keep_alive: Some("always".to_string()),
             context_length: None,
+            temperature: None,
+            top_p: None,
             default_voice: None,
         }
     }
@@ -2585,6 +2676,7 @@ runner = ">=1,<2"
             }],
             stream: false,
             temperature: Some(0.2),
+            top_p: Some(0.8),
             max_tokens: Some(32),
         };
 
@@ -2599,7 +2691,40 @@ runner = ">=1,<2"
         assert_eq!(detail.result.output_text.as_deref(), Some("hello task"));
         assert_eq!(detail.result.total_tokens, Some(20));
         assert_eq!(detail.request.temperature, Some(0.2));
+        assert_eq!(detail.request.top_p, Some(0.8));
         assert_eq!(detail.request.max_tokens, Some(32));
+    }
+
+    #[tokio::test]
+    async fn generation_settings_validate_and_update_llm() {
+        let runtime = Arc::new(Runtime::new());
+        runtime.register(mock_model()).await;
+        let state = app_state(Arc::clone(&runtime));
+
+        let response = set_model_generation_settings(
+            State(state.clone()),
+            AxumPath("mock-task".to_string()),
+            Json(SetGenerationSettingsRequest {
+                temperature: 0.6,
+                top_p: 0.8,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let spec = runtime.get_model("mock-task").await.unwrap();
+        assert_eq!(spec.temperature, Some(0.6));
+        assert_eq!(spec.top_p, Some(0.8));
+
+        let invalid = set_model_generation_settings(
+            State(state),
+            AxumPath("mock-task".to_string()),
+            Json(SetGenerationSettingsRequest {
+                temperature: 1.0,
+                top_p: 1.1,
+            }),
+        )
+        .await;
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -2616,6 +2741,7 @@ runner = ">=1,<2"
                 }],
                 stream: true,
                 temperature: None,
+                top_p: None,
                 max_tokens: None,
             }),
         )
@@ -2632,6 +2758,8 @@ runner = ">=1,<2"
         assert_eq!(list.completed[0].status, "succeeded");
         let detail = runtime.tasks().get(&list.completed[0].id).unwrap();
         assert_eq!(detail.result.output_text.as_deref(), Some("stream me"));
+        assert_eq!(detail.request.temperature, Some(1.0));
+        assert_eq!(detail.request.top_p, Some(0.95));
         // 流式终帧的 usage 必须落进任务统计，并派生生成吞吐。
         assert_eq!(detail.result.prompt_tokens, Some(9));
         assert_eq!(detail.result.completion_tokens, Some(9));
@@ -2654,6 +2782,7 @@ runner = ">=1,<2"
                 }],
                 stream: true,
                 temperature: None,
+                top_p: None,
                 max_tokens: None,
             }),
         )
@@ -2681,6 +2810,7 @@ runner = ">=1,<2"
                 }],
                 stream: false,
                 temperature: None,
+                top_p: None,
                 max_tokens: None,
             }),
         )
@@ -2829,6 +2959,8 @@ runner = ">=0.1,<0.2"
                 memory_estimate: Some(0),
                 keep_alive: Some("always".to_string()),
                 context_length: None,
+                temperature: None,
+                top_p: None,
                 default_voice: None,
             })
             .await;
@@ -3050,6 +3182,8 @@ runner = ">=0.1,<0.2"
             memory_estimate: Some(1024),
             keep_alive: Some("always".to_string()),
             context_length: Some(4096),
+            temperature: Some(1.0),
+            top_p: Some(0.95),
             default_voice: None,
         };
         runtime.register(initial_spec).await;

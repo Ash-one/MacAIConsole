@@ -112,6 +112,7 @@ final class TaskDecodingTests: XCTestCase {
                 "speed": null,
                 "stream": true,
                 "temperature": 0.7,
+                "top_p": 0.95,
                 "max_tokens": 512
               },
               "result": {
@@ -137,6 +138,7 @@ final class TaskDecodingTests: XCTestCase {
         XCTAssertEqual(detail.request?.messages?.first?.role, "user")
         XCTAssertEqual(detail.request?.stream, true)
         XCTAssertEqual(detail.request?.temperature, 0.7)
+        XCTAssertEqual(detail.request?.topP, 0.95)
         XCTAssertEqual(detail.request?.maxTokens, 512)
         XCTAssertEqual(detail.result?.outputText, "总结结果")
         XCTAssertEqual(detail.result?.totalTokens, 20)
