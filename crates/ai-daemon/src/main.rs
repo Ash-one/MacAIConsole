@@ -55,6 +55,33 @@ struct AppState {
     log_filter: LogFilterHandle,
     log_level: Arc<AtomicU8>,
     routing_tokens: Arc<StdMutex<HashMap<String, RoutingToken>>>,
+    download_progress: Arc<StdMutex<HashMap<String, DownloadProgress>>>,
+}
+
+#[derive(Clone, Serialize)]
+struct DownloadProgress {
+    filename: String,
+    file_index: usize,
+    file_count: usize,
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+    percent: Option<u8>,
+}
+
+struct DownloadProgressGuard {
+    id: Option<String>,
+    progress: Arc<StdMutex<HashMap<String, DownloadProgress>>>,
+}
+
+impl Drop for DownloadProgressGuard {
+    fn drop(&mut self) {
+        if let Some(id) = &self.id {
+            self.progress
+                .lock()
+                .expect("download progress lock poisoned")
+                .remove(id);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -86,6 +113,7 @@ struct SetLoggingLevelRequest {
 struct PullModelProfileRequest {
     #[serde(default = "default_true")]
     auto_load: bool,
+    progress_id: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -157,6 +185,7 @@ async fn main() {
         log_filter,
         log_level: Arc::new(AtomicU8::new(initial_log_level)),
         routing_tokens: Arc::new(StdMutex::new(HashMap::new())),
+        download_progress: Arc::new(StdMutex::new(HashMap::new())),
     };
     let app = Router::new()
         .route("/health", get(health))
@@ -186,6 +215,7 @@ async fn main() {
         .route("/api/runner-scripts", post(create_script_runner))
         .route("/api/models/inspect", post(inspect_models))
         .route("/api/models/remote/inspect", post(inspect_remote_model))
+        .route("/api/downloads/{id}", get(download_progress))
         .route("/api/model-profiles", get(model_profiles))
         .route("/api/model-profiles/{id}/pull", post(pull_model_profile))
         .route(
@@ -240,6 +270,22 @@ async fn main() {
             tracing::info!("SIGINT received; shutting down all workers");
             runtime.shutdown_all().await;
         }
+    }
+}
+
+async fn download_progress(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match state
+        .download_progress
+        .lock()
+        .expect("download progress lock poisoned")
+        .get(&id)
+        .cloned()
+    {
+        Some(progress) => Json(progress).into_response(),
+        None => api_error(AIError::TaskNotFound, format!("download '{id}' not found")),
     }
 }
 
@@ -461,6 +507,7 @@ fn pull_request_for_profile(
         id: Some(profile.id.clone()),
         provider: Some(profile.runner.clone()),
         auto_load: Some(auto_load),
+        progress_id: None,
     };
     pull::validate_pull_request(&request)?;
     Ok(request)
@@ -509,10 +556,11 @@ async fn pull_model_profile(
             format!("model profile '{id}' not found"),
         );
     };
-    let request = match pull_request_for_profile(&profile, body.auto_load) {
+    let mut request = match pull_request_for_profile(&profile, body.auto_load) {
         Ok(request) => request,
         Err(error) => return api_error(AIError::InvalidRequest, error),
     };
+    request.progress_id = body.progress_id;
     pull_model(State(state), Json(request)).await
 }
 
@@ -1105,9 +1153,50 @@ async fn pull_model(
         pull::RemoteModelSource::Modelscope => "master",
     });
     tracing::info!(endpoint = %endpoint, repo = %request.repo, revision, "starting model pull");
-    for (filename, destination) in targets {
-        if let Err(error) =
-            pull::download_file(&endpoint, &request.repo, revision, &filename, &destination).await
+    let progress_id = request.progress_id.clone();
+    if progress_id.as_ref().is_some_and(|id| {
+        id.is_empty()
+            || id.len() > 64
+            || !id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    }) {
+        return api_error(AIError::InvalidRequest, "invalid progress_id");
+    }
+    let _progress_guard = DownloadProgressGuard {
+        id: progress_id.clone(),
+        progress: Arc::clone(&state.download_progress),
+    };
+    let file_count = targets.len();
+    for (index, (filename, destination)) in targets.into_iter().enumerate() {
+        let progress = Arc::clone(&state.download_progress);
+        let current_id = progress_id.clone();
+        let current_filename = filename.clone();
+        if let Err(error) = pull::download_file(
+            &endpoint,
+            &request.repo,
+            revision,
+            &filename,
+            &destination,
+            move |downloaded_bytes, total_bytes| {
+                let Some(id) = &current_id else { return };
+                progress
+                    .lock()
+                    .expect("download progress lock poisoned")
+                    .insert(
+                        id.clone(),
+                        DownloadProgress {
+                            filename: current_filename.clone(),
+                            file_index: index + 1,
+                            file_count,
+                            downloaded_bytes,
+                            total_bytes,
+                            percent: pull::progress_percent(downloaded_bytes, total_bytes),
+                        },
+                    );
+            },
+        )
+        .await
         {
             // 下载/TLS/UA 拒绝是传输层故障：映射 DownloadFailed（502）并保留底层
             // connect/response 错误链，供 UI 与日志诊断（不再伪装成内部 500）。
@@ -2515,6 +2604,7 @@ runner = ">=1,<2"
             log_filter,
             log_level: Arc::new(AtomicU8::new(LOG_LEVEL_INFO)),
             routing_tokens: Arc::new(StdMutex::new(HashMap::new())),
+            download_progress: Arc::new(StdMutex::new(HashMap::new())),
         }
     }
 
@@ -2612,6 +2702,7 @@ runner = ">=1,<2"
             id: Some("download-only".to_string()),
             provider: None,
             auto_load: Some(false),
+            progress_id: None,
         };
 
         let response = finish_pull(

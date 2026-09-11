@@ -48,6 +48,8 @@ pub struct PullRequest {
     pub provider: Option<String>,
     /// 下载后是否立即注册加载；默认保持原有 pull 行为。
     pub auto_load: Option<bool>,
+    /// GUI 为本次请求生成的临时标识，仅用于查询活动下载进度。
+    pub progress_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -540,6 +542,7 @@ pub async fn download_file(
     revision: &str,
     filename: &str,
     dest: &Path,
+    mut on_progress: impl FnMut(u64, Option<u64>),
 ) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent)
@@ -550,7 +553,17 @@ pub async fn download_file(
     let client = build_client()?;
     let mut last_error = None;
     for attempt in 1..=MAX_DOWNLOAD_ATTEMPTS {
-        match download_file_once(&client, &endpoint, repo, revision, filename, dest).await {
+        match download_file_once(
+            &client,
+            &endpoint,
+            repo,
+            revision,
+            filename,
+            dest,
+            &mut on_progress,
+        )
+        .await
+        {
             Ok(()) => return Ok(()),
             Err(error) if error.retryable && attempt < MAX_DOWNLOAD_ATTEMPTS => {
                 tracing::warn!(
@@ -583,6 +596,7 @@ async fn download_file_once(
     revision: &str,
     filename: &str,
     dest: &Path,
+    on_progress: &mut impl FnMut(u64, Option<u64>),
 ) -> Result<(), DownloadError> {
     let part = part_path(dest);
     let url = resolve_url_with_endpoint(endpoint, repo, revision, filename);
@@ -682,6 +696,8 @@ async fn download_file_once(
     let mut stream = response.bytes_stream();
     let mut downloaded = offset;
     let mut last_report = downloaded;
+    let mut last_percent = progress_percent(downloaded, total);
+    on_progress(downloaded, total);
     while let Some(chunk) = stream.next().await {
         let bytes = match chunk {
             Ok(bytes) => bytes,
@@ -696,13 +712,22 @@ async fn download_file_once(
             DownloadError::permanent(format!("write failed for '{}': {error}", part.display()))
         })?;
         downloaded += bytes.len() as u64;
-        if downloaded - last_report >= 16 * 1024 * 1024 {
+        on_progress(downloaded, total);
+        let percent = progress_percent(downloaded, total);
+        if percent == Some(100)
+            || percent
+                .zip(last_percent)
+                .is_some_and(|(current, previous)| current / 5 > previous / 5)
+            || (percent.is_none() && downloaded - last_report >= 16 * 1024 * 1024)
+        {
             tracing::info!(
                 filename,
                 downloaded,
                 total = total.unwrap_or(0),
+                progress = %percent.map(|value| format!("{value}%")).unwrap_or_else(|| "unknown".to_string()),
                 "pull progress"
             );
+            last_percent = percent;
             last_report = downloaded;
         }
     }
@@ -723,6 +748,11 @@ async fn download_file_once(
     Ok(())
 }
 
+pub fn progress_percent(downloaded: u64, total: Option<u64>) -> Option<u8> {
+    let total = total.filter(|total| *total > 0)?;
+    Some((((downloaded as u128 * 100) / total as u128).min(100)) as u8)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -738,6 +768,9 @@ mod tests {
         assert!(validate_repo_id("owner/model").is_ok());
         assert!(validate_repo_id("model").is_err());
         assert_eq!(remote_directory("owner/model").unwrap(), "owner--model");
+        assert_eq!(progress_percent(42, Some(100)), Some(42));
+        assert_eq!(progress_percent(120, Some(100)), Some(100));
+        assert_eq!(progress_percent(42, None), None);
     }
 
     #[test]
@@ -809,6 +842,7 @@ mod tests {
             id: Some("qwen3-asr-mlx-8bit".to_string()),
             provider: Some("qwen3-asr-mlx".to_string()),
             auto_load: Some(true),
+            progress_id: None,
         };
         let (root, targets) = pull_targets(&request).unwrap();
         assert!(root.ends_with("Models/stt/qwen3-asr-mlx-8bit"));
@@ -833,6 +867,7 @@ mod tests {
             id: None,
             provider: None,
             auto_load: None,
+            progress_id: None,
         }
     }
 
@@ -928,8 +963,18 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         let dest = root.join("model.bin");
-        let result = download_file(&endpoint, "owner/repo", "main", "model.bin", &dest).await;
+        let mut progress = Vec::new();
+        let result = download_file(
+            &endpoint,
+            "owner/repo",
+            "main",
+            "model.bin",
+            &dest,
+            |downloaded, total| progress.push((downloaded, total)),
+        )
+        .await;
         assert!(result.is_ok(), "{result:?}");
+        assert_eq!(progress.last(), Some(&(10, Some(10))));
         assert_eq!(std::fs::read(&dest).unwrap(), b"1234567890");
         server.await.unwrap();
         let _ = std::fs::remove_dir_all(root);
