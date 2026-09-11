@@ -129,8 +129,9 @@ swift run
 
 **通过 GUI 进行常用操作：**
 
-- **引擎一键安装**：进入侧边栏**「管理」**页，页面顶端「引擎」区块分类展示了全部 7 个 Runner 引擎（`llama.cpp`、`whisper.cpp`、`mlx-lm`、`kokoro`、`qwen3-asr`、`qwen3-tts`、`sherpa-onnx`）的环境状态。点击对应引擎右侧的「安装」按钮，daemon 会自动下载验证过的预编译产物或通过隔离的 `uv` 环境配置依赖，无需手动在终端执行 `curl .../install` 或 `uv sync`。
+- **引擎安装与卸载**：进入侧边栏**「管理」**页，页面顶端「引擎」区块分类展示了全部 7 个 Runner 引擎（`llama.cpp`、`whisper.cpp`、`mlx-lm`、`kokoro`、`qwen3-asr`、`qwen3-tts`、`sherpa-onnx`）的环境状态。点击「安装」可由 daemon 配置依赖；已就绪引擎可从右键菜单卸载受管环境和原生引擎文件，之后可重新安装。正在使用该引擎的模型需要先卸载。
 - **推荐模型下载**：在「管理」页可浏览各引擎的精选推荐模型（如 MiniCPM5 2B、Kokoro-82M 等），点击「下载」即可由 daemon 在后台断点续传下载并存入本地受管目录（`~/Library/Application Support/MacAIConsole/Models/`）。如需使用国内镜像加速，可在**「设置」**页将下载源切换为 `https://hf-mirror.com`。
+- **管理页显示偏好**：引擎和推荐模型条目可通过右键菜单忽略；设置页可分别恢复全部条目，已下载的推荐模型不会重新显示。
 - **模型生命周期与参数设置**：下载完成后可直接在模型卡片上一键「启动」加载到内存或「卸载」；点击模型条目可进入详情页调整 `keep-alive` 空闲驻留时间、上下文长度或默认 TTS 音色。
 - **状态与任务观测**：
   - **「运行状态」**：实时查看系统内存压力、MacAI 内存预算、已加载模型常驻内存（RSS）与 Metal/ANE 加速状态。
@@ -567,6 +568,7 @@ GET  /api/runtime
 GET  /api/providers
 GET  /api/runners
 POST /api/runners/{runner}/install
+DELETE /api/runners/{runner}/install
 GET  /api/runner-scripts/template/{chat|stt|tts}
 GET  /api/runner-scripts/dependency-presets
 POST /api/runner-scripts/dependencies

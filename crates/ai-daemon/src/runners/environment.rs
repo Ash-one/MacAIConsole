@@ -316,6 +316,39 @@ impl EnvironmentManager {
             .collect()
     }
 
+    /// 删除一个受管环境。与安装共享同一把锁，删除后状态回到 missing。
+    pub async fn uninstall(&self, environment_id: &str) -> Result<(), EnvironmentError> {
+        let lock = self
+            .locks
+            .lock()
+            .expect("lock map lock")
+            .entry(environment_id.to_string())
+            .or_default()
+            .clone();
+        let _guard = lock.lock().await;
+        let path = self.config.runtime_root.join(environment_id);
+        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&path))
+            .await
+            .map_err(|error| EnvironmentError::Io {
+                context: "environment uninstall worker panicked".to_string(),
+                source: std::io::Error::new(std::io::ErrorKind::Other, error.to_string()),
+            })?
+            .or_else(|error| {
+                (error.kind() == std::io::ErrorKind::NotFound)
+                    .then_some(())
+                    .ok_or(error)
+            })
+            .map_err(|source| EnvironmentError::Io {
+                context: format!("cannot remove environment '{environment_id}'"),
+                source,
+            })?;
+        self.statuses
+            .lock()
+            .expect("status map lock")
+            .remove(environment_id);
+        Ok(())
+    }
+
     /// 定位并报告实际 uv executable。解析顺序：`MACAI_UV_PATH` 显式配置 →
     /// App Bundle 内置产物 → 系统/开发态 `PATH` → 常见系统与用户路径 fallback。
     /// 版本来自实际 `uv --version` 输出。

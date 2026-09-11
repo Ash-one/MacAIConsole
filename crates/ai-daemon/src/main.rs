@@ -182,7 +182,7 @@ async fn main() {
         .route("/api/model-profiles/{id}/pull", post(pull_model_profile))
         .route(
             "/api/runners/{runner}/install",
-            post(install_runner_environment),
+            post(install_runner_environment).delete(uninstall_runner_environment),
         )
         .route("/api/models/load", post(register_and_load_model))
         .route("/api/models/pull", post(pull_model))
@@ -995,6 +995,56 @@ async fn install_runner_environment(
         )
             .into_response(),
     }
+}
+
+/// 删除 daemon-owned Runner 环境与原生引擎产物。运行中的模型必须先卸载。
+async fn uninstall_runner_environment(
+    State(state): State<AppState>,
+    AxumPath(runner): AxumPath<String>,
+) -> Response {
+    let Some(manager) = state.runtime.runner_instances() else {
+        return api_error(AIError::ModelNotFound, "no Runner assembly");
+    };
+    let Some(entry) = manager.discovered().into_iter().find(|entry| {
+        entry
+            .manifest
+            .as_ref()
+            .is_some_and(|manifest| manifest.id == runner)
+    }) else {
+        return api_error(
+            AIError::ModelNotFound,
+            format!("runner '{runner}' not discovered"),
+        );
+    };
+    let manifest = entry.manifest.expect("filtered runner has manifest");
+    if let Some(instance) = manager.instance_snapshot(&runner).await {
+        if instance.loaded_model.is_some() || instance.active_requests > 0 {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": { "code": "runner_busy", "message": "请先卸载该引擎正在使用的模型" } })),
+            )
+                .into_response();
+        }
+    }
+    if let Err(error) = manager.shutdown_instance(&runner).await {
+        return api_error(AIError::Internal, format!("cannot stop runner: {error}"));
+    }
+    if let Err(error) = manager.environments().uninstall(&manifest.runtime.id).await {
+        return api_error(AIError::Internal, error.to_string());
+    }
+    let engine_dir = ai_daemon::runners::engine_dir(&state.app_support, &runner);
+    let engine_removal = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(engine_dir))
+        .await
+        .unwrap_or_else(|error| Err(std::io::Error::other(error.to_string())));
+    if let Err(error) = engine_removal {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return api_error(
+                AIError::Internal,
+                format!("cannot remove engine asset: {error}"),
+            );
+        }
+    }
+    Json(json!({ "environment_id": manifest.runtime.id, "phase": "missing" })).into_response()
 }
 
 /// POST /api/models/pull —— 下载 HF 单文件或目录清单到模型仓库，可选择立即注册加载。
@@ -2671,6 +2721,13 @@ runner = ">=1,<2"
         let unknown =
             install_runner_environment(State(state), AxumPath("org.missing.runner".to_string()))
                 .await;
+        assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+
+        let unknown = uninstall_runner_environment(
+            State(app_state(Arc::new(Runtime::new()))),
+            AxumPath("org.missing.runner".to_string()),
+        )
+        .await;
         assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
     }
 

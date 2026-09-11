@@ -243,7 +243,8 @@ Phase 1B（daemon-owned `python-uv` environment manager）随后在同日 bounde
 
 - 七个 built-in Runner 各自提交 `pyproject.toml` 和 `uv.lock`；
 - daemon 拥有 uv/Python 定位、fingerprint、单飞安装、probe、原子提升和重启恢复；
-- GUI 只调用 `POST /api/runners/{id}/install` 并展示 daemon descriptor；
+- GUI 只调用 `POST`/`DELETE /api/runners/{id}/install` 并展示 daemon descriptor；卸载由
+  daemon 串行删除受管环境，客户端不接触环境目录；
 - 产品代码中不存在 legacy Python Provider、`python -m venv`、`pip install`
   或 GUI 包数组 owner；
 - CI 对七个 Runner 分别执行 `uv lock --check` 和纯 adapter pytest。真实

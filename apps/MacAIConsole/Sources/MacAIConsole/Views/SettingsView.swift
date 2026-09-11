@@ -10,6 +10,8 @@ struct SettingsView: View {
     @AppStorage(AppSettings.downloadSourceKey) private var downloadSource = ModelDownloadSource.official.rawValue
     @AppStorage(AppSettings.customDownloadEndpointKey) private var customDownloadEndpoint = ""
     @Environment(DaemonController.self) private var controller
+    @State private var restartRequested = false
+    @State private var restartSucceeded = false
 
     var body: some View {
         Form {
@@ -102,12 +104,40 @@ struct SettingsView: View {
 
             Section {
                 Button {
+                    restartRequested = true
+                    restartSucceeded = false
                     controller.restartDaemon()
+                    if controller.phase == .offline {
+                        restartRequested = false
+                    }
                 } label: {
-                    Label("应用设置并重启 aiworkd", systemImage: "arrow.clockwise.circle")
+                    if restartRequested {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("正在重启 aiworkd…")
+                        }
+                    } else {
+                        Label("应用设置并重启 aiworkd", systemImage: "arrow.clockwise.circle")
+                    }
                 }
                 .buttonStyle(ProminentButtonStyle())
-                .disabled(!settingsAreValid)
+                .disabled(!settingsAreValid || restartRequested)
+
+                if restartSucceeded {
+                    Label("设置已应用，aiworkd 已重启", systemImage: "checkmark.circle.fill")
+                        .font(.callout)
+                        .foregroundStyle(Theme.success)
+                        .transition(.opacity)
+                }
+            }
+
+            Section("管理页显示") {
+                Button("显示所有引擎", systemImage: "square.stack.3d.up") {
+                    AppSettings.showAllRunners()
+                }
+                Button("显示所有推荐模型", systemImage: "sparkles") {
+                    AppSettings.showAllRecommendations()
+                }
             }
 
             Section("关于") {
@@ -120,6 +150,16 @@ struct SettingsView: View {
         .frame(maxWidth: 680, maxHeight: .infinity, alignment: .top)
         .frame(maxWidth: .infinity)
         .navigationTitle("设置")
+        .onChange(of: controller.phase) { _, phase in
+            guard restartRequested, phase == .online else { return }
+            restartRequested = false
+            withAnimation { restartSucceeded = true }
+        }
+        .task(id: restartSucceeded) {
+            guard restartSucceeded else { return }
+            try? await Task.sleep(for: .seconds(2))
+            withAnimation { restartSucceeded = false }
+        }
     }
 
     private var resolvedText: String {
@@ -197,5 +237,3 @@ struct SettingsView: View {
         }
     }
 }
-
-

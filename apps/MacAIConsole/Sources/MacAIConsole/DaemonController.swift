@@ -47,6 +47,7 @@ final class DaemonController {
     var busyModelIDs: Set<String> = []
     var busyRecommendationIDs: Set<String> = []
     var busyRunnerIDs: Set<String> = []
+    var uninstallingRunnerIDs: Set<String> = []
 
     let api: DaemonAPI
 
@@ -228,6 +229,23 @@ final class DaemonController {
             await refreshAfterSuccessfulMutation()
         } catch {
             lastError = "\(id) 安装失败：\(Self.message(for: error))"
+        }
+    }
+
+    func uninstallRunner(_ id: String) async {
+        guard !busyRunnerIDs.contains(id) else { return }
+        busyRunnerIDs.insert(id)
+        uninstallingRunnerIDs.insert(id)
+        defer {
+            busyRunnerIDs.remove(id)
+            uninstallingRunnerIDs.remove(id)
+        }
+        do {
+            _ = try await api.uninstallRunner(id)
+            logInfo("已卸载 Runner 引擎：\(id)")
+            await refreshAfterSuccessfulMutation()
+        } catch {
+            lastError = "\(id) 卸载失败：\(Self.message(for: error))"
         }
     }
 

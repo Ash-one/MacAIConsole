@@ -32,6 +32,10 @@
 
 ## 当前决策记录
 
+- [设置应用并重启成功反馈](2026-09-11-settings-restart-success-feedback.md)——`implemented`
+  （设置页发起重启后，在 daemon 重新在线时显示两秒成功提示。）
+- [管理页引擎与推荐模型条目的持久忽略和恢复](2026-09-11-persistently-ignore-recommended-models.md)——`implemented`
+  （管理页支持按稳定 ID 持久忽略引擎和推荐模型，并可在设置页按类别恢复。）
 - [Runner 插件架构](2026-09-02-runner-plugin-architecture.md)——`implemented`
   （built-in Runner、通用协议、Runtime/GUI 环境与 Model Profile catalog 管理面、选择审计已落地；完整
   第三方 package 导入、并发/cancel 和 OS 沙箱仍是独立后续边界）

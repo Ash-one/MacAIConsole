@@ -28,7 +28,7 @@ Related current decisions: [Runner 插件架构](2026-09-02-runner-plugin-archit
    - 移除了「运行状态」页（`RuntimeStatusView`）底部的只读「Runner」区块，由管理页作为 Runner 引擎状态与安装动作的唯一展示收敛点；
    - 在「管理」页最顶端新增「引擎」区块（`engineSection`），直观呈现由 daemon `/api/runners` 与 `/api/providers` 报告的每一个 Runner 引擎，并严格按 **LLM → STT → TTS** 顺序分类排列；
    - 每一行引擎条目（`EngineRow`）展示短名、能力标签（LLM / STT / TTS）与就绪（已就绪 · 设备）/未安装/环境失败的状态展示，去除了冗余的 `WORKER` 标签保持界面轻量；
-   - 未安装（missing）或失败（failed）的引擎直接在行内提供「安装」/「重试」操作按钮，并展示安装中转圈状态，用户进入管理页后首屏即可决定是否安装对应引擎。
+   - 未安装（missing）或失败（failed）的引擎直接在行内提供「安装」/「重试」操作按钮；已就绪引擎可从右键菜单确认卸载，操作完成后回到未安装状态并可重新安装。安装与卸载均展示进行中状态。
 
 3. **`DaemonController` 集中维护 Runner 状态**：
    - 在 `DaemonController` 状态机中新增 `runners: [RunnerEntry]` 与 `busyRunnerIDs: Set<String>`；

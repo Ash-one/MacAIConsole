@@ -8,6 +8,8 @@ struct ModelsView: View {
     @State private var showingAddSheet = false
     @State private var showingRunnerEditor = false
     @State private var selectedModel: ModelDetailTarget?
+    @State private var ignoredRecommendationIDs = AppSettings.ignoredRecommendationIDs
+    @State private var ignoredRunnerIDs = AppSettings.ignoredRunnerIDs
 
     var body: some View {
         ScrollView {
@@ -114,7 +116,9 @@ struct ModelsView: View {
     }
 
     private var pendingRecommendations: [ModelProfile] {
-        controller.modelProfiles.filter { !$0.isDownloaded }
+        controller.modelProfiles.filter {
+            !$0.isDownloaded && !ignoredRecommendationIDs.contains($0.id)
+        }
     }
 
     /// 按类型分组展示顺序：llm → stt → tts，其余未知类型按字母序殿后。
@@ -161,7 +165,7 @@ struct ModelsView: View {
     }
 
     private var sortedRunners: [RunnerEntry] {
-        controller.runners.sorted { a, b in
+        controller.runners.filter { !ignoredRunnerIDs.contains($0.id) }.sorted { a, b in
             let orderA = runnerTypeOrder(a)
             let orderB = runnerTypeOrder(b)
             if orderA != orderB {
@@ -179,7 +183,9 @@ struct ModelsView: View {
         ) {
             if sortedRunners.isEmpty {
                 EmptyHint(
-                    text: controller.phase == .online ? "正在探测 Runner 引擎…" : "守护进程离线，暂无引擎数据",
+                    text: controller.runners.isEmpty
+                        ? (controller.phase == .online ? "正在探测 Runner 引擎…" : "守护进程离线，暂无引擎数据")
+                        : "所有引擎均已忽略，可在设置中重新显示",
                     systemImage: "square.stack.3d.up"
                 )
             } else {
@@ -189,7 +195,13 @@ struct ModelsView: View {
                         EngineRow(
                             runner: runner,
                             provider: matchingProvider,
-                            busy: controller.busyRunnerIDs.contains(runner.id)
+                            busy: controller.busyRunnerIDs.contains(runner.id),
+                            uninstalling: controller.uninstallingRunnerIDs.contains(runner.id),
+                            onIgnore: {
+                                AppSettings.ignoreRunner(runner.id)
+                                ignoredRunnerIDs.insert(runner.id)
+                            },
+                            onUninstall: { Task { await controller.uninstallRunner(runner.id) } }
                         ) {
                             Task { await controller.installRunner(runner.id) }
                         }
@@ -224,6 +236,12 @@ struct ModelsView: View {
                             if await controller.installRecommended(model) {
                                 await rescanRepo()
                             }
+                        }
+                    }
+                    .contextMenu {
+                        Button("忽略推荐", systemImage: "eye.slash") {
+                            AppSettings.ignoreRecommendation(model.id)
+                            ignoredRecommendationIDs.insert(model.id)
                         }
                     }
                     if model.id != pendingRecommendations.last?.id {
@@ -834,7 +852,11 @@ struct EngineRow: View {
     let runner: RunnerEntry
     let provider: ProviderEntry?
     let busy: Bool
+    let uninstalling: Bool
+    let onIgnore: () -> Void
+    let onUninstall: () -> Void
     let onInstall: () -> Void
+    @State private var confirmingUninstall = false
 
     private var shortName: String {
         let raw = runner.id.components(separatedBy: ".").last ?? runner.id
@@ -890,7 +912,7 @@ struct EngineRow: View {
             if busy {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text("正在安装…")
+                    Text(uninstalling ? "正在卸载…" : "正在安装…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -914,6 +936,23 @@ struct EngineRow: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 4)
+        .contentShape(Rectangle())
+        .contextMenu {
+            if runner.phase == "ready" {
+                Button("卸载引擎", systemImage: "trash", role: .destructive) {
+                    confirmingUninstall = true
+                }
+                .disabled(busy)
+                Divider()
+            }
+            Button("忽略引擎", systemImage: "eye.slash", action: onIgnore)
+        }
+        .confirmationDialog("卸载 \(shortName)？", isPresented: $confirmingUninstall) {
+            Button("卸载引擎", role: .destructive, action: onUninstall)
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将删除受管运行环境和引擎文件；之后可以重新安装。")
+        }
     }
 }
 

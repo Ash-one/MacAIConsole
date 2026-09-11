@@ -461,6 +461,10 @@ struct DaemonAPI {
         return try await send("POST", path, body: data, timeout: timeout)
     }
 
+    private func delete(_ path: String, timeout: TimeInterval = 30) async throws -> Data {
+        try await send("DELETE", path, body: nil, timeout: timeout)
+    }
+
     /// 快速探活。返回 false 表示守护进程连不上。
     func isHealthy() async -> Bool {
         var request = URLRequest(url: baseURL.appendingPathComponent("health"))
@@ -521,6 +525,14 @@ struct DaemonAPI {
         try JSONDecoder().decode(
             RunnerInstallResponse.self,
             from: try await postJSON("api/runners/\(id)/install", body: [:], timeout: 660)
+        )
+    }
+
+    /// DELETE /api/runners/{id}/install —— 删除受管环境，之后可重新安装。
+    func uninstallRunner(_ id: String) async throws -> RunnerInstallResponse {
+        try JSONDecoder().decode(
+            RunnerInstallResponse.self,
+            from: try await delete("api/runners/\(id)/install", timeout: 30)
         )
     }
 

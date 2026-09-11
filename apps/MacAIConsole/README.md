@@ -6,12 +6,12 @@ MacAIConsole 是 MacAI 的原生 macOS 控制台。应用只通过本地 HTTP AP
 
 - 运行状态：版本、PID、内存预算、系统内存压力、活跃请求和已加载模型
 - 任务：当前运行及最近完成的 Chat / STT / TTS 请求，支持查看输入、输出、耗时和错误
-- 管理：页面顶端置顶展示 Runner 引擎环境状态与一键安装控制（按 LLM、STT、TTS 顺序分类排列），并可在带 Python/PEP 723 语法高亮和推理库依赖助手的内置编辑器中从 Chat / STT / TTS 模板创建单文件 Script Runner；推荐目录来自 daemon `/api/model-profiles`，本地目录经 `/api/models/inspect` 由 daemon 路由；「添加模型」支持从本地文件导入，或输入公开 Hugging Face/ModelScope 仓库 ID/URL、预览文件与大小后下载；远端下载只写入仓库，不自动注册或加载；模型按 LLM / STT / TTS 分组显示，支持加载、卸载、改名与删除注册；GGUF 会读取展示 metadata
+- 管理：页面顶端置顶展示 Runner 引擎环境状态与安装控制（按 LLM、STT、TTS 顺序分类排列）；已就绪引擎可从右键菜单卸载受管环境和引擎文件，回到未安装状态后可重新安装，使用中的模型需先卸载；并可在带 Python/PEP 723 语法高亮和推理库依赖助手的内置编辑器中从 Chat / STT / TTS 模板创建单文件 Script Runner；推荐目录来自 daemon `/api/model-profiles`，本地目录经 `/api/models/inspect` 由 daemon 路由；「添加模型」支持从本地文件导入，或输入公开 Hugging Face/ModelScope 仓库 ID/URL、预览文件与大小后下载；远端下载只写入仓库，不自动注册或加载；模型按 LLM / STT / TTS 分组显示，支持加载、卸载、改名与删除注册；GGUF 会读取展示 metadata
 - 日志：查看 GUI 与 daemon 最近日志，默认显示 Info，可启用 Debug，并按日志级别着色；"在访达中显示"可打开日志目录
-- 设置：应用外观（跟随系统 / 明亮 / 暗黑）、自动拉起守护进程开关、内存预算、网络代理和模型下载源
+- 设置：应用外观（跟随系统 / 明亮 / 暗黑）、自动拉起守护进程开关、内存预算、网络代理、模型下载源，以及恢复管理页中已忽略的引擎和推荐模型；应用设置并重启成功后显示两秒完成提示
   - 模型下载源可切换 Hugging Face 官方源、`hf-mirror.com` 或自定义 Hugging Face 兼容源；修改后重启 aiworkd 生效
   - 引擎：daemon `/api/runners` 动态提供 Runner 安装与状态，入口位于「管理」页顶端，GUI 不保留旧引擎环境管理器或本地脚本安装
-- 推荐模型条目保持紧凑精简，在引擎不可用时显示提示，可直接在管理页顶端完成引擎安装后立即启动
+- 引擎和推荐模型子条目均可通过右键菜单忽略，后续启动不再显示；设置页可分别恢复全部引擎或推荐模型，其中已下载的推荐模型仍保持隐藏
 
 运行状态中的模型条目可进入详细设置页，调整 keep-alive、LLM 上下文长度和 TTS 默认音色。
 
@@ -82,6 +82,7 @@ POST /api/models/{id}/load
 POST /api/models/{id}/unload
 GET  /api/runners
 POST /api/runners/{id}/install
+DELETE /api/runners/{id}/install
 GET  /api/runner-scripts/template/{chat|stt|tts}
 GET  /api/runner-scripts/dependency-presets
 POST /api/runner-scripts/dependencies

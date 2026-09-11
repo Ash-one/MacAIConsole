@@ -187,6 +187,14 @@ final class DaemonAPIRequestTests: XCTestCase {
         XCTAssertEqual(RecordingURLProtocol.recorded.first?.httpMethod, "POST")
     }
 
+    func testUninstallRunnerSendsDeleteToRunnerInstallEndpoint() async throws {
+        let api = try makeAPI(status: 200, body: #"{"environment_id":"llama-cpp","phase":"missing"}"#)
+        let res = try await api.uninstallRunner("org.macai.llama-cpp")
+        XCTAssertEqual(res.phase, "missing")
+        XCTAssertEqual(RecordingURLProtocol.recorded.first?.url?.path, "/api/runners/org.macai.llama-cpp/install")
+        XCTAssertEqual(RecordingURLProtocol.recorded.first?.httpMethod, "DELETE")
+    }
+
     func testScriptRunnerInspectionAndCreationKeepSourceBoundToDigest() async throws {
         let api = try makeAPI(
             status: 200,

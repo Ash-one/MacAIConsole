@@ -52,6 +52,27 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(AppSettings.downloadSource(in: defaults), .hfMirror)
     }
 
+    func testIgnoredRecommendationsPersistWithoutDuplicates() {
+        XCTAssertTrue(AppSettings.ignoredRecommendationIDs(in: defaults).isEmpty)
+
+        AppSettings.ignoreRecommendation("org.macai.test", in: defaults)
+        AppSettings.ignoreRecommendation("org.macai.test", in: defaults)
+
+        XCTAssertEqual(AppSettings.ignoredRecommendationIDs(in: defaults), ["org.macai.test"])
+    }
+
+    func testIgnoredItemsCanBeRestoredByCategory() {
+        AppSettings.ignoreRecommendation("org.macai.model", in: defaults)
+        AppSettings.ignoreRunner("org.macai.runner", in: defaults)
+
+        AppSettings.showAllRecommendations(in: defaults)
+        XCTAssertTrue(AppSettings.ignoredRecommendationIDs(in: defaults).isEmpty)
+        XCTAssertEqual(AppSettings.ignoredRunnerIDs(in: defaults), ["org.macai.runner"])
+
+        AppSettings.showAllRunners(in: defaults)
+        XCTAssertTrue(AppSettings.ignoredRunnerIDs(in: defaults).isEmpty)
+    }
+
     func testDownloadEndpointNormalizationAndSelection() {
         XCTAssertEqual(
             AppSettings.normalizedDownloadEndpoint(" hf-mirror.com/ "),

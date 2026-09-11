@@ -206,8 +206,10 @@ dispatcher 和真实 HTTP/task abort 消费方一起设计。
 - requested / selected / effective device / reason。Provider 选择存入模型注册表，
   并由 `/v1/models` 和 `/api/runtime` 暴露。
 
-当前实现：`GET /api/runners`（Runner、环境与 Worker Instance snapshot）与
-`POST /api/runners/{runner}/install`（显式环境安装，幂等）。`/api/providers` 组合视图
+当前实现：`GET /api/runners`（Runner、环境与 Worker Instance snapshot）、
+`POST /api/runners/{runner}/install`（显式环境安装，幂等）与同路径 `DELETE`（显式卸载）。
+卸载拒绝仍有加载模型或活动请求的 Runner，关闭空闲 worker 后删除 daemon-owned Python
+环境和原生引擎产物；状态回到 `missing` 后可重新安装。`/api/providers` 组合视图
 继续服务 GUI/CLI，Runner-backed provider 以 `org.macai.*` 出现在同一视图与
 `/v1/models` 的 `owned_by` 中。原生引擎的下载、校验、可选 source build 与就绪状态
 也由同一 Runner install/status 管理面拥有。
@@ -276,8 +278,8 @@ commit `cadfa31` 收敛了已发现的启动、契约与信任边界：
 - daemon 装配：`Runtime::attach_runner` / `register_runner_profile` +
   main.rs `bootstrap_runners`（built-in discovery → profile 持久化 → 无论 artifact
   是否存在都先 bind/attach，首次下载无需重启）；
-- HTTP 管理面：`GET /api/runners` 与 `POST /api/runners/{runner}/install`；
-- GUI 消费端：设置页「引擎」区块（`runners()`/`installRunner`）；
+- HTTP 管理面：`GET /api/runners` 与 `POST`/`DELETE /api/runners/{runner}/install`；
+- GUI 消费端：管理页「引擎」区块（`runners()`/`installRunner`/`uninstallRunner`）；
 - 七个 built-in Runner 包的 adapter 单测和 lock freshness 进入 CI；
 - CI 不伪造宿主机 AI 内存预算：无调度主张的 mock fixture 使用 0 estimate；
   Runtime 单测以固定预算直接验证 LRU 逐出和 lease 保护；

@@ -58,6 +58,8 @@ enum AppSettings {
     static let httpsProxyKey = "httpsProxy"
     static let downloadSourceKey = "downloadSource"
     static let customDownloadEndpointKey = "customDownloadEndpoint"
+    static let ignoredRecommendationIDsKey = "ignoredRecommendationIDs"
+    static let ignoredRunnerIDsKey = "ignoredRunnerIDs"
     static let downloadEndpointEnvironmentKey = "AIWORKD_HF_ENDPOINT"
     static let officialDownloadEndpoint = "https://huggingface.co"
     static let hfMirrorDownloadEndpoint = "https://hf-mirror.com"
@@ -102,6 +104,14 @@ enum AppSettings {
         )
     }
 
+    static var ignoredRecommendationIDs: Set<String> {
+        ignoredRecommendationIDs(in: .standard)
+    }
+
+    static var ignoredRunnerIDs: Set<String> {
+        ignoredRunnerIDs(in: .standard)
+    }
+
     static func proxyMode(in defaults: UserDefaults) -> ProxyMode {
         let rawValue = defaults.string(forKey: proxyModeKey) ?? ProxyMode.system.rawValue
         return ProxyMode(rawValue: rawValue) ?? .system
@@ -115,6 +125,34 @@ enum AppSettings {
     static func downloadSource(in defaults: UserDefaults) -> ModelDownloadSource {
         let rawValue = defaults.string(forKey: downloadSourceKey) ?? ModelDownloadSource.official.rawValue
         return ModelDownloadSource(rawValue: rawValue) ?? .official
+    }
+
+    static func ignoredRecommendationIDs(in defaults: UserDefaults) -> Set<String> {
+        Set(defaults.stringArray(forKey: ignoredRecommendationIDsKey) ?? [])
+    }
+
+    static func ignoreRecommendation(_ id: String, in defaults: UserDefaults = .standard) {
+        var ids = ignoredRecommendationIDs(in: defaults)
+        ids.insert(id)
+        defaults.set(ids.sorted(), forKey: ignoredRecommendationIDsKey)
+    }
+
+    static func ignoredRunnerIDs(in defaults: UserDefaults) -> Set<String> {
+        Set(defaults.stringArray(forKey: ignoredRunnerIDsKey) ?? [])
+    }
+
+    static func ignoreRunner(_ id: String, in defaults: UserDefaults = .standard) {
+        var ids = ignoredRunnerIDs(in: defaults)
+        ids.insert(id)
+        defaults.set(ids.sorted(), forKey: ignoredRunnerIDsKey)
+    }
+
+    static func showAllRecommendations(in defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: ignoredRecommendationIDsKey)
+    }
+
+    static func showAllRunners(in defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: ignoredRunnerIDsKey)
     }
 
     static func normalizedProxyURL(_ text: String) -> String? {

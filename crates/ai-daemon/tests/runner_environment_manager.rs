@@ -114,6 +114,20 @@ fn require_uv() {
 }
 
 #[tokio::test]
+async fn uninstall_removes_environment_and_is_idempotent() {
+    let root = temp_root("uninstall");
+    let manager = manager(&root);
+    let environment = manager.runtime_root().join("org.example.env");
+    std::fs::create_dir_all(environment.join("fingerprint/.venv")).unwrap();
+
+    manager.uninstall("org.example.env").await.unwrap();
+    manager.uninstall("org.example.env").await.unwrap();
+
+    assert!(!environment.exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
 async fn cold_sync_probes_and_promotes_a_ready_environment() {
     require_uv();
     let root = temp_root("cold");
