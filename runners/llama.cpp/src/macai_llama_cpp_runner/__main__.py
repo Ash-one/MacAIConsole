@@ -119,6 +119,7 @@ def main() -> int:
             try:
                 stream = engine.stream_chat(request)
                 emitted = ""
+                reasoning_emitted = ""
                 usage: dict | None = None
                 finish_reason = "stop"
                 for event in stream:
@@ -133,10 +134,21 @@ def main() -> int:
                                 "payload": {"text": delta},
                             }
                         )
+                    if "reasoning_text" in event:
+                        delta = event["reasoning_text"]
+                        reasoning_emitted += delta
+                        _send(
+                            {
+                                "protocol": PROTOCOL_VERSION,
+                                "type": "delta",
+                                "id": frame_id,
+                                "payload": {"reasoning_text": delta},
+                            }
+                        )
                     if "finish_reason" in event:
                         finish_reason = event["finish_reason"]
                         usage = event.get("usage")
-                if not emitted:
+                if not emitted and not reasoning_emitted:
                     raise RuntimeError("model produced no output tokens")
                 _send(
                     {
@@ -145,6 +157,7 @@ def main() -> int:
                         "id": frame_id,
                         "payload": {
                             "text": emitted,
+                            "reasoning_text": reasoning_emitted,
                             "finish_reason": finish_reason,
                             "usage": usage
                             or {

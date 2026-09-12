@@ -236,17 +236,21 @@ class LlamaCppEngine:
         """非流式便捷路径：stream_chat 的聚合形式（engine 单测用）。"""
         stream = self.stream_chat(request)
         text_parts: list[str] = []
+        reasoning_parts: list[str] = []
         finish_reason = "stop"
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         for event in stream:
             if "text" in event:
                 text_parts.append(event["text"])
+            if "reasoning_text" in event:
+                reasoning_parts.append(event["reasoning_text"])
             if "finish_reason" in event:
                 finish_reason = event["finish_reason"]
             if "usage" in event:
                 usage = event["usage"]
         return {
             "text": "".join(text_parts),
+            "reasoning_text": "".join(reasoning_parts),
             "finish_reason": finish_reason,
             "usage": usage,
         }
@@ -257,7 +261,7 @@ def _chat_payload(request: dict) -> dict:
     messages = request.get("messages") or []
     if not isinstance(messages, list) or not messages:
         raise LlamaServerError("chat request requires a non-empty messages array")
-    payload: dict = {"messages": messages, "stream": True}
+    payload: dict = {"messages": messages, "stream": True, "reasoning_format": "auto"}
     if "temperature" in request and request["temperature"] is not None:
         payload["temperature"] = request["temperature"]
     if "top_p" in request and request["top_p"] is not None:
@@ -265,6 +269,17 @@ def _chat_payload(request: dict) -> dict:
     if "max_tokens" in request and request["max_tokens"] is not None:
         payload["max_tokens"] = request["max_tokens"]
     return payload
+
+
+def _chat_delta_events(delta: dict) -> list[dict[str, str]]:
+    events: list[dict[str, str]] = []
+    reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+    if reasoning:
+        events.append({"reasoning_text": reasoning})
+    text = delta.get("content")
+    if text:
+        events.append({"text": text})
+    return events
 
 
 class LlamaChatStream:
@@ -303,9 +318,7 @@ class LlamaChatStream:
                     if not choices:
                         continue
                     delta = choices[0].get("delta") or {}
-                    text = delta.get("content")
-                    if text:
-                        yield {"text": text}
+                    yield from _chat_delta_events(delta)
                     reason = choices[0].get("finish_reason")
                     if reason:
                         yield {

@@ -29,6 +29,61 @@ class LoadedModel:
     device: str = "metal"
 
 
+class ThinkingStreamParser:
+    """Split thinking deltas without leaking partial boundary tags."""
+
+    START = "<think>"
+    END = "</think>"
+
+    def __init__(self, enabled: bool) -> None:
+        self.in_reasoning = enabled
+        self.trim_content_prefix = False
+        self.buffer = ""
+
+    def feed(self, text: str) -> tuple[str, str]:
+        if not self.in_reasoning:
+            if self.trim_content_prefix:
+                text = text.lstrip("\n")
+                if text:
+                    self.trim_content_prefix = False
+            return "", text
+        self.buffer += text
+        if self.buffer.startswith(self.START):
+            self.buffer = self.buffer[len(self.START) :].lstrip("\n")
+        elif self.START.startswith(self.buffer):
+            return "", ""
+
+        end = self.buffer.find(self.END)
+        if end >= 0:
+            reasoning = self.buffer[:end]
+            content = self.buffer[end + len(self.END) :].lstrip("\n")
+            self.buffer = ""
+            self.in_reasoning = False
+            self.trim_content_prefix = not content
+            return reasoning, content
+
+        held = _tag_prefix_length(self.buffer, self.END)
+        reasoning = self.buffer[:-held] if held else self.buffer
+        self.buffer = self.buffer[-held:] if held else ""
+        return reasoning, ""
+
+    def finish(self) -> tuple[str, str]:
+        pending = self.buffer
+        self.buffer = ""
+        return (pending, "") if self.in_reasoning else ("", pending)
+
+
+def _tag_prefix_length(text: str, tag: str) -> int:
+    return next(
+        (size for size in range(min(len(text), len(tag) - 1), 0, -1) if text.endswith(tag[:size])),
+        0,
+    )
+
+
+def tokenizer_supports_thinking(tokenizer: Any) -> bool:
+    return "enable_thinking" in (getattr(tokenizer, "chat_template", "") or "")
+
+
 def validate_chat_request(
     request: dict[str, Any],
 ) -> tuple[list[dict[str, str]], int, float, float]:
@@ -46,7 +101,13 @@ def validate_chat_request(
             raise ChatRequestError("message role must be a non-empty string")
         if not isinstance(content, str):
             raise ChatRequestError("message content must be a string")
-        normalized.append({"role": role, "content": content})
+        normalized_message = {"role": role, "content": content}
+        reasoning = message.get("reasoning_content")
+        if reasoning is not None:
+            if not isinstance(reasoning, str):
+                raise ChatRequestError("message reasoning_content must be a string")
+            normalized_message["reasoning_content"] = reasoning
+        normalized.append(normalized_message)
 
     max_tokens = request.get("max_tokens", DEFAULT_MAX_TOKENS)
     if max_tokens is None:
@@ -80,7 +141,8 @@ def build_prompt_tokens(tokenizer: Any, messages: list[dict[str, str]]) -> list[
     apply_template = getattr(tokenizer, "apply_chat_template", None)
     if apply_template is not None:
         try:
-            tokens = apply_template(messages, add_generation_prompt=True)
+            kwargs = {"enable_thinking": True} if tokenizer_supports_thinking(tokenizer) else {}
+            tokens = apply_template(messages, add_generation_prompt=True, **kwargs)
             if tokens:
                 return list(tokens)
         except Exception as error:  # template missing/broken: degrade instead of dying
@@ -115,7 +177,7 @@ class MlxLmEngine:
     def stream_chat(
         self,
         request: dict[str, Any],
-    ) -> tuple[Iterator[Any], list[int], int, float, float]:
+    ) -> tuple[Iterator[Any], list[int], int, float, float, bool]:
         """Validate the request and return the raw generation iterator.
 
         返回 (responses, prompt_tokens, max_tokens, temperature)；调用方逐
@@ -140,7 +202,14 @@ class MlxLmEngine:
                 max_tokens=max_tokens,
                 sampler=make_sampler(temp=temperature, top_p=top_p),
             )
-        return responses, prompt, max_tokens, temperature, top_p
+        return (
+            responses,
+            prompt,
+            max_tokens,
+            temperature,
+            top_p,
+            tokenizer_supports_thinking(loaded.tokenizer),
+        )
 
 
 def next_response(responses: Iterator[Any]) -> Any | None:

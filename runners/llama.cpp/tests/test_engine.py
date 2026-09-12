@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from macai_llama_cpp_runner.engine import (  # noqa: E402
     LlamaCppEngine,
     LlamaServerError,
+    _chat_delta_events,
     _chat_payload,
 )
 
@@ -33,10 +34,21 @@ def test_chat_payload_maps_openai_fields() -> None:
         }
     )
     assert payload["stream"] is True
+    assert payload["reasoning_format"] == "auto"
     assert payload["messages"] == [{"role": "user", "content": "hi"}]
     assert payload["temperature"] == 0.2
     assert payload["top_p"] == 0.95
     assert payload["max_tokens"] == 128
+
+
+def test_chat_delta_separates_reasoning_and_content() -> None:
+    assert _chat_delta_events({"reasoning_content": "why", "content": "answer"}) == [
+        {"reasoning_text": "why"},
+        {"text": "answer"},
+    ]
+    assert _chat_delta_events({"reasoning": "legacy"}) == [
+        {"reasoning_text": "legacy"}
+    ]
 
 
 def test_resolve_model_file_requires_gguf(tmp_path: Path) -> None:

@@ -19,6 +19,7 @@ else:
 from macai_mlx_lm_runner.engine import (
     ChatRequestError,
     MlxLmEngine,
+    ThinkingStreamParser,
     next_response,
 )
 
@@ -119,8 +120,10 @@ def main() -> int:
             request = payload.get("request") or {}
             _send({"protocol": PROTOCOL_VERSION, "type": "accepted", "id": frame_id, "payload": {}})
             try:
-                responses, prompt, _max_tokens, _temperature, _top_p = engine.stream_chat(request)
+                responses, prompt, _max_tokens, _temperature, _top_p, thinking = engine.stream_chat(request)
                 emitted = ""
+                reasoning_emitted = ""
+                parser = ThinkingStreamParser(thinking)
                 generation_tokens: int | None = None
                 finish_reason: str | None = None
                 while True:
@@ -130,23 +133,41 @@ def main() -> int:
                     text = getattr(response, "text", None)
                     if not text:
                         continue
-                    delta = str(text)
-                    emitted += delta
+                    reasoning_delta, content_delta = parser.feed(str(text))
                     count = getattr(response, "generation_tokens", None)
                     if isinstance(count, int):
                         generation_tokens = count
                     reason = getattr(response, "finish_reason", None)
                     if isinstance(reason, str):
                         finish_reason = reason
-                    _send(
-                        {
-                            "protocol": PROTOCOL_VERSION,
-                            "type": "delta",
-                            "id": frame_id,
-                            "payload": {"text": delta},
-                        }
-                    )
-                if not emitted:
+                    if reasoning_delta:
+                        reasoning_emitted += reasoning_delta
+                        _send(
+                            {
+                                "protocol": PROTOCOL_VERSION,
+                                "type": "delta",
+                                "id": frame_id,
+                                "payload": {"reasoning_text": reasoning_delta},
+                            }
+                        )
+                    if content_delta:
+                        emitted += content_delta
+                        _send(
+                            {
+                                "protocol": PROTOCOL_VERSION,
+                                "type": "delta",
+                                "id": frame_id,
+                                "payload": {"text": content_delta},
+                            }
+                        )
+                reasoning_delta, content_delta = parser.finish()
+                reasoning_emitted += reasoning_delta
+                emitted += content_delta
+                if reasoning_delta:
+                    _send({"protocol": PROTOCOL_VERSION, "type": "delta", "id": frame_id, "payload": {"reasoning_text": reasoning_delta}})
+                if content_delta:
+                    _send({"protocol": PROTOCOL_VERSION, "type": "delta", "id": frame_id, "payload": {"text": content_delta}})
+                if not emitted and not reasoning_emitted:
                     raise RuntimeError("model produced no output tokens")
                 _send(
                     {
@@ -155,6 +176,7 @@ def main() -> int:
                         "id": frame_id,
                         "payload": {
                             "text": emitted,
+                            "reasoning_text": reasoning_emitted,
                             "finish_reason": finish_reason or "stop",
                             "usage": {
                                 "prompt_tokens": len(prompt),

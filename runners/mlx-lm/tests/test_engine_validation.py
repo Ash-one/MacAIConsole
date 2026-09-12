@@ -11,6 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from macai_mlx_lm_runner.engine import (  # noqa: E402
     ChatRequestError,
+    ThinkingStreamParser,
+    build_prompt_tokens,
     validate_chat_request,
 )
 
@@ -39,6 +41,19 @@ def test_valid_request_applies_defaults():
     assert max_tokens == 1024
     assert temperature == 0.7
     assert top_p == 1.0
+
+    messages, *_ = validate_chat_request(
+        {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "answer",
+                    "reasoning_content": "why",
+                }
+            ]
+        }
+    )
+    assert messages[0]["reasoning_content"] == "why"
 
 
 def test_temperature_zero_is_greedy_and_boundary_is_two():
@@ -85,11 +100,42 @@ def test_invalid_messages_raise():
 
 
 def test_template_failure_degrades_to_plain_join():
-    from macai_mlx_lm_runner.engine import build_prompt_tokens
-
     tokenizer = FakeTokenizer(template_fails=True)
     prompt = build_prompt_tokens(
         tokenizer, [{"role": "user", "content": "hello"}]
     )
     assert tokenizer.encoded == ["user: hello\n"]
     assert prompt == [9, 9]
+
+
+def test_thinking_template_is_enabled_explicitly():
+    class ThinkingTokenizer(FakeTokenizer):
+        chat_template = "{% if enable_thinking %}<think>{% endif %}"
+
+        def apply_chat_template(self, messages, add_generation_prompt=True, **kwargs):
+            assert kwargs == {"enable_thinking": True}
+            return [1, 2, 3]
+
+    assert build_prompt_tokens(ThinkingTokenizer(), [{"role": "user", "content": "hi"}]) == [1, 2, 3]
+
+
+def test_thinking_parser_handles_prefill_split_tag_and_truncation():
+    parser = ThinkingStreamParser(enabled=True)
+    assert parser.feed("reasoning</thi") == ("reasoning", "")
+    assert parser.feed("nk>\n\nanswer") == ("", "answer")
+    assert parser.feed(" continues") == ("", " continues")
+    assert parser.finish() == ("", "")
+
+    truncated = ThinkingStreamParser(enabled=True)
+    assert truncated.feed("unfinished</thi") == ("unfinished", "")
+    assert truncated.finish() == ("</thi", "")
+
+    split_whitespace = ThinkingStreamParser(enabled=True)
+    assert split_whitespace.feed("why</think>") == ("why", "")
+    assert split_whitespace.feed("\n\n") == ("", "")
+    assert split_whitespace.feed("answer") == ("", "answer")
+
+
+def test_non_thinking_parser_is_plain_content_passthrough():
+    parser = ThinkingStreamParser(enabled=False)
+    assert parser.feed("plain answer") == ("", "plain answer")
