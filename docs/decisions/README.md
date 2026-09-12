@@ -32,6 +32,8 @@
 
 ## 当前决策记录
 
+- [结构化推理输出契约](2026-09-12-structured-reasoning-output.md)——`implemented`
+  （Runner 解析模型推理格式，Chat Completions 通过可选 `reasoning_content` 与最终回答分流，任务详情分区展示；MLX parser 初始状态的模板边界在记录内声明。）
 - [设置应用并重启成功反馈](2026-09-11-settings-restart-success-feedback.md)——`implemented`
   （设置页发起重启后，在 daemon 重新在线时显示两秒成功提示。）
 - [管理页引擎与推荐模型条目的持久忽略和恢复](2026-09-11-persistently-ignore-recommended-models.md)——`implemented`

@@ -414,7 +414,7 @@ CLI 与 SwiftUI 应用（MacAIConsole）均为无状态客户端。在 MacAI 中
 
 - 默认监听 `127.0.0.1:11435`
 - OpenAI-compatible Chat、STT 和 TTS endpoints
-- Chat Completion 支持逐 token SSE streaming
+- Chat Completion 支持逐 token SSE streaming；推理模型通过可选 `reasoning_content` 与最终 `content` 分流
 - STT 音频上传支持 wav / mp3 / flac / ogg / m4a，由 daemon 在入口统一解码为 PCM WAV，下游 Provider 仅接收标准 PCM WAV 数据流（计划支持更多格式的输出）
 - SQLite 模型注册表，重启后注册记录持久化保留
 - 模型 load / unload、busy guard 和请求期 model lease：模型卸载操作绝不打断正在处理中的请求
@@ -541,6 +541,12 @@ curl http://127.0.0.1:11435/v1/chat/completions \
 
 流式请求把 `stream` 设为 `true`，响应以 `data: [DONE]` 结束。请求可显式传入
 `temperature` 与 `top_p`；省略时使用模型注册项保存的默认值。
+
+推理模型的非流式响应在 `choices[].message.reasoning_content` 返回思考内容，最终回答
+仍位于 `choices[].message.content`。流式响应分别使用
+`choices[].delta.reasoning_content` 与 `choices[].delta.content`；非推理模型省略
+reasoning 字段。assistant 历史消息可传 `reasoning_content`，输入也兼容
+`reasoning` 别名。
 
 ### OpenAI Python SDK
 

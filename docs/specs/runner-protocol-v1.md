@@ -164,6 +164,31 @@ Runner 首先发送 `accepted`，随后可发送任意数量 `progress`/`delta`/
 
 terminal frame 后同一 ID 的其他输出是 protocol violation。
 
+### chat.v1
+
+`chat.v1` request 使用 OpenAI-compatible `messages` 与生成参数。assistant 历史消息可带
+可选 `reasoning_content`；Runner 不理解该字段时可按 v1 的未知可选字段规则忽略。
+
+Runner 的 `delta.payload` 使用两个互不混合的可选文本通道：
+
+```json
+{"reasoning_text":"推理增量"}
+{"text":"最终回答增量"}
+```
+
+- `reasoning_text` 是模型推理；`text` 是最终回答；
+- 模型标签、generation prompt 和引擎原生 reasoning 字段由 Runner adapter 解析，daemon
+  不识别 `<think>` 或其他模型语法；
+- 一个 delta 可以携带任一或两个字段，空字段应省略；
+- 不支持推理的 Runner 继续只发送 `text`；
+- `result.payload` 可带聚合后的 `reasoning_text` 与 `text`，并继续携带
+  `finish_reason` 和 `usage`；
+- `usage.completion_tokens` 统计推理与最终回答的全部生成 token。
+
+daemon 将两个通道分别映射为 Chat Completions 的 `delta.reasoning_content` 与
+`delta.content`；非流式聚合结果分别进入 `message.reasoning_content` 与
+`message.content`。
+
 ### cancellation boundary
 
 Runner 可以用 `cancelled` 结束其自身中止的 inference；daemon→Runner `cancel` 命令不在
