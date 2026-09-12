@@ -140,6 +140,7 @@ struct LoadModelRequest {
 struct SetGenerationSettingsRequest {
     temperature: f64,
     top_p: f64,
+    max_tokens: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -396,6 +397,7 @@ async fn list_models(State(state): State<AppState>) -> Json<Value> {
             path: entry.spec.path,
             temperature: entry.spec.temperature,
             top_p: entry.spec.top_p,
+            max_tokens: entry.spec.max_tokens,
         })
         .collect();
     Json(json!({"object": "list", "data": models}))
@@ -1534,6 +1536,10 @@ async fn register_and_load_model(
             .as_ref()
             .and_then(|s| s.top_p)
             .or((model_type == "llm").then_some(0.95)),
+        max_tokens: existing_spec
+            .as_ref()
+            .and_then(|s| s.max_tokens)
+            .or((model_type == "llm").then_some(1024)),
         default_voice: existing_spec.as_ref().and_then(|s| s.default_voice.clone()),
     };
 
@@ -1722,14 +1728,21 @@ async fn set_model_generation_settings(
     if !request.top_p.is_finite() || !(0.0..=1.0).contains(&request.top_p) {
         return api_error(AIError::InvalidRequest, "top_p must be within [0, 1]");
     }
+    if !(1..=1_048_576).contains(&request.max_tokens) {
+        return api_error(
+            AIError::InvalidRequest,
+            "max_tokens must be within [1, 1048576]",
+        );
+    }
     state
         .runtime
-        .set_generation_settings(&id, request.temperature, request.top_p)
+        .set_generation_settings(&id, request.temperature, request.top_p, request.max_tokens)
         .await;
     Json(json!({
         "id": id,
         "temperature": request.temperature,
         "top_p": request.top_p,
+        "max_tokens": request.max_tokens,
     }))
     .into_response()
 }
@@ -1787,6 +1800,9 @@ async fn chat_completions(
         }
         if req.top_p.is_none() {
             req.top_p = spec.top_p.or(Some(0.95));
+        }
+        if req.max_tokens.is_none() {
+            req.max_tokens = spec.max_tokens.or(Some(1024));
         }
     }
     let task = state
@@ -2590,6 +2606,7 @@ runner = ">=1,<2"
             context_length: Some(4096),
             temperature: Some(1.0),
             top_p: Some(0.95),
+            max_tokens: Some(1024),
             default_voice: None,
         }
     }
@@ -2686,6 +2703,7 @@ runner = ">=1,<2"
         assert_eq!(model["owned_by"], "aiworkd/mock");
         assert_eq!(model["temperature"], 1.0);
         assert_eq!(model["top_p"], 0.95);
+        assert_eq!(model["max_tokens"], 1024);
     }
 
     #[tokio::test]
@@ -2732,6 +2750,7 @@ runner = ">=1,<2"
             context_length: None,
             temperature: None,
             top_p: None,
+            max_tokens: None,
             default_voice: None,
         }
     }
@@ -2798,6 +2817,7 @@ runner = ">=1,<2"
             Json(SetGenerationSettingsRequest {
                 temperature: 0.6,
                 top_p: 0.8,
+                max_tokens: 256,
             }),
         )
         .await;
@@ -2805,6 +2825,7 @@ runner = ">=1,<2"
         let spec = runtime.get_model("mock-task").await.unwrap();
         assert_eq!(spec.temperature, Some(0.6));
         assert_eq!(spec.top_p, Some(0.8));
+        assert_eq!(spec.max_tokens, Some(256));
 
         let invalid = set_model_generation_settings(
             State(state),
@@ -2812,6 +2833,7 @@ runner = ">=1,<2"
             Json(SetGenerationSettingsRequest {
                 temperature: 1.0,
                 top_p: 1.1,
+                max_tokens: 256,
             }),
         )
         .await;
@@ -2849,6 +2871,7 @@ runner = ">=1,<2"
         assert_eq!(list.completed[0].status, "succeeded");
         let detail = runtime.tasks().get(&list.completed[0].id).unwrap();
         assert_eq!(detail.result.output_text.as_deref(), Some("stream me"));
+        assert_eq!(detail.request.max_tokens, Some(1024));
         assert_eq!(detail.request.temperature, Some(1.0));
         assert_eq!(detail.request.top_p, Some(0.95));
         // 流式终帧的 usage 必须落进任务统计，并派生生成吞吐。
@@ -3052,6 +3075,7 @@ runner = ">=0.1,<0.2"
                 context_length: None,
                 temperature: None,
                 top_p: None,
+                max_tokens: None,
                 default_voice: None,
             })
             .await;
@@ -3275,6 +3299,7 @@ runner = ">=0.1,<0.2"
             context_length: Some(4096),
             temperature: Some(1.0),
             top_p: Some(0.95),
+            max_tokens: Some(1024),
             default_voice: None,
         };
         runtime.register(initial_spec).await;

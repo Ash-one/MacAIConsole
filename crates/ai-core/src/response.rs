@@ -24,6 +24,8 @@ pub struct ModelEntry {
     pub temperature: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
 }
 
 /// Chat 用量统计（文档 §46）。
@@ -267,6 +269,8 @@ pub struct LoadedModelInfo {
     pub temperature: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
     /// llm / stt / tts —— GUI 右键菜单按类型区分。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_type: Option<String>,

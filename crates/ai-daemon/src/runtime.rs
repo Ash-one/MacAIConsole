@@ -1004,13 +1004,20 @@ impl Runtime {
     }
 
     /// 更新 LLM 默认采样参数；下一次请求立即生效，无需重载模型。
-    pub async fn set_generation_settings(&self, id: &str, temperature: f64, top_p: f64) -> bool {
+    pub async fn set_generation_settings(
+        &self,
+        id: &str,
+        temperature: f64,
+        top_p: f64,
+        max_tokens: u64,
+    ) -> bool {
         let found = {
             let mut registry = self.registry.write().await;
             match registry.get_mut(id) {
                 Some(entry) => {
                     entry.spec.temperature = Some(temperature);
                     entry.spec.top_p = Some(top_p);
+                    entry.spec.max_tokens = Some(max_tokens);
                     true
                 }
                 None => false,
@@ -1018,7 +1025,7 @@ impl Runtime {
         };
         if found {
             if let Some(store) = &self.store {
-                store.set_generation_settings(id, temperature, top_p);
+                store.set_generation_settings(id, temperature, top_p, max_tokens);
             }
         }
         found
@@ -1251,6 +1258,7 @@ impl Runtime {
                 context_length: entry.spec.context_length,
                 temperature: entry.spec.temperature,
                 top_p: entry.spec.top_p,
+                max_tokens: entry.spec.max_tokens,
                 model_type: Some(entry.spec.model_type),
                 default_voice: entry.spec.default_voice,
                 effective_device,
@@ -1345,6 +1353,7 @@ mod tests {
             context_length: Some(4096),
             temperature: Some(1.0),
             top_p: Some(0.95),
+            max_tokens: Some(1024),
             default_voice: None,
         }
     }
@@ -1746,6 +1755,7 @@ runner = ">=0.1,<0.2"
             context_length: None,
             temperature: None,
             top_p: None,
+            max_tokens: None,
             default_voice: profile.defaults.voice.clone(),
         };
         let frozen = runtime

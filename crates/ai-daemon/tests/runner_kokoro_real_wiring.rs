@@ -164,6 +164,7 @@ async fn kokoro_runner_real_composition_load_infer_unload() {
         context_length: None,
         temperature: None,
         top_p: None,
+        max_tokens: None,
         default_voice: Some("zf_001".to_string()),
     };
 

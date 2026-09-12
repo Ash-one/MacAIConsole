@@ -32,6 +32,7 @@ struct ModelDetailSheet: View {
     @State private var contextFeedback: String?
     @State private var temperatureDraft = 1.0
     @State private var topPDraft = 0.95
+    @State private var maxTokensDraft: UInt64 = 1024
     @State private var isApplyingGeneration = false
     @State private var generationFeedback: String?
 
@@ -542,6 +543,11 @@ struct ModelDetailSheet: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 90)
                 }
+                LabeledContent("最大生成 Token") {
+                    TextField("最大生成 Token", value: $maxTokensDraft, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                }
 
                 HStack {
                     if let generationFeedback {
@@ -695,12 +701,14 @@ struct ModelDetailSheet: View {
         if case .registered(let entry) = target {
             temperatureDraft = entry.temperature ?? 1.0
             topPDraft = entry.topP ?? 0.95
+            maxTokensDraft = entry.maxTokens ?? 1024
         }
     }
 
     private var generationSettingsAreValid: Bool {
         temperatureDraft.isFinite && (0...2).contains(temperatureDraft)
             && topPDraft.isFinite && (0...1).contains(topPDraft)
+            && (1...1_048_576).contains(maxTokensDraft)
     }
 
     private func applyGenerationSettings() {
@@ -713,7 +721,8 @@ struct ModelDetailSheet: View {
                 try await controller.setGenerationSettings(
                     modelID,
                     temperature: temperatureDraft,
-                    topP: topPDraft
+                    topP: topPDraft,
+                    maxTokens: maxTokensDraft
                 )
                 generationFeedback = "生成参数已保存"
                 await onUpdate()

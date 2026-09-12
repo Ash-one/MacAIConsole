@@ -49,6 +49,9 @@ struct LoadedModel: Decodable, Identifiable, Hashable {
     var loadedAt: UInt64?
     var lastUsedAt: UInt64?
     var contextLength: Int?
+    var temperature: Double?
+    var topP: Double?
+    var maxTokens: UInt64?
     var modelType: String?
     var defaultVoice: String?
     /// 当前生效的加速设备（coreml / metal / gpu / cpu）；未探测到时为空。
@@ -64,6 +67,9 @@ struct LoadedModel: Decodable, Identifiable, Hashable {
         case loadedAt = "loaded_at"
         case lastUsedAt = "last_used_at"
         case contextLength = "context_length"
+        case temperature
+        case topP = "top_p"
+        case maxTokens = "max_tokens"
         case modelType = "model_type"
         case defaultVoice = "default_voice"
         case effectiveDevice = "effective_device"
@@ -90,6 +96,7 @@ struct ModelEntry: Decodable, Identifiable, Hashable {
     var path: String?
     var temperature: Double?
     var topP: Double?
+    var maxTokens: UInt64? = nil
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -101,6 +108,7 @@ struct ModelEntry: Decodable, Identifiable, Hashable {
         case path
         case temperature
         case topP = "top_p"
+        case maxTokens = "max_tokens"
     }
 
     /// 原始 ID：文件去掉最后扩展名，目录保留完整名称。与改名无关。
@@ -662,10 +670,10 @@ struct DaemonAPI {
     }
 
     /// POST /api/models/{id}/generation —— 更新 LLM 每模型默认采样参数。
-    func setGenerationSettings(_ id: String, temperature: Double, topP: Double) async throws {
+    func setGenerationSettings(_ id: String, temperature: Double, topP: Double, maxTokens: UInt64) async throws {
         _ = try await postJSON(
             "api/models/\(id)/generation",
-            body: ["temperature": temperature, "top_p": topP]
+            body: ["temperature": temperature, "top_p": topP, "max_tokens": maxTokens]
         )
     }
 

@@ -39,9 +39,9 @@ Related current decisions: [本地模型目录检测与 Runner 路由](2026-09-0
    - 提供「在访达中显示」（`NSWorkspace.activateFileViewerSelecting`）与安全写入剪贴板（`NSPasteboard` 清空先验）。
 
 5. **LLM 默认生成参数归 daemon 所有**：
-   - 仅在已注册 LLM 的详细设置中展示 `temperature` 与 `top_p`，初始默认值分别为 1.0 与 0.95；合法范围分别为 0...2 与 0...1；
+   - 仅在已注册 LLM 的详细设置中展示 `temperature`、`top_p` 与 `max_tokens`，初始默认值分别为 1.0、0.95 与 1024；合法范围分别为 0...2、0...1 与 1...1048576；
    - GUI 通过 `POST /api/models/{id}/generation` 保存，daemon 将设置写入模型注册表，无需重载即可供后续请求使用；
-   - Chat 请求显式传入参数时保持调用值，省略时由 daemon 注入模型默认值；llama.cpp 与 MLX-LM Runner 都接收两个参数。
+   - Chat 请求显式传入参数时保持调用值，省略时由 daemon 注入模型默认值；llama.cpp 与 MLX-LM Runner 都接收三个参数；运行状态页 LLM 子条目的右键使用示例包含该模型当前 `temperature`、`top_p` 与 `max_tokens`。
 
 ## Alternatives considered
 
@@ -52,7 +52,7 @@ Related current decisions: [本地模型目录检测与 Runner 路由](2026-09-0
 
 - 用户获得清晰透明的模型运行后端及识别依据可视度，避免排查「为什么使用了这个 Runner」时的黑盒感；
 - 提供一站式的上下文与 ID 管理，免去命令行或多处跳转；
-- 每模型生成默认值对 GUI、CLI 与 OpenAI-compatible SDK 一致生效，SQLite 旧库启动时自动补列并为既有 LLM 补齐默认语义；
+- 每模型生成默认值对 GUI、CLI 与 OpenAI-compatible SDK 一致生效，SQLite 旧库启动时自动补列并为既有 LLM 补齐默认语义；`max_tokens` 省略时沿用每模型配置；
 - 遵循客户端不拥有模型原则，所有状态、识别理由与环境信息均来自 daemon 提供的公开 API。
 
 ## Verification

@@ -248,10 +248,13 @@ struct ModelRow: View {
               -o speech.wav
             """
         default:
+            let temperature = model.temperature ?? 1.0
+            let topP = model.topP ?? 0.95
+            let maxTokens = model.maxTokens ?? 1024
             return """
             curl \(base)/v1/chat/completions \\
               -H "Content-Type: application/json" \\
-              -d '{"model": "\(model.id)", "messages": [{"role": "user", "content": "你好"}]}'
+              -d '{"model": "\(model.id)", "messages": [{"role": "user", "content": "你好"}], "temperature": \(temperature), "top_p": \(topP), "max_tokens": \(maxTokens)}'
             """
         }
     }
@@ -582,5 +585,3 @@ struct RunningModelSettingsView: View {
         .padding(20)
     }
 }
-
-

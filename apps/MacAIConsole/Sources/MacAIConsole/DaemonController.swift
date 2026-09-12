@@ -317,9 +317,9 @@ final class DaemonController {
         await refreshAfterSuccessfulMutation()
     }
 
-    func setGenerationSettings(_ id: String, temperature: Double, topP: Double) async throws {
-        try await api.setGenerationSettings(id, temperature: temperature, topP: topP)
-        logInfo("已更新 LLM 默认采样参数：\(id)")
+    func setGenerationSettings(_ id: String, temperature: Double, topP: Double, maxTokens: UInt64) async throws {
+        try await api.setGenerationSettings(id, temperature: temperature, topP: topP, maxTokens: maxTokens)
+        logInfo("已更新 LLM 默认生成参数：\(id)")
         await refreshAfterSuccessfulMutation()
     }
 

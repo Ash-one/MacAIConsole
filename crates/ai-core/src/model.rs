@@ -33,6 +33,9 @@ pub struct ModelSpec {
     /// LLM 请求未显式指定时使用的 nucleus sampling 阈值。
     #[serde(default)]
     pub top_p: Option<f64>,
+    /// LLM 请求未显式指定时使用的最大生成 token 数。
+    #[serde(default)]
+    pub max_tokens: Option<u64>,
     /// TTS 默认音色（如 zf_001）。None 时 provider 用自己的内置缺省。
     #[serde(default)]
     pub default_voice: Option<String>,
