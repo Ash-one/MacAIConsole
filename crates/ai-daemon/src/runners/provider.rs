@@ -661,9 +661,14 @@ impl ai_core::provider::ChatProvider for RunnerProvider {
 
         let stream = async_stream::stream! {
             // v1 单实例/单并发：infer 内部持有进程 I/O 锁，天然排队。
-            let (tx, mut rx) = futures::channel::mpsc::channel::<
+            // 缓冲用无界 channel：Runner Protocol v1 没有流控，Runner 无论
+            // daemon 是否消费都持续产出 delta，有界 channel 不能暂停模型，
+            // 只会在消费端滞后时静默丢字。每请求产出受 manifest inference
+            // deadline 与 max_tokens 约束，缓冲上界即单次生成文本量；send
+            // 仅在消费端（响应流被丢弃）消失时失败，此时丢弃是正确语义。
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<
                 Result<ai_core::response::ChatChunk, ProviderError>,
-            >(8);
+            >();
             let driver_tx = tx.clone();
             let infer_runner_id = runner_id.clone();
             let infer_model = model.clone();
@@ -679,13 +684,13 @@ impl ai_core::provider::ChatProvider for RunnerProvider {
                     |event| match event {
                         crate::runners::InferEvent::Delta(payload) => {
                             if let Some(reasoning) = payload.get("reasoning_text").and_then(Value::as_str) {
-                                let _ = tx.try_send(Ok(chunk_with(
+                                let _ = tx.send(Ok(chunk_with(
                                     &infer_completion, created, &infer_model,
                                     None, Some(reasoning), None, None,
                                 )));
                             }
                             if let Some(text) = payload.get("text").and_then(Value::as_str) {
-                                let _ = tx.try_send(Ok(chunk_with(
+                                let _ = tx.send(Ok(chunk_with(
                                     &infer_completion, created, &infer_model,
                                     Some(text), None, None, None,
                                 )));
@@ -693,7 +698,7 @@ impl ai_core::provider::ChatProvider for RunnerProvider {
                         }
                         crate::runners::InferEvent::Result(payload) => {
                             let usage = payload.get("usage").cloned().unwrap_or_else(|| json!({}));
-                            let _ = tx.try_send(Ok(chunk_with(
+                            let _ = tx.send(Ok(chunk_with(
                                 &infer_completion,
                                 created,
                                 &infer_model,
@@ -728,12 +733,11 @@ impl ai_core::provider::ChatProvider for RunnerProvider {
                 match events.await {
                     Ok(_) => {}
                     Err(error) => {
-                        let _ = tx.try_send(Err(RunnerProvider::map_error(error)));
+                        let _ = tx.send(Err(RunnerProvider::map_error(error)));
                     }
                 }
             });
             drop(tx);
-            use futures::StreamExt;
             // OpenAI 流式契约：首个 chunk 带 role，最后一个 chunk 带 finish_reason+usage。
             yield Ok(ai_core::response::ChatChunk {
                 id: completion_id.clone(),
@@ -751,7 +755,7 @@ impl ai_core::provider::ChatProvider for RunnerProvider {
                 }],
                 usage: None,
             });
-            while let Some(item) = rx.next().await {
+            while let Some(item) = rx.recv().await {
                 yield item;
             }
             if let Err(join_error) = driver.await {
