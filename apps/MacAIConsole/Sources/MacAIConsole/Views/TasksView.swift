@@ -209,6 +209,7 @@ private struct TaskDetailSheet: View {
                 }
                 basicInfo
                 inputSection
+                reasoningSection
                 outputSection
                 if let error = detail?.error ?? displaySummary.error {
                     VStack(alignment: .leading, spacing: 10) {
@@ -372,6 +373,15 @@ private struct TaskDetailSheet: View {
     private func genericInput(_ request: InferenceTaskRequest) -> some View {
         textBlock(request.inputText ?? request.fileName ?? "—")
         truncationNotice(isTruncated: detail?.requestTruncated == true)
+    }
+
+    @ViewBuilder
+    private var reasoningSection: some View {
+        if let reasoning = detail?.result?.reasoningText, !reasoning.isEmpty {
+            SectionCard(title: "思考过程", icon: "brain") {
+                textBlock(reasoning)
+            }
+        }
     }
 
     @ViewBuilder

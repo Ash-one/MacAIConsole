@@ -232,6 +232,12 @@ struct LocalInspection: Decodable, Hashable {
 struct InferenceTaskMessage: Decodable, Hashable {
     var role: String
     var content: String
+    var reasoningContent: String?
+
+    enum CodingKeys: String, CodingKey {
+        case role, content
+        case reasoningContent = "reasoning_content"
+    }
 }
 
 struct InferenceTaskSummary: Decodable, Identifiable, Hashable {
@@ -318,6 +324,7 @@ struct InferenceTaskRequest: Decodable {
 
 struct InferenceTaskResult: Decodable {
     var outputText: String?
+    var reasoningText: String?
     var language: String?
     var finishReason: String?
     var promptTokens: UInt64?
@@ -329,6 +336,7 @@ struct InferenceTaskResult: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case outputText = "output_text"
+        case reasoningText = "reasoning_text"
         case language
         case finishReason = "finish_reason"
         case promptTokens = "prompt_tokens"

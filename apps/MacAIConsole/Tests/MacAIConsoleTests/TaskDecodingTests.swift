@@ -117,6 +117,7 @@ final class TaskDecodingTests: XCTestCase {
               },
               "result": {
                 "output_text": "总结结果",
+                "reasoning_text": "先提取关键点",
                 "language": null,
                 "finish_reason": "stop",
                 "prompt_tokens": 12,
@@ -141,6 +142,7 @@ final class TaskDecodingTests: XCTestCase {
         XCTAssertEqual(detail.request?.topP, 0.95)
         XCTAssertEqual(detail.request?.maxTokens, 512)
         XCTAssertEqual(detail.result?.outputText, "总结结果")
+        XCTAssertEqual(detail.result?.reasoningText, "先提取关键点")
         XCTAssertEqual(detail.result?.totalTokens, 20)
         XCTAssertEqual(detail.result?.tokensPerSecond ?? 0, 3.305, accuracy: 0.0001)
         XCTAssertEqual(detail.summary.inputPreview, "请总结这段内容")
