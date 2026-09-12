@@ -32,6 +32,8 @@
 
 ## 当前决策记录
 
+- [LLM 多轮对话 Prompt Cache（KV 前缀复用）](2026-09-12-llm-multi-turn-prompt-cache.md)——`proposed`
+  （规划 mlx-lm 显式 prompt cache 增量 prefill、llama.cpp 显式 cache-reuse 与可选 `session_id` 契约；cache 感知调度仅记录、暂不实现。）
 - [结构化推理输出契约](2026-09-12-structured-reasoning-output.md)——`implemented`
   （Runner 解析模型推理格式，Chat Completions 通过可选 `reasoning_content` 与最终回答分流，任务详情分区展示；MLX parser 初始状态的模板边界在记录内声明。）
 - [Runner chat 流式 delta 无丢失缓冲](2026-09-12-runner-chat-stream-lossless-buffering.md)——`implemented`
