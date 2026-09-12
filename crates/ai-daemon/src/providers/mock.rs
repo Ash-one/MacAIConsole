@@ -104,6 +104,7 @@ impl ChatProvider for MockProvider {
                 message: ai_core::response::ChatResponseMessage {
                     role: "assistant".to_string(),
                     content: reply,
+                    reasoning_content: Some("mock reasoning".to_string()),
                 },
                 finish_reason: Some("stop".to_string()),
             }],
@@ -162,6 +163,7 @@ impl ChatProvider for MockProvider {
                                     None
                                 },
                                 content: Some(chars[i].clone()),
+                                reasoning_content: (i == 0).then(|| "mock reasoning".to_string()),
                             },
                             finish_reason: None,
                         }],
@@ -220,6 +222,7 @@ mod tests {
             messages: vec![ChatMessage {
                 role: "user".to_string(),
                 content: content.to_string(),
+                reasoning_content: None,
             }],
             ..ChatRequest::default()
         }

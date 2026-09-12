@@ -181,6 +181,25 @@ impl TaskRegistry {
         }
     }
 
+    fn append_reasoning(&self, id: &str, reasoning: &str) {
+        if reasoning.is_empty() {
+            return;
+        }
+        if let Some(detail) = self
+            .inner
+            .lock()
+            .expect("task registry lock poisoned")
+            .running
+            .get_mut(id)
+        {
+            let current = detail.result.reasoning_text.take().unwrap_or_default();
+            let available = TASK_TEXT_LIMIT.saturating_sub(current.len());
+            let (suffix, truncated) = take_prefix(reasoning, available);
+            detail.result.reasoning_text = Some(current + &suffix);
+            detail.result_truncated |= truncated;
+        }
+    }
+
     fn update_result<F>(&self, id: &str, update: F)
     where
         F: FnOnce(&mut TaskResultDetail),
@@ -269,6 +288,10 @@ impl TaskHandle {
 
     pub fn append_output(&self, output: &str) {
         self.registry.append_output(&self.id, output);
+    }
+
+    pub fn append_reasoning(&self, reasoning: &str) {
+        self.registry.append_reasoning(&self.id, reasoning);
     }
 
     pub fn set_finish_reason(&self, finish_reason: Option<String>) {
@@ -367,6 +390,12 @@ fn normalize_request(mut request: TaskRequestDetail) -> (TaskRequestDetail, bool
     let mut remaining = TASK_TEXT_LIMIT;
     let mut truncated = false;
     for message in &mut request.messages {
+        if let Some(reasoning) = message.reasoning_content.take() {
+            let (reasoning, did_truncate) = take_prefix(&reasoning, remaining);
+            remaining = remaining.saturating_sub(reasoning.len());
+            message.reasoning_content = Some(reasoning);
+            truncated |= did_truncate;
+        }
         let (content, did_truncate) = take_prefix(&message.content, remaining);
         message.content = content;
         remaining = remaining.saturating_sub(message.content.len());
@@ -381,11 +410,17 @@ fn normalize_request(mut request: TaskRequestDetail) -> (TaskRequestDetail, bool
 }
 
 fn normalize_result(mut result: TaskResultDetail) -> (TaskResultDetail, bool) {
-    let Some(output_text) = result.output_text.take() else {
-        return (result, false);
-    };
-    let (output_text, truncated) = take_prefix(&output_text, TASK_TEXT_LIMIT);
-    result.output_text = Some(output_text);
+    let mut truncated = false;
+    if let Some(reasoning_text) = result.reasoning_text.take() {
+        let (reasoning_text, did_truncate) = take_prefix(&reasoning_text, TASK_TEXT_LIMIT);
+        result.reasoning_text = Some(reasoning_text);
+        truncated |= did_truncate;
+    }
+    if let Some(output_text) = result.output_text.take() {
+        let (output_text, did_truncate) = take_prefix(&output_text, TASK_TEXT_LIMIT);
+        result.output_text = Some(output_text);
+        truncated |= did_truncate;
+    }
     (result, truncated)
 }
 
@@ -417,6 +452,7 @@ mod tests {
             messages: vec![ChatMessage {
                 role: "user".to_string(),
                 content: text.to_string(),
+                reasoning_content: None,
             }],
             ..TaskRequestDetail::default()
         }
@@ -514,13 +550,16 @@ mod tests {
         let registry = TaskRegistry::new();
         let long = "x".repeat(TASK_TEXT_LIMIT + 32);
         let handle = registry.start("task-1", "chat", "mock", request(&long));
-        handle.succeed(result(&long));
+        let mut result = result(&long);
+        result.reasoning_text = Some(long.clone());
+        handle.succeed(result);
 
         let detail = registry.get("task-1").unwrap();
         assert!(detail.request_truncated);
         assert!(detail.result_truncated);
         assert_eq!(detail.request.messages[0].content.len(), TASK_TEXT_LIMIT);
         assert_eq!(detail.result.output_text.unwrap().len(), TASK_TEXT_LIMIT);
+        assert_eq!(detail.result.reasoning_text.unwrap().len(), TASK_TEXT_LIMIT);
     }
 
     #[test]

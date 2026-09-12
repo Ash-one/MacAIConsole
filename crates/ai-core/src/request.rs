@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    /// OpenAI-compatible 推理扩展；输入兼容部分框架使用的 `reasoning` 名称。
+    #[serde(default, alias = "reasoning", skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 /// POST /v1/chat/completions 请求（文档 §14）。
@@ -70,5 +73,16 @@ mod tests {
         let transcription: TranscriptionRequest = serde_json::from_str("{}").unwrap();
         assert_eq!(transcription.model, "");
         assert!(transcription.file.is_none());
+    }
+
+    #[test]
+    fn chat_message_accepts_reasoning_alias_but_serializes_canonical_name() {
+        let message: ChatMessage =
+            serde_json::from_str(r#"{"role":"assistant","content":"answer","reasoning":"why"}"#)
+                .unwrap();
+        assert_eq!(message.reasoning_content.as_deref(), Some("why"));
+        let encoded = serde_json::to_value(message).unwrap();
+        assert_eq!(encoded["reasoning_content"], "why");
+        assert!(encoded.get("reasoning").is_none());
     }
 }

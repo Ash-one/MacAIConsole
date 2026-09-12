@@ -367,6 +367,7 @@ async fn chat_stream_maps_delta_events_and_result_usage() {
         messages: vec![ai_core::request::ChatMessage {
             role: "user".to_string(),
             content: "hello runner chat".to_string(),
+            reasoning_content: None,
         }],
         stream: true,
         temperature: Some(0.7),
@@ -390,6 +391,11 @@ async fn chat_stream_maps_delta_events_and_result_usage() {
         .filter_map(|chunk| chunk.choices[0].delta.content.clone())
         .collect();
     assert_eq!(text, "hello runner chat");
+    let reasoning: String = chunks[1..]
+        .iter()
+        .filter_map(|chunk| chunk.choices[0].delta.reasoning_content.clone())
+        .collect();
+    assert_eq!(reasoning, "because");
     let last = chunks.last().expect("final chunk");
     assert_eq!(last.choices[0].finish_reason.as_deref(), Some("stop"));
     let usage = last.usage.clone().expect("usage on final chunk");
@@ -405,6 +411,10 @@ async fn chat_stream_maps_delta_events_and_result_usage() {
     assert_eq!(
         response.choices[0].message.content,
         "hello runner chat".to_string()
+    );
+    assert_eq!(
+        response.choices[0].message.reasoning_content.as_deref(),
+        Some("because")
     );
     assert_eq!(response.usage.total_tokens, 6);
 

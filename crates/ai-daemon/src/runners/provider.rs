@@ -587,6 +587,7 @@ impl ai_core::provider::ChatProvider for RunnerProvider {
         let mut stream = self.chat_stream(request).await?;
         use futures::StreamExt;
         let mut text = String::new();
+        let mut reasoning = String::new();
         let mut usage = None;
         let mut finish_reason = None;
         let mut header = None;
@@ -598,6 +599,9 @@ impl ai_core::provider::ChatProvider for RunnerProvider {
             for choice in chunk.choices {
                 if let Some(content) = choice.delta.content {
                     text.push_str(&content);
+                }
+                if let Some(content) = choice.delta.reasoning_content {
+                    reasoning.push_str(&content);
                 }
                 if choice.finish_reason.is_some() {
                     finish_reason = choice.finish_reason;
@@ -620,6 +624,7 @@ impl ai_core::provider::ChatProvider for RunnerProvider {
                 message: ai_core::response::ChatResponseMessage {
                     role: "assistant".to_string(),
                     content: text,
+                    reasoning_content: (!reasoning.is_empty()).then_some(reasoning),
                 },
                 finish_reason,
             }],
@@ -673,14 +678,18 @@ impl ai_core::provider::ChatProvider for RunnerProvider {
                     deadline,
                     |event| match event {
                         crate::runners::InferEvent::Delta(payload) => {
-                            let _ = tx.try_send(Ok(chunk_with(
-                                &infer_completion,
-                                created,
-                                &infer_model,
-                                payload.get("text").and_then(Value::as_str).unwrap_or_default(),
-                                None,
-                                None,
-                            )));
+                            if let Some(reasoning) = payload.get("reasoning_text").and_then(Value::as_str) {
+                                let _ = tx.try_send(Ok(chunk_with(
+                                    &infer_completion, created, &infer_model,
+                                    None, Some(reasoning), None, None,
+                                )));
+                            }
+                            if let Some(text) = payload.get("text").and_then(Value::as_str) {
+                                let _ = tx.try_send(Ok(chunk_with(
+                                    &infer_completion, created, &infer_model,
+                                    Some(text), None, None, None,
+                                )));
+                            }
                         }
                         crate::runners::InferEvent::Result(payload) => {
                             let usage = payload.get("usage").cloned().unwrap_or_else(|| json!({}));
@@ -688,7 +697,8 @@ impl ai_core::provider::ChatProvider for RunnerProvider {
                                 &infer_completion,
                                 created,
                                 &infer_model,
-                                "",
+                                None,
+                                None,
                                 Some(
                                     payload
                                         .get("finish_reason")
@@ -735,6 +745,7 @@ impl ai_core::provider::ChatProvider for RunnerProvider {
                     delta: ai_core::response::ChatChunkDelta {
                         role: Some("assistant".to_string()),
                         content: Some(String::new()),
+                        reasoning_content: None,
                     },
                     finish_reason: None,
                 }],
@@ -762,7 +773,8 @@ fn chunk_with(
     id: &str,
     created: u64,
     model: &str,
-    content: &str,
+    content: Option<&str>,
+    reasoning_content: Option<&str>,
     finish_reason: Option<String>,
     usage: Option<ai_core::response::ChatUsage>,
 ) -> ai_core::response::ChatChunk {
@@ -775,7 +787,8 @@ fn chunk_with(
             index: 0,
             delta: ai_core::response::ChatChunkDelta {
                 role: None,
-                content: Some(content.to_string()),
+                content: content.map(str::to_string),
+                reasoning_content: reasoning_content.map(str::to_string),
             },
             finish_reason,
         }],

@@ -181,6 +181,7 @@ pub trait ChatProvider: Provider {
                     delta: crate::response::ChatChunkDelta {
                         role: Some(c.message.role),
                         content: Some(c.message.content),
+                        reasoning_content: c.message.reasoning_content,
                     },
                     finish_reason: c.finish_reason,
                 })

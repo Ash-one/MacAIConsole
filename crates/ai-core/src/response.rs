@@ -58,6 +58,8 @@ pub struct ChatChoice {
 pub struct ChatResponseMessage {
     pub role: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 /// SSE 流式 chunk（文档 §14、§34）。
@@ -85,6 +87,8 @@ pub struct ChatChunkChoice {
 pub struct ChatChunkDelta {
     pub role: Option<String>,
     pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 /// STT 响应。
@@ -147,6 +151,7 @@ pub struct TaskRequestDetail {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TaskResultDetail {
     pub output_text: Option<String>,
+    pub reasoning_text: Option<String>,
     pub language: Option<String>,
     pub finish_reason: Option<String>,
     pub prompt_tokens: Option<u64>,
@@ -312,14 +317,17 @@ mod tests {
             ChatMessage {
                 role: "user".into(),
                 content: "第一问".into(),
+                reasoning_content: None,
             },
             ChatMessage {
                 role: "assistant".into(),
                 content: "回答".into(),
+                reasoning_content: None,
             },
             ChatMessage {
                 role: "user".into(),
                 content: "第二问".into(),
+                reasoning_content: None,
             },
         ];
         assert_eq!(d.summary().input_preview, "第二问");
@@ -329,10 +337,12 @@ mod tests {
             ChatMessage {
                 role: "system".into(),
                 content: "系统提示".into(),
+                reasoning_content: None,
             },
             ChatMessage {
                 role: "assistant".into(),
                 content: "回复".into(),
+                reasoning_content: None,
             },
         ];
         assert_eq!(d.summary().input_preview, "回复");
@@ -396,5 +406,38 @@ mod tests {
         assert_eq!(summary.completed_at_ms, Some(2_500));
         assert_eq!(summary.duration_ms, Some(1_500));
         assert_eq!(summary.error.as_deref(), Some("worker crashed"));
+    }
+
+    /// 非推理路径的 wire 上不得出现 reasoning 键（含空值）：这是
+    /// “非推理 Runner 保持纯 content” 的公共契约，防止字段演化时
+    /// 给只读 `content` 的客户端注入空 reasoning 字段。
+    #[test]
+    fn reasoning_content_is_omitted_from_wire_when_absent() {
+        let delta = ChatChunkDelta {
+            role: Some("assistant".into()),
+            content: Some("hi".into()),
+            reasoning_content: None,
+        };
+        let encoded = serde_json::to_value(delta).unwrap();
+        assert!(encoded.get("reasoning_content").is_none());
+        assert_eq!(encoded["content"], "hi");
+
+        let message = ChatResponseMessage {
+            role: "assistant".into(),
+            content: "hi".into(),
+            reasoning_content: None,
+        };
+        let encoded = serde_json::to_value(message).unwrap();
+        assert!(encoded.get("reasoning_content").is_none());
+
+        // 携带 reasoning 时键名固定为 canonical 名，不出现别名。
+        let message = ChatResponseMessage {
+            role: "assistant".into(),
+            content: "answer".into(),
+            reasoning_content: Some("why".into()),
+        };
+        let encoded = serde_json::to_value(message).unwrap();
+        assert_eq!(encoded["reasoning_content"], "why");
+        assert!(encoded.get("reasoning").is_none());
     }
 }

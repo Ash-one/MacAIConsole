@@ -65,6 +65,16 @@ async fn main() {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string();
+                write_frame(
+                    &mut output,
+                    &Envelope::new(
+                        "delta",
+                        command.id.clone(),
+                        json!({ "reasoning_text": "because" }),
+                    ),
+                )
+                .await
+                .expect("write reasoning delta");
                 for segment in split_chunks(&content) {
                     write_frame(
                         &mut output,
@@ -90,6 +100,7 @@ async fn main() {
                         command.id.clone(),
                         json!({
                             "text": content,
+                            "reasoning_text": "because",
                             "finish_reason": "stop",
                             "usage": {
                                 "prompt_tokens": prompt_tokens,

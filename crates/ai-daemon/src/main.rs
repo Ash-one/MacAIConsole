@@ -1835,6 +1835,9 @@ async fn chat_completions(
                         match result {
                             Ok(chunk) => {
                                 for choice in &chunk.choices {
+                                    if let Some(content) = choice.delta.reasoning_content.as_deref() {
+                                        task.append_reasoning(content);
+                                    }
                                     if let Some(content) = choice.delta.content.as_deref() {
                                         task.append_output(content);
                                     }
@@ -1877,6 +1880,8 @@ async fn chat_completions(
                 let choice = response.choices.first();
                 task.succeed(ai_core::response::TaskResultDetail {
                     output_text: choice.map(|choice| choice.message.content.clone()),
+                    reasoning_text: choice
+                        .and_then(|choice| choice.message.reasoning_content.clone()),
                     finish_reason: choice.and_then(|choice| choice.finish_reason.clone()),
                     prompt_tokens: Some(response.usage.prompt_tokens),
                     completion_tokens: Some(response.usage.completion_tokens),
@@ -2783,6 +2788,7 @@ runner = ">=1,<2"
             messages: vec![ai_core::request::ChatMessage {
                 role: "user".to_string(),
                 content: "hello task".to_string(),
+                reasoning_content: None,
             }],
             stream: false,
             temperature: Some(0.2),
@@ -2799,6 +2805,10 @@ runner = ">=1,<2"
         assert_eq!(list.completed[0].status, "succeeded");
         let detail = runtime.tasks().get(&list.completed[0].id).unwrap();
         assert_eq!(detail.result.output_text.as_deref(), Some("hello task"));
+        assert_eq!(
+            detail.result.reasoning_text.as_deref(),
+            Some("mock reasoning")
+        );
         assert_eq!(detail.result.total_tokens, Some(20));
         assert_eq!(detail.request.temperature, Some(0.2));
         assert_eq!(detail.request.top_p, Some(0.8));
@@ -2851,6 +2861,7 @@ runner = ">=1,<2"
                 messages: vec![ai_core::request::ChatMessage {
                     role: "user".to_string(),
                     content: "stream me".to_string(),
+                    reasoning_content: None,
                 }],
                 stream: true,
                 temperature: None,
@@ -2866,11 +2877,16 @@ runner = ">=1,<2"
             .await
             .unwrap();
         assert!(String::from_utf8_lossy(&body).contains("[DONE]"));
+        assert!(String::from_utf8_lossy(&body).contains("reasoning_content"));
         assert_eq!(runtime.tasks().running_count(), 0);
         let list = runtime.tasks().list(100);
         assert_eq!(list.completed[0].status, "succeeded");
         let detail = runtime.tasks().get(&list.completed[0].id).unwrap();
         assert_eq!(detail.result.output_text.as_deref(), Some("stream me"));
+        assert_eq!(
+            detail.result.reasoning_text.as_deref(),
+            Some("mock reasoning")
+        );
         assert_eq!(detail.request.max_tokens, Some(1024));
         assert_eq!(detail.request.temperature, Some(1.0));
         assert_eq!(detail.request.top_p, Some(0.95));
@@ -2893,6 +2909,7 @@ runner = ">=1,<2"
                 messages: vec![ai_core::request::ChatMessage {
                     role: "user".to_string(),
                     content: "cancel me".to_string(),
+                    reasoning_content: None,
                 }],
                 stream: true,
                 temperature: None,
@@ -2921,6 +2938,7 @@ runner = ">=1,<2"
                 messages: vec![ai_core::request::ChatMessage {
                     role: "user".to_string(),
                     content: "will fail".to_string(),
+                    reasoning_content: None,
                 }],
                 stream: false,
                 temperature: None,
