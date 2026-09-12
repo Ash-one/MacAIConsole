@@ -142,6 +142,9 @@ struct SettingsView: View {
 
             Section("关于") {
                 LabeledContent("API 地址", value: "http://127.0.0.1:11435")
+                if AppUpdater.canInstall {
+                    UpdateSection()
+                }
             }
         }
         .formStyle(.grouped)

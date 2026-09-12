@@ -39,6 +39,13 @@ APP="${BUILD_DIR}/MacAIConsole.app"
 DMG="${BUILD_DIR}/MacAIConsole.dmg"
 CODESIGN_ID="${CODESIGN_IDENTITY:--}"
 
+# 应用版本单一来源：workspace Cargo.toml；发布 tag 约定与此版本一致（v<version>）。
+APP_VERSION="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' "${REPO_ROOT}/Cargo.toml" | head -n 1)"
+if [ -z "${APP_VERSION}" ]; then
+    echo "!! 无法从 ${REPO_ROOT}/Cargo.toml 读取 workspace 版本号" >&2
+    exit 1
+fi
+
 stop_process() {
     local name="$1"
     if pgrep -x "${name}" >/dev/null 2>&1; then
@@ -161,7 +168,7 @@ cat > "${APP}/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>__APP_VERSION__</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
@@ -175,6 +182,7 @@ cat > "${APP}/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+sed -i '' "s/__APP_VERSION__/${APP_VERSION}/" "${APP}/Contents/Info.plist"
 
 echo "==> 代码签名 (${CODESIGN_ID})"
 codesign --force --deep --sign "${CODESIGN_ID}" "${APP}" >/dev/null

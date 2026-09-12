@@ -60,6 +60,7 @@ enum AppSettings {
     static let customDownloadEndpointKey = "customDownloadEndpoint"
     static let ignoredRecommendationIDsKey = "ignoredRecommendationIDs"
     static let ignoredRunnerIDsKey = "ignoredRunnerIDs"
+    static let autoUpdateCheckKey = "autoCheckUpdates"
     static let downloadEndpointEnvironmentKey = "AIWORKD_HF_ENDPOINT"
     static let officialDownloadEndpoint = "https://huggingface.co"
     static let hfMirrorDownloadEndpoint = "https://hf-mirror.com"
@@ -102,6 +103,10 @@ enum AppSettings {
         normalizedDownloadEndpoint(
             UserDefaults.standard.string(forKey: customDownloadEndpointKey) ?? ""
         )
+    }
+
+    static var autoUpdateCheck: Bool {
+        UserDefaults.standard.object(forKey: autoUpdateCheckKey) as? Bool ?? true
     }
 
     static var ignoredRecommendationIDs: Set<String> {
