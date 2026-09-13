@@ -454,6 +454,8 @@ LLM 注册项还持久化默认 `temperature`（1.0）与 `top_p`（0.95）；�
 本地目录通过 `POST /api/models/inspect` 由 daemon 信任的 Runner manifest 静态探测；只有
 唯一匹配时才会颁发短期 routing token。CLI 可使用 `macai inspect <directory>` 查看检测结果，并通过
 `macai load <directory> --routing-token <token>` 完成注册。GUI 采用相同诊断，不自行推断 Runner。
+未被任何探测器识别的模型目录在注册时会被直接拒绝，提示检查模型是否下载完整或新建/安装
+对应 Runner，默认 Provider 选择链路只服务 `.gguf` / `.bin` 单文件模型。
 
 当前 Runner Protocol v1 针对单实例、单活动推理设计。信任特定 Runner 意味着允许其以
 `aiworkd` 用户权限运行本地代码；digest 校验、环境变量白名单和输出路径检查不构成操作系统沙箱。

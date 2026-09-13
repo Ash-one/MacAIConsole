@@ -1435,6 +1435,17 @@ async fn register_and_load_model(
             .clone()
             .unwrap_or_else(|| format!("preserved existing provider for registered model '{id}'"));
         (existing.provider.clone(), reason, audit)
+    } else if path.is_dir() {
+        // 目录型 artifact 的 Runner 只能来自探测器匹配、显式 provider 或既有注册；
+        // 默认 provider 链路（llm→llama.cpp / stt→whisper.cpp）只服务单文件模型，
+        // 未识别目录落入其中只会产生误导性的文件形态错误（如 "expected a .gguf"）。
+        return api_error(
+            AIError::InvalidRequest,
+            format!(
+                "no installed Runner recognized model directory '{}'; check that the model is fully downloaded, or install/create a Runner that supports it",
+                path.display()
+            ),
+        );
     } else {
         match select_provider(model_type, None, |provider, capability| {
             state.runtime.provider_has_capability(provider, capability)
@@ -2709,6 +2720,40 @@ runner = ">=1,<2"
         assert_eq!(model["temperature"], 1.0);
         assert_eq!(model["top_p"], 0.95);
         assert_eq!(model["max_tokens"], 1024);
+    }
+
+    #[tokio::test]
+    async fn register_rejects_unrecognized_directory_instead_of_llm_default() {
+        let dir =
+            std::env::temp_dir().join(format!("macai-unrecognized-model-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let response = register_and_load_model(
+            State(app_state(Arc::new(Runtime::new()))),
+            Json(LoadModelRequest {
+                path: dir.to_string_lossy().into_owned(),
+                id: None,
+                name: None,
+                model_type: None,
+                provider: None,
+                routing_token: None,
+                context_length: None,
+                keep_alive: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("no installed Runner recognized"));
+        assert!(text.contains("fully downloaded"));
+        // 回归：未识别目录不得落入 model_type 默认链路误导性选中 llama.cpp。
+        assert!(!text.contains("llama.cpp"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

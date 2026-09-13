@@ -25,6 +25,12 @@ Runner；它再次 canonicalize、检测目录 fingerprint，并验证 detector 
 digest。token 与显式 `provider` / `model_type` 互斥。无匹配返回 `unsupported`，多匹配返回
 `ambiguous`，二者都不会自动注册或启动 worker。
 
+注册端点同样执行该契约：无 token、无显式 `provider` 且无既有注册时，目录型 artifact 直接
+以 400 拒绝，提示检查模型是否下载完整或新建/安装对应 Runner；默认 provider 链路
+（llm→llama.cpp / stt→whisper.cpp）只服务单文件模型，未识别目录不得落入其中
+（否则会被 `model_type` 默认值误导性选中 llama.cpp 并报 "expected a .gguf"）。
+MacAIConsole 详情页的注册入口与列表行共享同一目录可路由守卫。
+
 自动注册将 selected Runner、adapter、capability、detector ID、manifest digest 与 reason
 冻结在 `source.type = "local"` 的 Model Profile snapshot。`ModelSpec` 继续保存
 `requested_provider = "auto"`、selected provider 与选择理由；重启从 snapshot 恢复，不受
@@ -48,11 +54,14 @@ transducer。`.gguf` / `.bin` 保留现有单文件路径。
 
 静态签名只说明受支持的声明布局；实际 load、chat template、内存和质量仍由 Runner load
 验证。唯一匹配会保守地拒绝部分通用 Hugging Face 目录。fingerprint 是有界目录元数据，
-不替代本地文件系统完整性保护。
+不替代本地文件系统完整性保护。未识别目录在注册时快速失败并给出可操作指引
+（检查完整性或新建 Runner），而不是 provider 形态错误。
 
 ## Verification
 
 `cargo check -p ai-daemon --bin aiworkd`、`cargo check -p ai-cli` 和
 `cargo test -p ai-daemon --lib` 覆盖 manifest/schema、检测器 glob、Runtime snapshot 和
-daemon 编译。Swift API/视图测试使用 `swift test --enable-xctest`；若运行环境拒绝 SwiftPM
-manifest sandbox，该限制必须在交付记录中明确。
+daemon 编译；`cargo test -p ai-daemon --bin aiworkd` 中的
+`register_rejects_unrecognized_directory_instead_of_llm_default` 固化注册端点对未识别
+目录的快速失败契约。Swift API/视图测试使用 `swift test --enable-xctest`；若运行环境拒绝
+SwiftPM manifest sandbox，该限制必须在交付记录中明确。
