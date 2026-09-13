@@ -386,12 +386,16 @@ async fn probe_runs_under_the_synced_venv_interpreter() {
     require_uv();
     let root = temp_root("probevenv");
     let package = root.join("package");
-    // probe 把 sys.path 写进 probe-runtime 目录（staging 内，原子提升 rename
-    // 后随目录保留）。只有运行在依赖已 sync 的 venv 解释器上，sys.path 才含
-    // `<env-id>/installing/.venv/`；基础解释器（uv `--python` 输入）不含该段。
+    // probe 把 sys.path 写到测试给定的绝对路径。只有运行在依赖已 sync 的
+    // venv 解释器上，sys.path 才含 `<env-id>/installing/.venv/`；基础解释器
+    // （uv `--python` 输入）不含该段。
+    let recorded_path = root.join("probe-syspath.txt");
     write_fixture(
         &package,
-        "[\"{environment.python}\", \"-c\", \"print(repr(__import__('sys').path), file=open('probe-syspath','w'))\"]",
+        &format!(
+            "[\"{{environment.python}}\", \"-c\", \"print(repr(__import__('sys').path), file=open('{recorded_path_display}','w'))\"]",
+            recorded_path_display = recorded_path.display(),
+        ),
     );
     let manager = manager(&root);
 
@@ -409,12 +413,36 @@ async fn probe_runs_under_the_synced_venv_interpreter() {
         env_path.join(".venv/bin/python"),
         "runtime_python must be the synced venv interpreter"
     );
-    let recorded = std::fs::read_to_string(env_path.join("probe-runtime/probe-syspath"))
-        .expect("probe must write its sys.path into the runtime dir");
+    let recorded =
+        std::fs::read_to_string(&recorded_path).expect("probe must write its sys.path record");
     assert!(
         recorded.contains("installing/.venv/"),
         "probe must run under the synced venv interpreter, not the base interpreter: {recorded}"
     );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn probe_resolves_relative_args_against_the_package_root() {
+    require_uv();
+    let root = temp_root("probepackage");
+    let package = root.join("package");
+    // Script Runner 的 probe 形态：相对文件参数（script_host.py 等）。probe 的
+    // 工作目录必须是 package root，否则相对参数解析到空的 probe-runtime 目录，
+    // 每个单文件 Runner 的引擎安装都会失败（2026-09-13 回归）。
+    write_fixture(&package, "[\"{environment.python}\", \"probe_check.py\"]");
+    std::fs::write(
+        package.join("probe_check.py"),
+        "open('pyproject.toml', encoding='utf-8').close()\n",
+    )
+    .unwrap();
+    let manager = manager(&root);
+
+    let status = manager
+        .ensure_environment(&manifest_of(&package), &package, Duration::from_secs(120))
+        .await
+        .expect("probe with package-relative args must resolve against the package cwd");
+    assert_eq!(status.phase, EnvironmentPhase::Ready);
     let _ = std::fs::remove_dir_all(root);
 }
 

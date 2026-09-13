@@ -155,6 +155,12 @@ probe = ["{environment.python}", "-c", "import mlx_audio, misaki, phonemizer, es
 entrypoint 直接执行。probe 在 staging venv 上以 `timeouts.boot_seconds` 为 deadline 运行，
 成功后才原子提升为最终 fingerprint 目录；entrypoint 在提升后的同一 venv 解释器上启动。
 
+probe 进程的工作目录是 package root，与 entrypoint 的 `working_directory = "package"`
+一致；argv 中的相对路径按 package root 解析（Script Runner 生成的
+`["{environment.python}", "script_host.py", ...]` 依赖此语义）。需要临时目录的 probe
+必须用 `{runtime.temp_root}` 模板显式声明，daemon 展开为 staging 内的 `probe-runtime/`
+并在提升后随目录保留。
+
 probe 只验证受管解释器、Runner package import 和运行依赖，不加载模型 artifact，也不
 创建常驻 worker。退出码 0 表示成功，非零、超时或 signal exit 均使环境进入 `failed`。
 daemon 使用清空后的环境变量和 manifest allowlist 启动 probe。`network_during_runtime`

@@ -731,7 +731,10 @@ impl EnvironmentManager {
         let deadline = Duration::from_secs(manifest.timeouts.boot_seconds);
         let spawned = tokio::process::Command::new(program)
             .args(arguments)
-            .current_dir(runtime_temp)
+            // probe 的工作目录与 entrypoint `working_directory = "package"` 一致：
+            // 相对 argv（如 Script Runner 的 script_host.py）按 package root 解析。
+            // 需要临时目录的 probe 用 `{runtime.temp_root}` 显式声明。
+            .current_dir(package_root)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
