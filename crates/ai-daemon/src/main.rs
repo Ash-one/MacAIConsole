@@ -1759,6 +1759,42 @@ async fn set_model_generation_settings(
 }
 
 /// 列出 TTS 模型可用的音色：Qwen3-TTS 使用 provider 内置 speaker，其他
+/// 非 Qwen3-TTS 模型的音色枚举。Runner 音色只有文件系统这一种事实来源：
+/// `voices/*.safetensors` 以文件名为音色（Kokoro MLX 约定）；参考音频型
+/// Runner（如 Hojo-TTS-Light 克隆模型）的音色是模型目录内的相对 WAV 路径，
+/// 按 `voices/*.wav` 原样列出。已注册的 default_voice 始终保留在清单中，
+/// 保证路径型音色在 GUI 可见可选。
+fn collect_model_voices(model_path: Option<&str>, default_voice: Option<&str>) -> Vec<String> {
+    let mut voices: Vec<String> = Vec::new();
+    if let Some(path) = model_path {
+        let dir = FilePath::new(path).join("voices");
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if !entry
+                    .file_type()
+                    .map(|kind| kind.is_file())
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if let Some(stem) = name.strip_suffix(".safetensors") {
+                    voices.push(stem.to_string());
+                } else if name.to_ascii_lowercase().ends_with(".wav") {
+                    voices.push(format!("voices/{name}"));
+                }
+            }
+        }
+    }
+    if let Some(default_voice) = default_voice {
+        if !voices.iter().any(|voice| voice == default_voice) {
+            voices.push(default_voice.to_string());
+        }
+    }
+    voices.sort();
+    voices
+}
+
 /// 目录模型扫描 voices/*.safetensors。
 async fn list_model_voices(
     State(state): State<AppState>,
@@ -1783,20 +1819,10 @@ async fn list_model_voices(
                 .or_else(|| Some(QWEN3_TTS_VOICES.first().unwrap().to_string())),
         )
     } else {
-        let mut voices: Vec<String> = Vec::new();
-        if let Some(path) = &spec.path {
-            let dir = FilePath::new(path).join("voices");
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    if let Some(stem) = name.strip_suffix(".safetensors") {
-                        voices.push(stem.to_string());
-                    }
-                }
-            }
-        }
-        voices.sort();
-        (voices, spec.default_voice.clone())
+        (
+            collect_model_voices(spec.path.as_deref(), spec.default_voice.as_deref()),
+            spec.default_voice.clone(),
+        )
     };
     Json(json!({"id": id, "voices": voices, "default_voice": default_voice})).into_response()
 }
@@ -2489,6 +2515,32 @@ async fn bootstrap_runners_from_root(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collect_model_voices_lists_safetensors_stems_wav_paths_and_keeps_default() {
+        let root = std::env::temp_dir().join(format!("macai-voices-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let voices_dir = root.join("voices");
+        std::fs::create_dir_all(&voices_dir).unwrap();
+        std::fs::write(voices_dir.join("zf_048.safetensors"), b"x").unwrap();
+        std::fs::write(voices_dir.join("reference.wav"), b"x").unwrap();
+        std::fs::write(voices_dir.join("notes.txt"), b"x").unwrap();
+        std::fs::create_dir_all(voices_dir.join("subdir.wav")).unwrap();
+
+        let voices =
+            collect_model_voices(Some(root.to_str().unwrap()), Some("voices/reference.wav"));
+        assert_eq!(voices, vec!["voices/reference.wav", "zf_048"]);
+
+        let with_custom_default =
+            collect_model_voices(Some(root.to_str().unwrap()), Some("voices/custom.wav"));
+        assert_eq!(
+            with_custom_default,
+            vec!["voices/custom.wav", "voices/reference.wav", "zf_048"]
+        );
+
+        assert!(collect_model_voices(None, None).is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     fn future_profile() -> ai_daemon::runners::ModelProfile {
         ai_daemon::runners::ModelProfile::parse(
