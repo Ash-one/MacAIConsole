@@ -27,7 +27,10 @@ daemon 与 wire 契约零改动：`GET /api/models/{id}/voices` 与 `POST /api/m
 
 `WheelSteppablePopUpButton` 继承 NSPopUpButton 并覆写 `scrollWheel(with:)`：事件被本控件消费（不带动外层页面滚动），按 `WheelStepAccumulator` 折算步进后 `selectItem(at:)` 并 `sendAction`——与菜单点击走同一 target/action 通路，由 Coordinator 驱动 binding 与 settle。点击仍弹出原生菜单直接跳转，键盘与 VoiceOver 行为继承自 NSPopUpButton。
 
-步进规则沉淀为纯逻辑 `WheelStepAccumulator`：方向采用内容坐标语义（deltaY < 0 = 下一项）；系统已按用户的自然滚动偏好折算 delta，不叠加 `isDirectionInvertedFromDevice` 翻转；触控板精确滚动（`hasPreciseScrollingDeltas`）按阈值 10 累积、残余带入后续事件，鼠标滚轮离散 notch 每 tick 一步；`momentumPhase` 非空的惯性事件整体丢弃（含残余污染），防止松手后持续步进。部署目标 macOS 14，不使用 macOS 15+ 的 ScrollView phase API。
+步进规则沉淀为纯逻辑 `WheelStepAccumulator`，按事件是否携带触控手势 phase 分两路：方向均采用内容坐标语义（deltaY < 0 = 下一项），系统已按用户的自然滚动偏好折算 delta，不叠加 `isDirectionInvertedFromDevice` 翻转；`momentumPhase` 非空的惯性事件整体丢弃（含残余污染），防止松手后持续步进。部署目标 macOS 14，不使用 macOS 15+ 的 ScrollView phase API。
+
+- 触控手势（`phase` 非空：触控板与妙控鼠标表面）：精确滚动按阈值 10 累积、残余带入后续事件——一次连续手势可多步，避免连跳。
+- 滚轮类设备（`phase` 为空）：一次物理滚动固定一行。高分辨率滚轮（含系统像素平滑后的普通滚轮）会把一个 notch 拆成多个精确 delta 事件，按事件步进实测一次滚动跳多行（2026-09-13 交付后人工走查修正）；因此以 100ms 突发窗口合并——notch 内事件间隔通常 < 30ms、两次独立滚动间隔通常 > 100ms，窗口内只吃首事件的步进，窗口静默后重新武装。离散 delta 的滚轮在刻意滚动节奏下行为不变。
 
 ### 2. 选择与副作用解耦：settle 语义
 
@@ -79,9 +82,9 @@ NSPopUpButton 无滚轮行为可依赖；SwiftUI 原生滚轮手势与 `onScroll
 
 ## Verification
 
-- `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --enable-xctest` 全套 68 例通过，其中 `VoiceWheelAccumulatorTests` 5 例固化累积器契约：离散 notch 每 tick 一步且向下滚为下一项、精确 delta 阈值累积与残余带入、惯性事件丢弃且不污染残余、零 delta 无副作用。
+- `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --enable-xctest` 全套 71 例通过，其中 `VoiceWheelAccumulatorTests` 8 例固化累积器契约：触控板精确 delta 阈值累积与残余带入、向下滚为下一项、惯性事件丢弃且不污染残余、触控板零 delta 无副作用；滚轮类刻意滚动每次一行、高分辨率滚轮单 notch 突发只步进一行（一次滚动跳多行的回归测试）、突发窗口静默后重新武装、零 delta 不消耗突发状态。
 - 负向核查：GUI Sources 中 `afplay` 零残留；`zf_001` 仅剩 `fallbackVoice` 常量；`isPreviewing`/`performTTSPreview`/`previewVoice` 全部移除。
-- 滚轮步进手感、外层滚动恢复、试听打断、触控板惯性不连跳等交互项属于交付后的人工界面验证边界，需真实 daemon 与驻留 TTS 模型逐项走查。
+- 滚轮步进手感、外层滚动恢复、试听打断、触控板惯性不连跳等交互项属于交付后的人工界面验证边界，需真实 daemon 与驻留 TTS 模型逐项走查；高分辨率滚轮一次滚动跳多行即该走查发现并已修正。
 
 ## 边界声明
 

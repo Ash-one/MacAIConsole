@@ -4,18 +4,37 @@ import SwiftUI
 /// 滚轮 delta → 步进数的纯累积器。
 /// 方向为内容坐标语义：deltaY < 0（向下滚）= 列表下一项。系统已按用户的自然
 /// 滚动偏好折算 delta，无需再叠加 isDirectionInvertedFromDevice 翻转。
-/// 触控板精确滚动按阈值累积，避免一次手势连跳多步；鼠标滚轮离散 notch 每 tick 一步；
-/// 惯性（momentum）事件整体丢弃，防止松手后持续步进。
+/// - 触控手势（事件携带 phase：触控板与妙控鼠标表面）行为不变：精确滚动按
+///   阈值累积，避免一次手势连跳多步；惯性（momentum）事件整体丢弃；
+/// - 滚轮类设备（phase 为空）一次物理滚动是一串事件：高分辨率滚轮会把一个
+///   notch 拆成多个精确 delta 事件，按事件步进会一次跳多行。突发窗口内固定
+///   只步进一行，窗口内无后续事件（下一次独立滚动）才重新武装。
 struct WheelStepAccumulator {
+    /// 同一物理滚动的突发判定窗口：notch 内事件间隔通常 < 30ms，两次独立
+    /// 滚动的间隔（含刻意连续滚动）通常 > 100ms。
+    static let wheelBurstQuietInterval: TimeInterval = 0.1
+
     private var residual: CGFloat = 0
+    private var wheelBurstArmed = true
+    private var lastWheelEventTimestamp: TimeInterval = 0
 
     /// 返回该事件应产生的步进数：正值 = 下一项，负值 = 上一项。
+    /// `gestureTimestamp` 为 `NSEvent.timestamp`（秒），驱动滚轮突发窗口判定。
     mutating func stepCount(
         forDeltaY deltaY: CGFloat,
         hasPreciseScrollingDeltas: Bool,
-        isMomentum: Bool
+        isMomentum: Bool,
+        hasGesturePhase: Bool,
+        gestureTimestamp: TimeInterval
     ) -> Int {
         guard !isMomentum, deltaY != 0 else { return 0 }
+        guard hasGesturePhase else {
+            let elapsed = gestureTimestamp - lastWheelEventTimestamp
+            lastWheelEventTimestamp = gestureTimestamp
+            guard wheelBurstArmed || elapsed >= Self.wheelBurstQuietInterval else { return 0 }
+            wheelBurstArmed = false
+            return deltaY < 0 ? 1 : -1
+        }
         guard hasPreciseScrollingDeltas else {
             return deltaY < 0 ? 1 : -1
         }
@@ -40,7 +59,9 @@ private final class WheelSteppablePopUpButton: NSPopUpButton {
         let steps = stepAccumulator.stepCount(
             forDeltaY: event.scrollingDeltaY,
             hasPreciseScrollingDeltas: event.hasPreciseScrollingDeltas,
-            isMomentum: !event.momentumPhase.isEmpty
+            isMomentum: !event.momentumPhase.isEmpty,
+            hasGesturePhase: !event.phase.isEmpty,
+            gestureTimestamp: event.timestamp
         )
         for _ in 0..<abs(steps) {
             stepSelection(forward: steps > 0)
@@ -121,7 +142,8 @@ private final class PlaybackDelegate: NSObject, AVAudioPlayerDelegate {
 /// TTS 音色选择 + 试听共享控件（运行状态页「模型设置」与模型详细设置共用）。
 ///
 /// 交互契约（owner：docs/decisions/2026-09-13-tts-voice-wheel-selection.md）：
-/// - 滚轮悬停在下拉框上逐项步进，只改本地 draft；
+/// - 滚轮悬停在下拉框上逐项步进，只改本地 draft；触控板手势按阈值累积，
+///   滚轮类设备一次物理滚动固定一行；
 /// - 滚轮停止 settle（450ms）后合并为一次持久化 default voice + 一次自动试听
 ///   （可关）；菜单点击立即 settle；手动试听按钮随时可用；
 /// - 新一次试听打断上一路播放（AVAudioPlayer），过期合成结果按代际丢弃；
