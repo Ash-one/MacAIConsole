@@ -197,9 +197,13 @@ daemon 将两个通道分别映射为 Chat Completions 的 `delta.reasoning_cont
 ### cancellation boundary
 
 Runner 可以用 `cancelled` 结束其自身中止的 inference；daemon→Runner `cancel` 命令不在
-当前 single-flight v1 中发送。客户端断开仍会把 daemon 任务标记为 cancelled，但不会
-宣称底层计算已中止。引入主动取消时必须同时实现独立 stdin writer、stdout dispatcher、
+当前 single-flight v1 中发送。客户端断开会中止 daemon 侧的事件循环：该推理的终态帧
+之后不再被消费，Runner 完成后写入的终态帧残留在管道中。因此 daemon 必须把该实例
+标记为不存活（原因经 status `reason` 暴露），下一次 load 走整体回收（graceful
+shutdown，超时 kill 进程组）后才能复用；不得在不回收的情况下继续向同一进程发送
+新帧。引入主动取消时必须同时实现独立 stdin writer、stdout dispatcher、
 worker 并发接收和 HTTP/task abort 消费路径。
+决策 owner：[`2026-09-13-runner-infer-abandon-recycle.md`](../decisions/2026-09-13-runner-infer-abandon-recycle.md)。
 
 ## tts.v1
 

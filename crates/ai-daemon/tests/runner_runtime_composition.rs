@@ -319,6 +319,90 @@ async fn crashed_worker_clears_residency_and_can_be_reloaded() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// 客户端断开 = daemon 侧 infer future 在终态帧前被 drop。实例必须立即呈现
+/// 不可用 + 真实原因，下一次 load 整体回收进程后恢复正常推理；否则被放弃
+/// 推理的残留 result 帧会毒化同实例的下一次推理（protocol violation）。
+#[tokio::test]
+async fn abandoned_inference_marks_instance_and_recovers_on_next_load() {
+    let (root, provider, instances) = fixture("abandon-reload").await;
+    provider.load(&model_spec()).await.expect("initial load");
+
+    // 直接驱动 instances.infer 以便在 accepted 帧消费后精确放弃该推理，
+    // 等价于 HTTP 客户端断开对 handler future 的 drop。
+    let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel::<()>();
+    let output_dir = root.join("temp").join("abandon-request");
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let infer_instances = Arc::clone(&instances);
+    let mut accepted_tx = Some(accepted_tx);
+    let inference = tokio::spawn(async move {
+        infer_instances
+            .infer(
+                "org.example.fake",
+                "tts.v1",
+                serde_json::json!({
+                    "text": "__slow__",
+                    "voice": "zf_001",
+                    "speed": 1.0,
+                    "format": "wav",
+                    "language": "auto",
+                }),
+                serde_json::json!({
+                    "directory": output_dir.display().to_string(),
+                    "allowed_extensions": ["wav"],
+                }),
+                Duration::from_secs(10),
+                |event| {
+                    if matches!(event, ai_daemon::runners::InferEvent::Accepted(_)) {
+                        if let Some(tx) = accepted_tx.take() {
+                            let _ = tx.send(());
+                        }
+                    }
+                },
+            )
+            .await
+    });
+    accepted_rx.await.expect("accepted frame consumed");
+    inference.abort();
+    let join_error = inference.await.unwrap_err();
+    assert!(join_error.is_cancelled(), "infer future must be dropped");
+
+    // 放弃后实例立即不可用，原因可观测（供 /api/providers 与恢复路径使用）。
+    let snapshot = instances
+        .instance_snapshot("org.example.fake")
+        .await
+        .expect("instance snapshot");
+    assert!(
+        !snapshot.alive,
+        "abandoned inference must mark the instance not alive"
+    );
+    assert_eq!(snapshot.loaded_model, None);
+    let reason = snapshot.last_error.expect("abandon reason must be set");
+    assert!(
+        reason.contains("abandoned"),
+        "reason must describe the abandonment: {reason}"
+    );
+    let status = provider.status().await;
+    assert!(!status.ready, "abandoned instance must not report ready");
+    assert!(status.resident_models.is_empty());
+
+    // 下一次 load 复用 !alive 回收路径：杀掉仍在合成的旧进程并重新拉起。
+    provider
+        .load(&model_spec())
+        .await
+        .expect("reload must recycle the tainted instance");
+    let recovered = provider.status().await;
+    assert!(recovered.ready);
+    provider
+        .synthesize(speech_request())
+        .await
+        .expect("inference after recycle");
+    instances
+        .shutdown_instance("org.example.fake")
+        .await
+        .expect("shutdown");
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[tokio::test]
 async fn status_snapshot_does_not_wait_for_active_inference_io() {
     let (root, provider, instances) = fixture("status-during-infer").await;

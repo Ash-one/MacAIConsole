@@ -32,6 +32,8 @@
 
 ## 当前决策记录
 
+- [Runner 推理被放弃时的实例回收](2026-09-13-runner-infer-abandon-recycle.md)——`implemented`
+  （客户端断开使 infer 事件循环在终态帧前 drop，Runner 残留终态帧曾毒化下一次推理为 protocol violation；看门狗把实例标记为不存活并复用 `!alive` 回收路径整体重启进程，`load`/`unload` 同类放弃为已知边界。）
 - [TTS 音色滚轮快速切换与即时试听](2026-09-13-tts-voice-wheel-selection.md)——`implemented`
   （共享 `VoiceSelectionControl`：NSPopUpButton 子类滚轮步进，settle 后防抖持久化 + 可关自动试听，AVAudioPlayer 可打断播放；运行状态页、模型详情页、管理页三处平行试听实现收敛为一，daemon 与 wire 契约零改动。）
 - [运行状态页系统内存压力实时折线图](2026-09-13-runtime-memory-pressure-line-chart.md)——`implemented`

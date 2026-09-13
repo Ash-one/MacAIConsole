@@ -174,6 +174,50 @@ pub enum InferEvent {
     Cancelled,
 }
 
+/// infer 事件循环的放弃看门狗。
+///
+/// 客户端断开会让 axum 直接 drop 处理器 future，infer 的事件循环随之在终态帧
+/// 之前停止消费；Runner 仍在处理该请求，其终态帧将残留在 stdout 管道里并毒化
+/// 同实例的下一次推理（表现为 `event id 'infer-N' does not match inference
+/// 'infer-N+1'`）。guard 在消费到终态帧时解除；提前返回或整个 future 被 drop
+/// 时，把实例标记为不再存活并写入真实原因，复用 load_model 的 `!alive` 回收
+/// 路径在下次使用前整体重启进程。owner：
+/// docs/decisions/2026-09-13-runner-infer-abandon-recycle.md。
+struct InferAbandonGuard {
+    runner_id: String,
+    instance: Arc<RunnerInstance>,
+    disarmed: bool,
+}
+
+impl InferAbandonGuard {
+    fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl Drop for InferAbandonGuard {
+    fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
+        // active_requests 的常规递减在 infer 收尾处，future 被 drop 时不会执行，
+        // 这里必须一并递减；常规错误返回路径的双重递减由 saturating_sub 吸收。
+        let reason =
+            "inference abandoned before terminal frame (client disconnected or task cancelled); \
+             runner process will be recycled on next load";
+        tracing::warn!(
+            runner = %self.runner_id,
+            "runner inference abandoned without terminal frame; instance marked for recycle"
+        );
+        self.instance.update_state(|state| {
+            state.alive = false;
+            state.loaded_model = None;
+            state.active_requests = state.active_requests.saturating_sub(1);
+            state.last_error = Some(reason.to_string());
+        });
+    }
+}
+
 impl RunnerInstanceManager {
     pub fn new(
         registry: super::RunnerRegistry,
@@ -551,6 +595,11 @@ impl RunnerInstanceManager {
         instance
             .update_state(|state| state.active_requests = state.active_requests.saturating_add(1));
         let mut guard = instance.process.lock().await;
+        let mut abandon = InferAbandonGuard {
+            runner_id: runner_id.to_string(),
+            instance: Arc::clone(&instance),
+            disarmed: false,
+        };
         let result = async {
             let process = guard
                 .as_mut()
@@ -600,6 +649,7 @@ impl RunnerInstanceManager {
                             });
                         }
                         on_event(InferEvent::Result(event.payload.clone()));
+                        abandon.disarm();
                         return Ok(event.payload);
                     }
                     "error" => {
@@ -619,10 +669,12 @@ impl RunnerInstanceManager {
                             code: code.clone(),
                             message: message.clone(),
                         });
+                        abandon.disarm();
                         return Err(RunnerInstanceError::RunnerReportedError { code, message });
                     }
                     "cancelled" => {
                         on_event(InferEvent::Cancelled);
+                        abandon.disarm();
                         return Err(RunnerInstanceError::RunnerReportedError {
                             code: "cancelled".to_string(),
                             message: "inference cancelled".to_string(),
@@ -637,6 +689,7 @@ impl RunnerInstanceManager {
             }
         }
         .await;
+        drop(abandon);
         instance.update_state(|state| {
             state.active_requests = state.active_requests.saturating_sub(1);
             if matches!(
