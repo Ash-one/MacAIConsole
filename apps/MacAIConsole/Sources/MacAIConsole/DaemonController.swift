@@ -27,6 +27,9 @@ final class DaemonController {
     private(set) var runningTasks: [InferenceTaskSummary] = []
     private(set) var completedTasks: [InferenceTaskSummary] = []
     private(set) var tasksError: String?
+    /// 系统内存压力采样序列（在线轮询成功路径追加）。
+    /// 不随 daemon 停止清空：占用率是宿主机事实，离线断档由时间戳缺口呈现。
+    private(set) var memorySamples: [MemoryPressureSample] = []
 
     /// 与 daemon 端 MAX_COMPLETED_TASKS 对齐的完成历史上限；刷新按此值拉取。
     /// 历史到上限后旧任务被淘汰，累计数无法区分「恰好」与「更多」，文案按「N+」呈现。
@@ -58,6 +61,7 @@ final class DaemonController {
     private var stopDeadline: Date?
     private var restartAfterStop = false
     private var refreshIsDegraded = false
+    @ObservationIgnored private var memoryPressureRecorder = MemoryPressureRecorder()
     private let logsEnabled: Bool
 
     init(api: DaemonAPI = DaemonAPI(), logsEnabled: Bool = true) {
@@ -173,6 +177,7 @@ final class DaemonController {
         let runners = try? await runnersRequest
         let tasks = try? await tasksRequest
         self.info = info
+        recordMemoryPressure()
         if let models { registeredModels = models }
         if let providers { self.providers = providers }
         if let profiles { modelProfiles = profiles }
@@ -187,6 +192,17 @@ final class DaemonController {
             if tasksError != message { logWarning(message) }
             tasksError = message
         }
+    }
+
+    /// 每次成功刷新追加一个内存压力样本，与 info 同一 tick 来源；
+    /// 采样器非观测状态，镜像到 memorySamples 触发视图刷新。
+    private func recordMemoryPressure() {
+        guard let info else { return }
+        memoryPressureRecorder.record(
+            usedBytes: info.memoryUsed,
+            totalBytes: info.memoryTotal
+        )
+        memorySamples = memoryPressureRecorder.samples
     }
 
     func task(id: String) async throws -> InferenceTaskDetail {

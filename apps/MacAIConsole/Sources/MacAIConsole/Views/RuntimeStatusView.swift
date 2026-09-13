@@ -1,3 +1,4 @@
+import Charts
 import SwiftUI
 
 struct RuntimeStatusView: View {
@@ -13,12 +14,11 @@ struct RuntimeStatusView: View {
                 }
                 headerCard
                 statsGrid
-                if let info = controller.info, let total = info.memoryTotal, total > 0 {
-                    MemoryPressureBar(
-                        used: info.memoryUsed ?? 0,
-                        total: total
-                    )
-                }
+                MemoryPressureCard(
+                    samples: controller.memorySamples,
+                    info: controller.info,
+                    phase: controller.phase
+                )
                 loadedModelsSection
             }
             .padding(Theme.Space.page)
@@ -91,21 +91,41 @@ struct RuntimeStatusView: View {
     }
 }
 
-/// 内存压力条：展示系统物理内存整体占用。
-struct MemoryPressureBar: View {
-    let used: UInt64
-    let total: UInt64
+/// 系统内存压力卡片：5 分钟滑动窗口折线 + 折线下方面积填充。
+/// 数据来自 DaemonController 在线轮询的采样缓冲，不做逐点滚动动画；
+/// 离线断档由时间戳缺口呈现，不插值。
+struct MemoryPressureCard: View {
+    let samples: [MemoryPressureSample]
+    let info: RuntimeInfo?
+    let phase: DaemonController.Phase
 
-    private var fraction: Double {
-        total > 0 ? min(Double(used) / Double(total), 1.0) : 0
+    private var windowSamples: [MemoryPressureSample] {
+        MemoryPressureRecorder.displayWindowSamples(of: samples)
     }
 
-    private var pressureColor: Color {
-        switch fraction {
+    /// 占用率阈值沿用瞬时压力条时代的变色规则。
+    private var lineColor: Color {
+        switch windowSamples.last?.usedFraction ?? 0 {
         case ..<0.6: Theme.success
         case ..<0.85: Theme.warning
         default: Theme.danger
         }
+    }
+
+    private var xDomain: ClosedRange<Date> {
+        let latest = windowSamples.last?.timestamp ?? Date.now
+        let first = windowSamples.first?.timestamp ?? latest
+        return min(latest.addingTimeInterval(-MemoryPressureRecorder.window), first)...latest
+    }
+
+    /// 标题行当前读数：在线时与折线末端同源（同一次刷新）；离线时回退最近样本。
+    private var accessoryText: String? {
+        if let total = info?.memoryTotal, total > 0, let used = info?.memoryUsed {
+            let fraction = min(Double(used) / Double(total), 1)
+            return "\(Format.bytes(used)) / \(Format.bytes(total)) · \(fraction.formatted(.percent.precision(.fractionLength(0))))"
+        }
+        guard let latest = samples.last else { return nil }
+        return "最近 \(latest.usedFraction.formatted(.percent.precision(.fractionLength(0))))"
     }
 
     var body: some View {
@@ -113,28 +133,69 @@ struct MemoryPressureBar: View {
             title: "系统内存压力",
             icon: "memorychip",
             accessory: {
-                Text("\(Format.bytes(used)) / \(Format.bytes(total))")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-        ) {
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Theme.inset)
-                        .overlay(Capsule().strokeBorder(Theme.hairline))
-                    Capsule()
-                        .fill(LinearGradient(
-                            colors: [pressureColor.opacity(0.75), pressureColor],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        ))
-                        .frame(width: max(proxy.size.width * fraction, 3))
-                        .shadow(color: pressureColor.opacity(0.35), radius: 4)
+                if let accessoryText {
+                    Text(accessoryText)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 }
             }
-            .frame(height: 9)
-            .animation(.snappy(duration: 0.3), value: fraction)
+        ) {
+            if windowSamples.isEmpty {
+                EmptyHint(
+                    text: phase == .online ? "正在积累内存样本…" : "守护进程离线，暂无数据",
+                    systemImage: "chart.xyaxis.line"
+                )
+            } else {
+                chart
+                    .frame(height: 160)
+            }
+        }
+    }
+
+    private var chart: some View {
+        Chart {
+            if windowSamples.count == 1, let only = windowSamples.first {
+                PointMark(
+                    x: .value("时间", only.timestamp),
+                    y: .value("占用率", only.usedFraction)
+                )
+                .foregroundStyle(lineColor)
+            } else {
+                ForEach(windowSamples) { sample in
+                    AreaMark(
+                        x: .value("时间", sample.timestamp),
+                        y: .value("占用率", sample.usedFraction)
+                    )
+                    .foregroundStyle(.linearGradient(
+                        colors: [lineColor.opacity(0.32), lineColor.opacity(0.04)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ))
+                    LineMark(
+                        x: .value("时间", sample.timestamp),
+                        y: .value("占用率", sample.usedFraction)
+                    )
+                    .foregroundStyle(lineColor)
+                }
+            }
+        }
+        .chartXScale(domain: xDomain)
+        .chartYScale(domain: 0...1)
+        .chartXAxis {
+            AxisMarks(values: .stride(by: .minute)) {
+                AxisGridLine()
+                AxisValueLabel(format: .dateTime.hour().minute())
+            }
+        }
+        .chartYAxis {
+            AxisMarks(values: [0, 0.25, 0.5, 0.75, 1]) { value in
+                AxisGridLine()
+                if let fraction = value.as(Double.self) {
+                    AxisValueLabel {
+                        Text("\(Int((fraction * 100).rounded()))%")
+                    }
+                }
+            }
         }
     }
 }

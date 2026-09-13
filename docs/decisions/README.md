@@ -32,6 +32,8 @@
 
 ## 当前决策记录
 
+- [运行状态页系统内存压力实时折线图](2026-09-13-runtime-memory-pressure-line-chart.md)——`implemented`
+  （GUI 轮询侧环形缓冲积累 `/api/runtime` 内存读数，Swift Charts 面积折线图替换瞬时压力条；daemon 与 wire 契约零改动。）
 - [LLM 多轮对话 Prompt Cache（KV 前缀复用）](2026-09-12-llm-multi-turn-prompt-cache.md)——`proposed`
   （规划 mlx-lm 显式 prompt cache 增量 prefill、llama.cpp 显式 cache-reuse 与可选 `session_id` 契约；cache 感知调度仅记录、暂不实现。）
 - [结构化推理输出契约](2026-09-12-structured-reasoning-output.md)——`implemented`
