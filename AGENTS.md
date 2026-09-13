@@ -61,7 +61,7 @@ MacAI 是面向 Apple Silicon 的本地 AI Runtime：Rust daemon `aiworkd`（默
 | `crates/ai-cli` | `macai` CLI（clap，单文件 `main.rs`），只调 daemon |
 | `apps/MacAIConsole` | SwiftUI 控制台。`DaemonAPI.swift`（HTTP 客户端）、`DaemonController.swift`（daemon 探测与启停：`AIWORKD_PATH` → `target/release` → `target/debug`）、`AppSettings.swift`、`AppRouter.swift`；「管理」页置顶消费 daemon `/api/runners` 与 `/api/providers` 提供引擎运维与模型管理，视图在 `Views/` |
 | `scripts/` | whisper.cpp 模型下载、llama.cpp 可选本地构建脚本与真实 Runner smoke；原生引擎安装统一由 daemon Runner install 拥有 |
-| `samples/` | Hermes TTS/STT 命令型 Provider 适配器与一键配置脚本 |
+| `samples/` | Hermes TTS/STT 命令型 Provider 适配器与一键配置脚本；Hojo-TTS-Light-40M 单文件 Script Runner 示例 |
 
 ## 构建与验证
 
