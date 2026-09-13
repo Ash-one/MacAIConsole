@@ -65,6 +65,44 @@ async fn main() {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string();
+                // session_id 透传契约验证：daemon 携带时必须写入 string key；
+                // 缺席时不得写入该 key（null 与缺席不等价）。
+                if let Some(expected) = content.strip_prefix("__require_session__:") {
+                    if request.get("session_id").and_then(Value::as_str) != Some(expected) {
+                        write_frame(
+                            &mut output,
+                            &Envelope::new(
+                                "error",
+                                command.id.clone(),
+                                json!({
+                                    "code": "invalid_request",
+                                    "message": "session_id missing or mismatched",
+                                    "retryable": false,
+                                }),
+                            ),
+                        )
+                        .await
+                        .expect("write error");
+                        continue;
+                    }
+                }
+                if content == "__forbid_session__" && request.get("session_id").is_some() {
+                    write_frame(
+                        &mut output,
+                        &Envelope::new(
+                            "error",
+                            command.id.clone(),
+                            json!({
+                                "code": "invalid_request",
+                                "message": "session_id key must be absent",
+                                "retryable": false,
+                            }),
+                        ),
+                    )
+                    .await
+                    .expect("write error");
+                    continue;
+                }
                 write_frame(
                     &mut output,
                     &Envelope::new(

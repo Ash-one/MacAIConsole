@@ -27,6 +27,9 @@ from pathlib import Path
 HEALTH_TIMEOUT_SECONDS = 120.0
 HEALTH_POLL_INTERVAL_SECONDS = 0.2
 DEFAULT_PORT = 11436
+# llama.cpp 文档建议的最小 KV 复用块长度：显式声明 slot 上的前缀复用语义，
+# 不受引擎默认值变化影响。行为绑定受管引擎版本，升级引擎产物时需复核。
+CACHE_REUSE_MIN_CHUNK = 256
 
 
 def _direct_opener() -> urllib.request.OpenerDirector:
@@ -120,6 +123,20 @@ def _repo_build_binary(model_root: Path) -> Path | None:
     return None
 
 
+def _server_command(binary: Path, model_path: Path, port: int) -> list[str]:
+    return [
+        str(binary),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--model",
+        str(model_path),
+        "--cache-reuse",
+        str(CACHE_REUSE_MIN_CHUNK),
+    ]
+
+
 class LlamaCppEngine:
     """一个已加载模型的 llama-server 子进程句柄。"""
 
@@ -136,15 +153,7 @@ class LlamaCppEngine:
             return self._server
         binary = resolve_server_binary(self.model_root)
         model_path = self._resolve_model_file()
-        command = [
-            str(binary),
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(self.port),
-            "--model",
-            str(model_path),
-        ]
+        command = _server_command(binary, model_path, self.port)
         try:
             process = subprocess.Popen(
                 command,

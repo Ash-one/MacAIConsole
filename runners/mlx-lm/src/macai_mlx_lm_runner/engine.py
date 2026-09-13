@@ -154,16 +154,57 @@ def build_prompt_tokens(tokenizer: Any, messages: list[dict[str, str]]) -> list[
     raise ChatRequestError("tokenizer supports neither chat template nor encode")
 
 
+def _common_prefix_len(a: list[int], b: list[int]) -> int:
+    limit = min(len(a), len(b))
+    index = 0
+    while index < limit and a[index] == b[index]:
+        index += 1
+    return index
+
+
+# mlx-lm 依赖只在真正推理时可用（单测不装 mlx），统一经这些 seam 惰性导入，
+# 测试通过 monkeypatch 模块属性注入假实现。
+def _make_prompt_cache(model: Any) -> Any:
+    from mlx_lm.models.cache import make_prompt_cache
+
+    return make_prompt_cache(model)
+
+
+def _trim_prompt_cache(cache: Any, num_tokens: int) -> int:
+    from mlx_lm.models.cache import trim_prompt_cache
+
+    return trim_prompt_cache(cache, num_tokens)
+
+
+def _make_sampler(temperature: float, top_p: float) -> Any:
+    from mlx_lm.sample_utils import make_sampler
+
+    return make_sampler(temp=temperature, top_p=top_p)
+
+
+def _stream_generate(model: Any, tokenizer: Any, prompt: list[int], **kwargs: Any) -> Any:
+    from mlx_lm import stream_generate
+
+    return stream_generate(model, tokenizer, prompt, **kwargs)
+
+
 def log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
 class MlxLmEngine:
-    """单实例 chat 引擎：load 一次，常驻服务所有 infer（流式迭代）。"""
+    """单实例 chat 引擎：load 一次，常驻服务所有 infer（流式迭代）。
+
+    持有一个随对话延续的 prompt cache（KV 前缀复用）：每轮只对与上一轮
+    分歧的 token 增量 prefill。单 cache 的正确性由 runner.toml 的
+    max_concurrency_per_instance = 1 串行保证。
+    """
 
     def __init__(self, model_root: str) -> None:
         self.model_root = model_root
         self._loaded: LoadedModel | None = None
+        self._prompt_cache: Any = None
+        self._cached_tokens: list[int] = []
         self._load()
 
     def _load(self) -> None:
@@ -173,6 +214,79 @@ class MlxLmEngine:
             log(f"[mlx-lm-runner] loading model from {self.model_root}")
             model, tokenizer = load(self.model_root)
         self._loaded = LoadedModel(model=model, tokenizer=tokenizer)
+        self._prompt_cache = _make_prompt_cache(model)
+        self._cached_tokens = []
+
+    # -- prompt cache -----------------------------------------------------
+
+    def _fresh_cache(self) -> Any:
+        cache = _make_prompt_cache(self._loaded.model)
+        self._prompt_cache = cache
+        self._cached_tokens = []
+        return cache
+
+    def _reset_cache(self) -> None:
+        # 生成中途失败时 KV 状态不可信：丢弃登记，下一轮全量 prefill。
+        self._prompt_cache = None
+        self._cached_tokens = []
+
+    def _prepare_cache(self, prompt: list[int]) -> tuple[Any, list[int]]:
+        """返回 (prompt_cache, 需增量 prefill 的 prompt 尾部)。
+
+        复用上限取 min(公共前缀, len(prompt)-1)：至少留 1 个 token 交给
+        generate_step（空 prompt 会 ValueError），这也是 mlx_lm.server
+        fetch_nearest_cache 的同款规则。公共前缀为 0、裁剪异常或实际裁剪数
+        与请求不符时重建 cache 全量 prefill——cache 路径失败一律退化为既有
+        行为。
+        """
+        cache = self._prompt_cache
+        cached = self._cached_tokens
+        if cache is None:
+            return self._fresh_cache(), prompt
+        if not cached:
+            return cache, prompt  # _load 刚建的空 cache，直接服务首轮
+        keep = min(_common_prefix_len(cached, prompt), len(prompt) - 1)
+        if keep == 0:
+            return self._fresh_cache(), prompt
+        drop = len(cached) - keep
+        try:
+            trimmed = _trim_prompt_cache(cache, drop)
+        except Exception as error:
+            log(f"[mlx-lm-runner] prompt cache trim failed ({error}); rebuilding")
+            return self._fresh_cache(), prompt
+        if trimmed != drop:
+            log("[mlx-lm-runner] prompt cache trim incomplete; rebuilding")
+            return self._fresh_cache(), prompt
+        self._cached_tokens = cached[:keep]
+        return cache, prompt[keep:]
+
+    def _recording(self, responses: Any, prompt: list[int], cache: Any) -> Any:
+        """透传生成事件；正常耗尽后把 cache 登记为 prompt + 全部生成 token。
+
+        generate_step 在每个 yield 点之前已把当前 token 回喂进 cache（含
+        最后终止帧的 token），因此该序列与真实 KV 状态一致，与 mlx_lm.server
+        的 cache_key 登记规则相同。迭代异常时不信任 cache 状态。
+        """
+        generated: list[int] = []
+        complete = True
+        try:
+            for response in responses:
+                token = getattr(response, "token", None)
+                if isinstance(token, int):
+                    generated.append(token)
+                else:
+                    complete = False
+                yield response
+        except BaseException:
+            self._reset_cache()
+            raise
+        if complete:
+            self._prompt_cache = cache
+            self._cached_tokens = prompt + generated
+        else:
+            self._reset_cache()
+
+    # -- 推理 --------------------------------------------------------------
 
     def stream_chat(
         self,
@@ -190,20 +304,19 @@ class MlxLmEngine:
         messages, max_tokens, temperature, top_p = validate_chat_request(request)
         prompt = build_prompt_tokens(loaded.tokenizer, messages)
         with contextlib.redirect_stdout(sys.stderr):
-            from mlx_lm import stream_generate
-            from mlx_lm.sample_utils import make_sampler
-
             # mlx-lm 0.31+ 的采样参数是 sampler 对象；temp=0 时 make_sampler
             # 返回 None，对应库内的贪心解码路径。
-            responses = stream_generate(
+            cache, prefill = self._prepare_cache(prompt)
+            responses = _stream_generate(
                 loaded.model,
                 loaded.tokenizer,
-                prompt=prompt,
+                prefill,
                 max_tokens=max_tokens,
-                sampler=make_sampler(temp=temperature, top_p=top_p),
+                sampler=_make_sampler(temperature, top_p),
+                prompt_cache=cache,
             )
         return (
-            responses,
+            self._recording(responses, prompt, cache),
             prompt,
             max_tokens,
             temperature,

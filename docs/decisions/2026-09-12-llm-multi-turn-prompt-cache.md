@@ -1,6 +1,6 @@
 # LLM 多轮对话 Prompt Cache（KV 前缀复用）
 
-Status: proposed
+Status: implemented
 
 Class: feature
 
@@ -10,49 +10,41 @@ Related current decisions: [Runner 插件架构](2026-09-02-runner-plugin-archit
 
 ## Problem
 
-多轮对话的每一轮请求都携带完整 `messages` 历史，但当前两个 LLM Runner 对历史 KV 的处理不对称：
+多轮对话的每一轮请求都携带完整 `messages` 历史，但两个 LLM Runner 对历史 KV 的处理不对称：
 
-- MLX-LM Runner 每轮用 `build_prompt_tokens` 全量重 tokenize 并完整 prefill（`runners/mlx-lm/src/macai_mlx_lm_runner/engine.py:115-143`），上一轮生成的 KV 全部丢弃。TTFT 随历史长度线性增长，长对话下每轮都在为已确认的前缀重复付费。
-- llama.cpp Runner 的 llama-server 是常驻进程（`runners/llama.cpp/src/macai_llama_cpp_runner/engine.py:134-168`），同一 slot 上公共前缀的 KV 复用事实上已经发生——但这依赖"server 恰好常驻 + 请求恰好顺序到达"的隐式行为，启动参数没有显式声明（仅 `--host/--port/--model`，engine.py:139-147），slot 丢失或上下文偏移后的复用不受保障，且没有任何观测手段。
-- 公共契约层面没有会话标识。`ChatRequest`（`crates/ai-core/src/request.rs:18-26`）与 Runner infer 载荷（`crates/ai-daemon/src/runners/provider.rs:643-648`）都不携带"这个请求延续哪个对话"的信息，无法表达缓存粘性，后续任何 cache 感知调度都要先补这个契约。
+- MLX-LM Runner 每轮用 `build_prompt_tokens` 全量重 tokenize 并完整 prefill，上一轮生成的 KV 全部丢弃。TTFT 随历史长度线性增长，长对话下每轮都在为已确认的前缀重复付费。
+- llama.cpp Runner 的 llama-server 是常驻进程，同一 slot 上公共前缀的 KV 复用事实上已经发生——但这依赖"server 恰好常驻 + 请求恰好顺序到达"的隐式行为，启动参数没有显式声明，slot 丢失或上下文偏移后的复用不受保障，且没有任何观测手段。
+- 公共契约层面没有会话标识。`ChatRequest` 与 Runner infer 载荷都不携带"这个请求延续哪个对话"的信息，无法表达缓存粘性，后续任何 cache 感知调度都要先补这个契约。
 
 问题不依赖具体引擎：任何常驻 worker 承载的自回归生成，都应让已确认的对话前缀只计算一次。模型格式的解释留在 Runner（与推理输出归属同一边界），daemon 只负责契约与调度。
 
-## Proposed direction
+## Decision
 
-三个改动互相独立、可分别交付，按下列顺序实施。
+三个改动互相独立、已分别交付。
 
 ### 1. MLX-LM Runner：显式 prompt cache 与增量 prefill
 
-引擎持有的不再只是模型和 tokenizer：
+`MlxLmEngine` 持有一个与 worker 同生命周期的 prompt cache（`load` 创建、`unload` 随引擎丢弃），并维护它当前表示的 token 序列：
 
-- `MlxLmEngine` 在 `_load` 时调用 `mlx_lm.models.cache.make_prompt_cache(model)` 建一个 cache，并维护它当前表示的 token 序列（上一轮的 prompt tokens + 生成的 tokens）；
-- `stream_chat` 每轮计算新 prompt tokens 与已存序列的公共前缀长度：用 `can_trim_prompt_cache` / `trim_prompt_cache` 裁掉分歧尾部，然后以 `prompt[公共前缀:]` 调 `stream_generate(..., prompt_cache=cache)`，只增量 prefill 剩余部分（mlx-lm 0.31.3 的 `generate_step` 接受 `prompt_cache` 并原地更新，但不自动做前缀检测，前缀管理由 Runner 负责）；
-- 生成结束后把 prompt + 生成 tokens 记为 cache 的新表示；
-- 公共前缀为 0、cache 不可裁剪或裁剪异常时，重建 cache 全量 prefill——任何 cache 路径的失败都退化为现有行为，worker 不因此进入新错误语义。
+- `stream_chat` 每轮计算新 prompt 与已缓存序列的公共前缀，复用上限取 `min(公共前缀, len(prompt)-1)`——至少留 1 个 token 交给 `generate_step`（空 prompt 会 `ValueError`），与官方 `mlx_lm.server` 的 `fetch_nearest_cache` 同款规则；以 `prompt[keep:]` 调 `stream_generate(..., prompt_cache=cache)`，只增量 prefill 分歧尾部；
+- 裁剪经 `trim_prompt_cache` 原地完成，并校验返回的实际裁剪数：公共前缀为 0、裁剪异常或裁剪数与请求不符时重建 cache 全量 prefill；
+- 生成迭代由引擎内 `_recording` 包装器透传，正常耗尽后把 cache 登记为 `prompt + 全部已产出 token`（含末帧携带的终止 token）：`generate_step` 在每个 yield 点前已把当前 token 回喂进 cache，该序列与真实 KV 状态一致，与 `mlx_lm.server` 的 cache_key 登记规则相同；迭代异常时丢弃登记，下一轮退化为全量 prefill。
 
-cache 生命周期与 worker 一致（`load`/`unload` 帧创建/销毁），随对话历史与模型上下文自然有界；不引入独立的 cache 配额，内存占用经进程 RSS 由 daemon 现有 resident 统计观测。单 cache 的正确性由 `[capacity] max_concurrency_per_instance = 1`（`runners/mlx-lm/runner.toml`）的串行保证；未来提升并发前必须先引入会话隔离。
+任何 cache 路径的失败都退化为既有行为，worker 不进入新错误语义。不设独立 cache 配额，内存经进程 RSS 由 daemon 现有 resident 统计观测；单 cache 的正确性由 `max_concurrency_per_instance = 1`（`runners/mlx-lm/runner.toml`）的串行保证，未来提升并发前必须先引入会话隔离。不使用库内 `LRUPromptCache`/`PromptTrie` 多条目管理：单并发单会话场景下单 cache + 公共前缀裁剪即可覆盖。
 
-不使用库内 `LRUPromptCache`/`PromptTrie` 多条目缓存管理：单并发单会话场景下单 cache + 公共前缀裁剪即可覆盖，多条目管理的复杂度等出现真实多会话需求时再评估。
+mlx-lm 依赖经 `engine.py` 模块级 seam（`_make_prompt_cache` / `_trim_prompt_cache` / `_stream_generate` / `_make_sampler`）惰性导入，单测以假实现注入，不需要安装 mlx。
 
 ### 2. llama.cpp Runner：显式声明 cache-reuse
 
-`LlamaCppEngine.start()` 的启动参数追加 `--cache-reuse 256`（受管引擎 b10785 支持；值取 llama.cpp 文档建议的最小复用块长度）。效果：
-
-- 保障既有隐式 slot 前缀复用的语义被显式声明，不被引擎默认值变化静默改变；
-- 在上下文偏移（context shift）和 system prompt 之后的前缀变化场景下做分块 KV 复用，而不是丢弃重来。
-
-参数作为 adapter 内常量，不新增 runner.toml 或 load payload 的配置面：当前没有需要按模型调节的实证，先建立确定性默认。
+`_server_command` 构造的启动参数包含 `--cache-reuse 256`（本地 `.build` 与受管 b10785 引擎均支持；值取 llama.cpp 文档建议的最小复用块长度）。既有隐式 slot 前缀复用被显式声明，不被引擎默认值变化静默改变；上下文偏移和 system prompt 之后的前缀变化场景做分块 KV 复用而不是丢弃重来。参数是 adapter 内常量，不新增 runner.toml 或 load payload 配置面。
 
 ### 3. daemon：可选 `session_id` 契约与透传
 
-- `ChatRequest` 增加可选 `session_id: Option<String>`（serde default + `skip_serializing_if`），缺省时请求语义与序列化字节与现状一致；
-- Runner bridge 的 `chat_request` 载荷在字段存在时透传 `session_id`，缺席时不写该 key；
-- Runner 协议 v1 的"未知可选字段必须忽略"规则（`docs/specs/runner-protocol-v1.md`）覆盖不支持它的第三方 Runner；llama.cpp / mlx-lm adapter 本期只接受不赋予语义。
+- `ChatRequest` 携带可选 `session_id: Option<String>`（`skip_serializing_if`），缺省时请求语义与序列化字节与字段引入前一致；
+- Runner bridge 的 `chat.v1` 载荷仅在字段存在时写入 `session_id`（字符串），缺席时不写该 key——null 与缺席不等价，第三方 Runner 可据此区分；
+- Runner 协议 v1 的"未知可选字段必须忽略"规则覆盖不支持它的 Runner；两个 LLM adapter 对该字段不赋予语义。
 
-`session_id` 的即时可观察效果是契约本身：调用方（未来 GUI 会话、`step 4` 调度）可以声明对话延续性，wire 契约从此稳定，后续扩展不需要二次 break。本期不要求任何客户端开始发送它。
-
-两个 LLM Runner 的 adapter 都需要容忍 assistant 历史携带 `reasoning_content`（结构化推理提案）导致的模板输出前缀分歧——公共前缀裁剪天然处理，无需特殊分支。
+`session_id` 的即时可观察效果是契约本身：调用方可以声明对话延续性，wire 契约从此稳定。本期没有任何客户端被要求发送它，daemon 也不做调度消费。
 
 ## Alternatives considered
 
@@ -68,34 +60,27 @@ daemon 看不到模型内部结构，cache 语义（slot、前缀裁剪、模板
 
 库内为多 prompt 多会话服务设计（`mlx_lm.server` 使用），单并发场景下单 cache + 公共前缀裁剪已覆盖，多条目管理是未被证明需要的复杂度。
 
-### 现在不加 `session_id`，等 step 4 需要时再加
+### 现在不加 `session_id`，等 cache 感知调度需要时再加
 
-省一次字段落盘，但届时若调用方已在构造请求，字段新增虽向后兼容，消费者验证与文档同步都要重做；可选字段现在加入的成本近似为零。
+省一次字段落盘，但届时若调用方已在构造请求，消费者验证与文档同步都要重做；可选字段提前加入的成本近似为零。
 
-## Acceptance criteria
+## Consequences
 
-| 可观察验收 | 失败层 | 直接证据 |
-| --- | --- | --- |
-| 同一对话第二轮的实际 prefill token 数显著小于完整历史长度（长历史下 TTFT 相应下降） | mlx-lm adapter | adapter 单测用可观测 prefill 步数的假模型断言增量行为；`scripts/build-app.sh release` 后真实 MiniCPM 两轮请求对比 TTFT |
-| temp=0 时，启用 cache 的多轮输出与每轮重建 cache 的输出一致 | mlx-lm adapter | 真实模型本地对比脚本（非 CI 门禁），分歧即数值精度问题需记录 |
-| 前缀裁剪/前缀计算的任何异常都退化为全量 prefill，worker 存活且错误语义不变 | mlx-lm adapter | 注入异常的单测 |
-| llama-server 启动命令包含 `--cache-reuse 256`；真实第二轮请求的 `timings.prompt_eval_count` 远小于完整历史 token 数 | llama.cpp adapter | command 构造单测；真实请求观察 SSE 末帧 timings |
-| 缺省 `session_id` 的请求行为与现状一致；携带 `session_id` 时透传进 `chat.v1` infer 载荷 | ai-core 序列化、Runner bridge | serde 兼容单测 + fake Runner composition test |
-| 不识别 `session_id` 的 v1 Runner（mock、Script Runner）请求不受影响 | Runner protocol 兼容 | 现有 mock tests 保持通过 |
-| README 与本记录描述已实现契约，proposal 不再声称未来行为 | authority convergence | 实现交付时按生命周期改写本文并同步 README |
+- **temp=0 数值分岔已实测出现（仅 MLX 侧）**：Metal 上增量 prefill 与全量 prefill 的浮点求和路径不同（共享前缀的 K/V 在不同 batch 形状下计算），贪心解码在概率接近处可能分岔。MiniCPM5-2B-MLX 两轮对比中，第二轮输出在 94 字符公共前缀后出现措辞级分岔，语义连贯、无重复/乱码等状态损坏特征；MiniCPM5-1B 的短问答与长文档两场景均复现分岔。同底座的 llama.cpp（Q4_K_M gguf）在相同场景下缓存命中与全量 prefill 输出完全一致。该现象是前缀复用系统的固有精度行为，被接受为已记录的风险；对输出确定性有硬要求的调用方目前没有开关可关闭复用。
+- 思考型对话的前缀复用上限受模板对齐约束：历史 assistant 消息的渲染（模板会剥离 think 部分）与生成流（含 think 标签或预填）在 assistant 边界分歧，公共前缀到该边界为止（MiniCPM5 实测：短问答首轮追问仅复用指令前缀 ~25 token；长文档场景复用完整用户轮 ~508 token）。这是正确的降性而非错误——KV 依赖绝对位置，分歧后必须重算。
+- 常驻 KV 使进程 RSS 超出"模型权重 + 固定开销"的调度假设。当前先观测不设限；若实测触碰内存预算，再评估 `make_prompt_cache` 的 `max_kv_size` 上限并回到本记录修订。
+- `--cache-reuse` 的行为绑定受管引擎版本；升级引擎产物时需在验证清单中复核该参数（本地 `.build` llama-server build 8086439 已确认支持）。
+- cache 收益依赖请求串行到达同一 worker/slot；`max_concurrency_per_instance = 1` 是该假设的现行保证，未来放开并发必须连带重审。
+- `session_id` 在 cache 感知调度落地前没有 daemon 侧消费者，存在"死契约"窗口；这是有意的提前量，字段缺席即零影响。
 
-## Risks and trade-offs
+仍然有意不做：cache 感知调度（keep-alive reaper 到期先"清 cache 不卸载"、LRU 驱逐代价纳入热 cache、`session_id` → slot/prompt-cache 粘性绑定——都需要协议扩展与并发模型放开，属本决策的 Deferred 方向）；KV cache 磁盘持久化（`save_prompt_cache` / `--slot-save-path`）——重启免 prefill 的收益未被证明且引入磁盘格式契约；多 slot / 并发提升与会话隔离；Runner 向 daemon 上报 cache 命中统计及 GUI 展示；GUI 会话与 CLI 发送 `session_id`。
 
-- 常驻 KV 使进程 RSS 超出"模型权重 + 固定开销"的调度假设。本提案先观测不设限；若实测触碰内存预算，再在实现中评估 `make_prompt_cache` 的 `max_kv_size` 上限并补记录。
-- Metal 上增量 prefill 与全量 prefill 的数值精度存在理论差异，temp=0 也可能偶发分岔；接受该风险，对比验证若出现即记录在案。
-- `--cache-reuse` 的行为绑定受管引擎版本（当前 b10785）；升级引擎产物时需在验证清单中复核该参数。
-- `session_id` 在 step 4 落地前没有 daemon 侧消费者，存在"死契约"窗口；这是有意的提前量，且字段缺席即零影响。
-- llama.cpp 侧的隐式复用收益依赖请求串行到达同一 slot；`max_concurrency_per_instance = 1` 是该假设的现行保证，未来放开并发必须连带重审。
+## Verification
 
-## Intentionally deferred
-
-- **Cache 感知调度（本提案第 4 步，按要求记录、暂不实现）**：keep-alive reaper 到期与 LRU 驱逐目前以模型权重为粒度，`unload` 即杀 worker、cache 一并销毁（`crates/ai-daemon/src/runtime.rs:1118-1216`）。后续方向：新增"清 cache 不卸载"协议帧让 reaper 到期先释放 KV；驱逐代价把"worker 仍有热 cache"纳入考量（`last_used` 语义向 cache 命中延伸）；`session_id` → slot/prompt-cache 的粘性绑定（依赖并发模型放开）。这些都需要本提案的 `session_id` 契约与 Runner 协议扩展先行落地。
-- KV cache 磁盘持久化（`save_prompt_cache` / llama.cpp `--slot-save-path`）：重启后免 prefill 的收益对当前单机对话场景未被证明，且引入磁盘格式契约。
-- 多 slot / 并发提升与会话隔离。
-- Runner 向 daemon 上报 cache 命中统计及 GUI 展示。
-- GUI 会话与 CLI 开始发送 `session_id`。
+- `cargo fmt --all -- --check` 通过；`cargo test --workspace` 全部通过（含 ai-daemon 各测试组，2 例环境门禁的 real-wiring ignored）。
+- `cargo test -p ai-core` 固化 wire 契约：缺省 `session_id` 解码为 None 且再序列化无该 key，携带时 canonical 名进出。
+- `runner_runtime_composition.rs` 的 `chat_stream_forwards_session_id_to_runner_payload`：fake Runner 服务端校验——携带 `session_id` 时 infer 载荷必须含匹配的 string key；缺席时载荷不得出现该 key（daemon 若写 null 即失败）。不支持该字段的 v1 Runner（mock、Script Runner）现有测试保持通过。
+- Runner 包 `uv lock --check` 与 pytest 通过：mlx-lm 16 例（含 `test_engine_cache.py` 8 例——假 `stream_generate` 使每轮实际 prefill token 数可观测，断言增量 prefill、prompt 被完全覆盖时仅 prefill 末 token、公共前缀为 0/裁剪异常/裁剪数不符的退化重建、生成失败后 cache 重置）；llama.cpp 8 例（含 `_server_command` 断言 `--cache-reuse 256`）。
+- 真实模型（本机 MiniCPM5-2B-MLX，两轮对话第二轮复用第一轮真实输出）：第二轮实际 prefill 304 → 21 tokens（94% 复用），首 token 延迟 0.65s → 0.20s；temp=0 分岔已按 Consequences 记录。
+- 真实模型 llama.cpp 侧（本机导入的 MiniCPM5-1B-Q4_K_M，llama-server SSE 末帧原生 `timings`）：长文档场景第二轮完整历史 536 tokens，引擎路径实际 prompt 处理 28 tokens（复用 508），TTFT 0.45s → 0.03s；短问答场景受模板对齐约束仅复用 25 tokens；缓存命中与全新 server 全量 prefill 的 temp=0 输出完全一致。与 MiniCPM5-1B-MLX 同场景对比：两引擎复用同一公共前缀（508 tokens），MLX 第二轮 TTFT 0.58s → 0.29s。
+- 根 `README.md` 与 `docs/specs/runner-protocol-v1.md` 描述当前契约。

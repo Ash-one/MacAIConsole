@@ -23,6 +23,10 @@ pub struct ChatRequest {
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
     pub max_tokens: Option<u64>,
+    /// 调用方声明的对话延续性标识；缺省时语义与序列化字节均与无会话一致。
+    /// daemon 只透传给 Runner，不做调度语义（cache 感知调度是后续工作）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// POST /v1/audio/transcriptions 请求（文档 §15）。
@@ -84,5 +88,26 @@ mod tests {
         let encoded = serde_json::to_value(message).unwrap();
         assert_eq!(encoded["reasoning_content"], "why");
         assert!(encoded.get("reasoning").is_none());
+    }
+
+    /// 缺省 `session_id` 的请求解码后为 None，且再序列化不产生该 key：
+    /// wire 字节与字段引入前完全一致，这是对既有客户端的兼容性契约。
+    #[test]
+    fn chat_request_session_id_is_optional_and_omitted_when_absent() {
+        let without: ChatRequest = serde_json::from_str(
+            r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"stream":true}"#,
+        )
+        .unwrap();
+        assert!(without.session_id.is_none());
+        let encoded = serde_json::to_value(&without).unwrap();
+        assert!(encoded.get("session_id").is_none());
+
+        let with: ChatRequest = serde_json::from_str(
+            r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"session_id":"conv-1"}"#,
+        )
+        .unwrap();
+        assert_eq!(with.session_id.as_deref(), Some("conv-1"));
+        let encoded = serde_json::to_value(&with).unwrap();
+        assert_eq!(encoded["session_id"], "conv-1");
     }
 }

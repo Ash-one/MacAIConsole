@@ -169,6 +169,11 @@ terminal frame 后同一 ID 的其他输出是 protocol violation。
 `chat.v1` request 使用 OpenAI-compatible `messages` 与生成参数。assistant 历史消息可带
 可选 `reasoning_content`；Runner 不理解该字段时可按 v1 的未知可选字段规则忽略。
 
+`chat.v1` request 还可携带可选 `session_id`（不透明字符串）：调用方在公共 API 声明的
+对话延续性标识，daemon bridge 仅在字段存在时原样透传，缺席时不写该 key。v1 Runner
+对它没有强制语义；cache 感知调度是后续工作（见
+[LLM 多轮对话 Prompt Cache](../decisions/2026-09-12-llm-multi-turn-prompt-cache.md)）。
+
 Runner 的 `delta.payload` 使用两个互不混合的可选文本通道：
 
 ```json

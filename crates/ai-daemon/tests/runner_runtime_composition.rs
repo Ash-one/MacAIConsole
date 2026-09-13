@@ -373,6 +373,7 @@ async fn chat_stream_maps_delta_events_and_result_usage() {
         temperature: Some(0.7),
         top_p: Some(0.95),
         max_tokens: Some(64),
+        session_id: None,
     };
 
     let stream = ai_core::provider::ChatProvider::chat_stream(&provider, request.clone())
@@ -427,6 +428,59 @@ async fn chat_stream_maps_delta_events_and_result_usage() {
         .await
         .unwrap_err();
     assert_eq!(error.kind, ai_core::AIError::InvalidRequest);
+
+    instances
+        .shutdown_instance("org.example.fake")
+        .await
+        .expect("shutdown");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn chat_stream_forwards_session_id_to_runner_payload() {
+    let (root, provider, instances) = fixture("session-id").await;
+    provider.load(&model_spec()).await.expect("load");
+    let message = |content: &str| ai_core::request::ChatMessage {
+        role: "user".to_string(),
+        content: content.to_string(),
+        reasoning_content: None,
+    };
+
+    // 携带 session_id：fake Runner 校验 infer 载荷里存在匹配的 string key。
+    let request = ai_core::request::ChatRequest {
+        model: "fake-model".to_string(),
+        messages: vec![message("__require_session__:conv-42")],
+        stream: true,
+        temperature: None,
+        top_p: None,
+        max_tokens: None,
+        session_id: Some("conv-42".to_string()),
+    };
+    let stream = ai_core::provider::ChatProvider::chat_stream(&provider, request)
+        .await
+        .expect("session_id must reach the runner payload");
+    use futures::StreamExt;
+    let chunks: Vec<ai_core::response::ChatChunk> =
+        stream.map(|item| item.expect("chunk ok")).collect().await;
+    let text: String = chunks
+        .iter()
+        .filter_map(|chunk| chunk.choices[0].delta.content.clone())
+        .collect();
+    assert_eq!(text, "__require_session__:conv-42");
+
+    // 缺席 session_id：daemon 不得写 null key，fake Runner 校验 key 缺席。
+    let request = ai_core::request::ChatRequest {
+        model: "fake-model".to_string(),
+        messages: vec![message("__forbid_session__")],
+        ..Default::default()
+    };
+    let response = ai_core::provider::ChatProvider::chat(&provider, request)
+        .await
+        .expect("absent session_id must not produce the key");
+    assert_eq!(
+        response.choices[0].message.content,
+        "__forbid_session__".to_string()
+    );
 
     instances
         .shutdown_instance("org.example.fake")

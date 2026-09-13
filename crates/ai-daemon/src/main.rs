@@ -2839,6 +2839,7 @@ runner = ">=1,<2"
             temperature: Some(0.2),
             top_p: Some(0.8),
             max_tokens: Some(32),
+            session_id: None,
         };
 
         let response = chat_completions(State(app_state(runtime.clone())), Json(request)).await;
@@ -2912,6 +2913,7 @@ runner = ">=1,<2"
                 temperature: None,
                 top_p: None,
                 max_tokens: None,
+                session_id: None,
             }),
         )
         .await;
@@ -2960,6 +2962,7 @@ runner = ">=1,<2"
                 temperature: None,
                 top_p: None,
                 max_tokens: None,
+                session_id: None,
             }),
         )
         .await;
@@ -2989,6 +2992,7 @@ runner = ">=1,<2"
                 temperature: None,
                 top_p: None,
                 max_tokens: None,
+                session_id: None,
             }),
         )
         .await;

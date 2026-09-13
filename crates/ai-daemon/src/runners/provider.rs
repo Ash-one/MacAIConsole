@@ -645,12 +645,17 @@ impl ai_core::provider::ChatProvider for RunnerProvider {
         let binding = self.binding(&request.model).await?;
         let runner_id = binding.profile.runner.clone();
         let model = request.model.clone();
-        let chat_request = json!({
+        let mut chat_request = json!({
             "messages": request.messages,
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
             "top_p": request.top_p,
         });
+        // 会话延续性标识对 v1 Runner 是可选信息：缺席时不写 key（Runner 端
+        // 不得把 null 与缺席混同）；不支持它的 Runner 按协议忽略未知字段。
+        if let Some(session_id) = request.session_id.as_deref() {
+            chat_request["session_id"] = json!(session_id);
+        }
         let (deadline, _) = self.deadlines(&binding)?;
         let instances = self.instances.clone();
         let completion_id = format!("chatcmpl-runner-{}", uuid_like());

@@ -10,10 +10,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from macai_llama_cpp_runner.engine import (  # noqa: E402
+    CACHE_REUSE_MIN_CHUNK,
     LlamaCppEngine,
     LlamaServerError,
     _chat_delta_events,
     _chat_payload,
+    _server_command,
 )
 
 
@@ -73,3 +75,11 @@ def test_resolve_model_file_is_deterministic(tmp_path: Path) -> None:
 def test_engine_starts_idle() -> None:
     engine = LlamaCppEngine("/nonexistent")
     assert engine.running is False
+
+
+def test_server_command_declares_cache_reuse() -> None:
+    command = _server_command(Path("llama-server"), Path("model.gguf"), 11436)
+    reuse_at = command.index("--cache-reuse")
+    assert command[reuse_at + 1] == str(CACHE_REUSE_MIN_CHUNK)
+    assert command.index("--host") < command.index("--port") < command.index("--model")
+    assert command[command.index("--model") + 1] == "model.gguf"

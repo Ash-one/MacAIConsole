@@ -550,6 +550,13 @@ curl http://127.0.0.1:11435/v1/chat/completions \
 reasoning 字段。assistant 历史消息可传 `reasoning_content`，输入也兼容
 `reasoning` 别名。
 
+请求可携带可选 `session_id`（不透明字符串）声明对话延续性，daemon 原样透传给
+Runner 侧，缺省时请求行为与序列化均与现状一致。两个 LLM Runner 依托常驻 worker
+复用多轮对话的 KV 前缀：MLX-LM 对与上一轮公共前缀一致的 token 增量 prefill（长
+历史下 TTFT 显著下降），llama.cpp 由 llama-server 的 `--cache-reuse` 在 slot 上
+分块复用；Metal 数值精度差异可能使缓存命中后的 temp=0 输出与全量 prefill 偶发
+分岔。
+
 ### OpenAI Python SDK
 
 ```python
