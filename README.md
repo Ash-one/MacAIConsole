@@ -23,17 +23,16 @@ MacAI 是面向 Apple Silicon 的开源本地 AI 运行管理系统，你可以�
 
 MacAI 原生支持大语言模型（LLM）、语音转文字（STT）和文字转语音（TTS）三大能力。在控制台「管理」页中预置了精选**开箱即用推荐模型**（支持一键下载与自动注册），同时也支持直接导入运行本地任意兼容格式的自定义模型：
 
-| 类型 | 模型名称 / ID | 驱动引擎 | 来源 / 格式 | 预估内存 | 特点与说明 |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **LLM**（对话/文本） | **MiniCPM5 2B MLX 4-bit**<br>`MiniCPM5-2B-MLX` | `org.macai.mlx-lm` | `openbmb/MiniCPM5-2B-MLX`<br>(MLX 目录) | ~2.5 GB | **[开箱推荐]** 端侧旗舰通用大模型，Metal 原生加速，长上下文与工具调用优化 |
-| **LLM**（对话/文本） | **SmolLM2 135M Instruct 8-bit**<br>`SmolLM2-135M-Instruct-8bit` | `org.macai.mlx-lm` | `mlx-community/SmolLM2-135M-Instruct-8bit`<br>(MLX 目录) | ~300 MB | **[轻量体验]** 极低内存占用，适合快速验证与低显存设备 |
-| **LLM**（对话/文本） | **通用 GGUF 模型**<br>*(如 Qwen / Llama / DeepSeek 等)* | `org.macai.llama.cpp` | 本地 `.gguf` 单文件 | 视权重而定 | 支持本地直接导入并运行任意兼容的 GGUF 格式模型 |
-| **STT**（语音转文字） | **Whisper Large v3 Turbo Q5**<br>`whisper-large-v3-turbo-q5` | `org.macai.whisper.cpp` | `ggerganov/whisper.cpp`<br>(ggml `.bin` 文件) | ~570 MB | **[开箱推荐]** 高速多语言转写，支持可选 Core ML / Metal 加速 |
-| **STT**（语音转文字） | **Qwen3-ASR 0.6B MLX 4-bit**<br>`Qwen3-ASR-0.6B-MLX-4bit` | `org.macai.qwen3-asr` | `mlx-community/Qwen3-ASR-0.6B-4bit`<br>(MLX 目录) | ~800 MB | **[开箱推荐]** 新一代高效语音识别，中文与混合语言识别精度优异 |
-| **STT**（语音转文字） | **sherpa-onnx Zipformer zh-int8**<br>`sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30` | `org.macai.sherpa-onnx` | `csukuangfj/...`<br>(ONNX 目录) | ~400 MB | 专注中文流式识别与长音频切片转写，CPU 轻量低功耗运行 |
-| **TTS**（文字转语音） | **Kokoro 82M zh**<br>`kokoro-82m-zh` | `org.macai.kokoro` | `1038lab/Kokoro-82M-zh-MLX`<br>(MLX 目录) | ~400 MB | **[开箱推荐]** 高品质多音色语音合成，内置 20+ 款中英文音色 |
-| **TTS**（文字转语音） | **Qwen3-TTS 0.6B CustomVoice 4-bit**<br>`Qwen3-TTS-0.6B-CustomVoice-4bit` | `org.macai.qwen3-tts` | `mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit`<br>(MLX 目录) | ~1.7 GB | **[开箱推荐]** 表现力丰富，支持 9 款角色音色与情感指令控制 |
-| **TTS**（文字转语音） | **macOS 内置语音** (`macos_say`) | 内置系统 Provider | macOS 系统合成器 | 系统级（极小） | 零权重下载开销，即刻发声 |
+| 类型 | 模型名称 / ID | 驱动引擎  | 预估内存 | 特点与说明 |
+| :--- | :--- | :--- | :--- |  :--- |
+| **LLM**（对话/文本） | **MiniCPM5 2B MLX 4-bit** | `org.macai.mlx-lm` | ~2.5 GB | **[开箱推荐]** 端侧旗舰通用大模型，Metal 原生加速，长上下文与工具调用优化 |
+| **LLM**（对话/文本） | **通用 GGUF 模型** | `org.macai.llama.cpp` | 视权重而定 | 支持本地直接导入并运行任意兼容的 GGUF 格式模型 |
+| **STT**（语音转文字） | **Whisper Large v3 Turbo Q5** | `org.macai.whisper.cpp` | ~570 MB | **[开箱推荐]** 高速多语言转写，支持可选 Core ML / Metal 加速 |
+| **STT**（语音转文字） | **Qwen3-ASR 0.6B MLX 4-bit** | `org.macai.qwen3-asr` | ~800 MB | **[开箱推荐]** 新一代高效语音识别，中文与混合语言识别精度优异 |
+| **STT**（语音转文字） | **sherpa-onnx Zipformer zh-int8** | `org.macai.sherpa-onnx`  | ~400 MB | 专注中文流式识别与长音频切片转写，CPU 轻量低功耗运行 |
+| **TTS**（文字转语音） | **Kokoro 82M zh** | `org.macai.kokoro` | ~400 MB | **[开箱推荐]** 高品质多音色语音合成，内置 20+ 款中英文音色 |
+| **TTS**（文字转语音） | **Qwen3-TTS 0.6B CustomVoice 4-bit** | `org.macai.qwen3-tts` |  ~1.7 GB | **[开箱推荐]** 表现力丰富，支持 9 款角色音色与情感指令控制 |
+| **TTS**（文字转语音） | **macOS 内置语音** (`macos_say`) | 内置系统 Provider | 系统级（极小） | 零权重下载开销，即刻发声 |
 
 > [!TIP]
 > - **一键下载**：在 `MacAIConsole` 侧边栏进入**「管理」**页，先安装对应引擎，再在“推荐模型”卡片点击**「下载」**，daemon 将自动在后台断点续传下载并完成注册。
@@ -43,7 +42,7 @@ MacAI 原生支持大语言模型（LLM）、语音转文字（STT）和文字�
 
 1. **安装应用**：下载并打开 `MacAIConsole.dmg`，将 `MacAIConsole.app` 拖入 `Applications`（应用程序）文件夹。
 2. **首次打开绕过安全拦截（Gatekeeper）**：
-   - 现阶段版本采用本地 Ad-hoc 代码签名，尚未接入 Apple 付费开发者证书公证。从网络接收下载后打开若提示“已损坏，无法打开。你应该将它移到废纸篓”或“未知的开发者”，请在终端执行：
+   - 从网络接收下载后打开若提示“已损坏，无法打开。你应该将它移到废纸篓”或“未知的开发者”，请在终端执行：
      ```bash
      xattr -cr /Applications/MacAIConsole.app
      ```
