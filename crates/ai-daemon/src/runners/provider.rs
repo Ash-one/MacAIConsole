@@ -301,11 +301,14 @@ impl Provider for RunnerProvider {
 
     async fn status(&self) -> ProviderStatus {
         let bindings = self.bindings.read().await;
-        let environment = bindings.first().and_then(|binding| {
-            self.instances
-                .environments()
-                .status(&binding.environment_id)
-        });
+        // 环境状态按 manifest runtime.id 查询，而非依赖 bindings 首项：脚本
+        // Runner 在第一个模型注册前没有任何绑定，旧实现因此恒报 unavailable，
+        // GUI 的「注册并加载」按钮被死锁，首个模型无法从 GUI 注册。
+        let environment_id = match bindings.first() {
+            Some(binding) => binding.environment_id.clone(),
+            None => self.default_environment_id().await,
+        };
+        let environment = self.instances.environments().status(&environment_id);
         let available = environment
             .as_ref()
             .is_some_and(|status| status.phase == crate::runners::EnvironmentPhase::Ready);

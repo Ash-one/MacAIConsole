@@ -90,6 +90,28 @@ async fn fixture(
     RunnerProvider,
     Arc<RunnerInstanceManager>,
 ) {
+    let (root, provider, instances, package) = setup(label).await;
+    // uv 不可用时测试在环境安装步骤失败；CI 固定安装 uv 0.9.21。
+    let binding = ai_daemon::runners::RunnerModelBinding {
+        model_id: "fake-model".to_string(),
+        profile: ModelProfile::load(&package.join("profiles/fake.toml")).unwrap(),
+        environment_id: "org.example.env".to_string(),
+        artifact_root: package.clone(),
+    };
+    provider.bind_model(binding).await;
+    (root, provider, instances)
+}
+
+/// 无绑定的 provider + 已发现的 fake Runner package。环境只在 load/ensure
+/// 时安装；需要 Ready 环境的测试自行调用 ensure_environment。
+async fn setup(
+    label: &str,
+) -> (
+    std::path::PathBuf,
+    RunnerProvider,
+    Arc<RunnerInstanceManager>,
+    std::path::PathBuf,
+) {
     let root = test_root(label);
     let package = root.join("fake");
     std::fs::create_dir_all(package.join("profiles")).unwrap();
@@ -129,16 +151,7 @@ async fn fixture(
         instances.clone(),
         temp_root,
     );
-
-    // uv 不可用时测试在环境安装步骤失败；CI 固定安装 uv 0.9.21。
-    let binding = ai_daemon::runners::RunnerModelBinding {
-        model_id: "fake-model".to_string(),
-        profile: ModelProfile::load(&package.join("profiles/fake.toml")).unwrap(),
-        environment_id: "org.example.env".to_string(),
-        artifact_root: package.clone(),
-    };
-    provider.bind_model(binding).await;
-    (root, provider, instances)
+    (root, provider, instances, package)
 }
 
 fn speech_request() -> SpeechRequest {
@@ -229,6 +242,56 @@ async fn output_directory_is_cleaned_after_success() {
     assert!(
         leftovers.is_empty(),
         "request output dirs must be cleaned: {leftovers:?}"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn unbound_provider_reports_available_once_environment_is_ready() {
+    // 回归（2026-09-13）：status 的环境查询依赖 bindings 首项，脚本 Runner 在
+    // 首个模型注册前没有任何绑定，available 恒为 false，GUI 的「注册并加载」
+    // 按钮被死锁——首个模型永远无法从 GUI 注册。环境 Ready 的未绑定 provider
+    // 必须报告 available=true（ready 仍为 false，等待首个绑定）。
+    let (root, provider, instances, _package) = setup("unboundavailable").await;
+    let before = provider.status().await;
+    assert!(
+        !before.available,
+        "环境未安装时未绑定 provider 不可用: {:?}",
+        before.reason
+    );
+    assert_eq!(
+        before.reason.as_deref(),
+        Some("no Runner-backed model is bound")
+    );
+
+    let descriptor = instances
+        .discovered()
+        .into_iter()
+        .find(|entry| {
+            entry
+                .manifest
+                .as_ref()
+                .is_some_and(|m| m.id == "org.example.fake")
+        })
+        .expect("fake runner must be discovered");
+    let manifest = descriptor
+        .manifest
+        .expect("discovered runner has a manifest");
+    instances
+        .environments()
+        .ensure_environment(&manifest, &descriptor.root, Duration::from_secs(120))
+        .await
+        .expect("environment install");
+    let status = provider.status().await;
+    assert!(
+        status.available,
+        "Ready 环境让未绑定 provider 可用: {:?}",
+        status.reason
+    );
+    assert!(!status.ready, "未绑定模型时不 ready");
+    assert_eq!(
+        status.reason.as_deref(),
+        Some("no Runner-backed model is bound")
     );
     let _ = std::fs::remove_dir_all(root);
 }
