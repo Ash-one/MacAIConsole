@@ -349,13 +349,9 @@ struct RunningModelSettingsView: View {
     let model: LoadedModel
 
     @State private var keepAlive: String
-    @State private var voice: String
     @State private var contextLengthDraft: String
     @State private var repoModel: RepoModel?
     @State private var isReloading = false
-    @State private var voices: [String] = []
-    @State private var voicesLoaded = false
-    @State private var isPreviewing = false
 
     private struct KeepAliveChoice: Identifiable {
         let label: String
@@ -377,7 +373,6 @@ struct RunningModelSettingsView: View {
         self.model = model
         let contextLength = model.contextLength ?? ModelRepository.contextLength(for: model.id)
         _keepAlive = State(initialValue: model.keepAlive?.isEmpty == false ? model.keepAlive! : "always")
-        _voice = State(initialValue: model.defaultVoice?.isEmpty == false ? model.defaultVoice! : "zf_001")
         _contextLengthDraft = State(initialValue: Self.displayContextLength(contextLength))
     }
 
@@ -504,33 +499,7 @@ struct RunningModelSettingsView: View {
 
                 if modelType == "tts" {
                     Section("语音") {
-                        if voices.isEmpty {
-                            HStack {
-                                Text(voicesLoaded ? "未找到可用音色" : "正在读取音色…")
-                                    .foregroundStyle(.secondary)
-                                if !voicesLoaded { ProgressView().controlSize(.small) }
-                            }
-                        } else {
-                            Picker("默认音色", selection: $voice) {
-                                ForEach(voices, id: \.self) { item in
-                                    Text(item).tag(item)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .onChange(of: voice) { _, value in
-                                Task { await controller.setVoice(model.id, voice: value) }
-                            }
-                        }
-                        Button {
-                            Task { await previewVoice() }
-                        } label: {
-                            Label("试听", systemImage: "speaker.wave.2.fill")
-                        }
-                        .labelStyle(.titleAndIcon)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(isPreviewing || controller.phase != .online)
-                        .help("用当前音色合成一句示例文本并播放")
+                        VoiceSelectionControl(modelID: model.id)
                     }
                 }
             }
@@ -548,41 +517,6 @@ struct RunningModelSettingsView: View {
         }
         .task(id: model.id) {
             repoModel = await ModelRepository.scanInBackground().first { $0.modelID == model.id }
-            guard modelType == "tts", !voicesLoaded else { return }
-            defer { voicesLoaded = true }
-            if let response = try? await controller.voices(for: model.id) {
-                voices = response.voices
-                if let defaultVoice = response.defaultVoice, !defaultVoice.isEmpty {
-                    voice = defaultVoice
-                }
-            }
-        }
-    }
-
-    /// 试听：用当前音色合成示例文本并播放（复用模型管理页的 afplay 方案）。
-    private func previewVoice() async {
-        isPreviewing = true
-        defer { isPreviewing = false }
-        do {
-            let audio = try await controller.api.synthesizeSpeech(
-                modelID: model.id,
-                text: "你好，我是 Mac AI 的语音合成，很高兴为你朗读这段文字。",
-                voice: voice
-            )
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("macai-preview-\(UUID().uuidString).wav")
-            try audio.write(to: url)
-            defer { try? FileManager.default.removeItem(at: url) }
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
-            process.arguments = [url.path]
-            try process.run()
-            process.waitUntilExit()
-            if process.terminationStatus != 0 {
-                controller.lastError = "播放失败（afplay 退出码 \(process.terminationStatus)）"
-            }
-        } catch {
-            controller.lastError = "试听失败：\(DaemonController.message(for: error))"
         }
     }
 

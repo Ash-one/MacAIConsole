@@ -32,6 +32,8 @@
 
 ## 当前决策记录
 
+- [TTS 音色滚轮快速切换与即时试听](2026-09-13-tts-voice-wheel-selection.md)——`implemented`
+  （共享 `VoiceSelectionControl`：NSPopUpButton 子类滚轮步进，settle 后防抖持久化 + 可关自动试听，AVAudioPlayer 可打断播放；运行状态页、模型详情页、管理页三处平行试听实现收敛为一，daemon 与 wire 契约零改动。）
 - [运行状态页系统内存压力实时折线图](2026-09-13-runtime-memory-pressure-line-chart.md)——`implemented`
   （GUI 轮询侧环形缓冲积累 `/api/runtime` 内存读数，Swift Charts 面积折线图替换瞬时压力条；daemon 与 wire 契约零改动。）
 - [LLM 多轮对话 Prompt Cache（KV 前缀复用）](2026-09-12-llm-multi-turn-prompt-cache.md)——`proposed`

@@ -44,7 +44,6 @@ struct ModelDetailSheet: View {
     // 操作状态
     @State private var isPerformingAction = false
     @State private var actionError: String?
-    @State private var isPreviewingTTS = false
     @State private var copiedPath = false
 
     // MARK: - 计算属性与数据映射
@@ -169,7 +168,7 @@ struct ModelDetailSheet: View {
                         let runners = inspection.matches.map(\.runner).joined(separator: ", ")
                         return ("多重匹配歧义（Ambiguous）", "匹配到多个 Runner（\(runners)），需显式指定 provider 才能加载", false)
                     case "unsupported":
-                        let diag = inspection.diagnostics.first ?? "未匹配到任何已安装 Runner 的目录探测规则"
+                        let diag = inspection.diagnostics.first ?? "暂未识别到可承载的 Runner：请检查模型是否下载完整，或新建/安装对应 Runner"
                         return ("未受支持的目录（Unsupported）", diag, false)
                     default:
                         return ("目录检测状态：\(inspection.status)", inspection.diagnostics.first ?? "暂无诊断信息", false)
@@ -213,6 +212,9 @@ struct ModelDetailSheet: View {
                 }
                 runnerRecognitionCard
                 fileSpecificationCard
+                if modelType == "tts" {
+                    voiceAuditionCard
+                }
                 if modelType == "llm" {
                     contextSettingsCard
                     if case .registered = target {
@@ -461,6 +463,14 @@ struct ModelDetailSheet: View {
         }
     }
 
+    // MARK: - 音色与试听卡片（TTS 专属）
+
+    private var voiceAuditionCard: some View {
+        SectionCard(title: "音色与试听", icon: "speaker.wave.2") {
+            VoiceSelectionControl(modelID: modelID, allowsAudition: isLoaded)
+        }
+    }
+
     // MARK: - 上下文长度设置卡片（LLM 专属）
 
     private var contextSettingsCard: some View {
@@ -662,21 +672,13 @@ struct ModelDetailSheet: View {
                 }
 
             case .repo(let model):
-                if modelType == "tts" && isLoaded {
-                    Button {
-                        performTTSPreview(model.modelID)
-                    } label: {
-                        Label(isPreviewingTTS ? "播放中…" : "试听", systemImage: "speaker.wave.2.fill")
-                    }
-                    .disabled(isPreviewingTTS)
-                }
-
                 Button {
                     performRepoRegister(model)
                 } label: {
                     Label("注册并加载", systemImage: "arrow.triangle.2.circlepath")
                 }
-                .disabled(model.detectionError != nil || controller.phase != .online)
+                .disabled(model.detectionError != nil || controller.phase != .online || !canRouteDirectory)
+                .help(repoRegisterHelp)
 
             case .profile(let profile):
                 if !profile.isDownloaded {
@@ -766,6 +768,23 @@ struct ModelDetailSheet: View {
             return model.isDirectory
         }
         return false
+    }
+
+    /// 与列表行 RepoModelRow 的同名守卫一致：目录型模型必须被探测器唯一识别且 Runner 可用才能注册。
+    private var canRouteDirectory: Bool {
+        guard case .repo(let model) = target else { return true }
+        return !model.isDirectory
+            || (inspection?.status == "recognized" && inspection?.runnerAvailable == true)
+    }
+
+    private var repoRegisterHelp: String {
+        if case .repo(let model) = target, model.isDirectory,
+           let inspection, inspection.status != "recognized" {
+            return inspection.status == "ambiguous"
+                ? "多个 Runner 匹配；请使用 CLI 显式指定 provider"
+                : "暂未识别到可承载的 Runner：请检查模型是否下载完整，或新建/安装对应 Runner"
+        }
+        return "注册到运行时并立即加载"
     }
 
     private func applyContextLength() {
@@ -874,31 +893,6 @@ struct ModelDetailSheet: View {
             defer { isPerformingAction = false }
             if await controller.installRecommended(profile) {
                 await onUpdate()
-            }
-        }
-    }
-
-    private func performTTSPreview(_ id: String) {
-        isPreviewingTTS = true
-        Task {
-            defer { isPreviewingTTS = false }
-            do {
-                let audio = try await controller.api.synthesizeSpeech(
-                    modelID: id,
-                    text: "你好，我是 Mac AI 的语音合成，很高兴为你朗读这段文字。",
-                    voice: "zf_001"
-                )
-                let url = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("macai-preview-\(UUID().uuidString).wav")
-                try audio.write(to: url)
-                defer { try? FileManager.default.removeItem(at: url) }
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
-                process.arguments = [url.path]
-                try process.run()
-                process.waitUntilExit()
-            } catch {
-                actionError = "试听失败：\(DaemonController.message(for: error))"
             }
         }
     }
