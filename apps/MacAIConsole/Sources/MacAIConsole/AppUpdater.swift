@@ -10,6 +10,8 @@ enum AppUpdater {
     static let dmgAssetName = "MacAIConsole.dmg"
     static let checksumsAssetName = "checksums.txt"
     static let releasesAPI = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
+    static let repositoryURL = URL(string: "https://github.com/\(repository)")!
+    static let releasesURL = URL(string: "https://github.com/\(repository)/releases")!
 
     /// 当前 bundle 的展示版本（CFBundleShortVersionString），无 bundle 时为 nil。
     static var currentVersion: String? {

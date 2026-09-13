@@ -14,7 +14,7 @@
 
 1. **更新源**：GitHub Releases API（`https://api.github.com/repos/Ash-one/MacAIConsole/releases/latest`，仓库常量 `AppUpdater.repository`），不新增 appcast 资产或 CI 改动；`/releases/latest` 天然排除 draft 与 prerelease。
 2. **实现位置**：`apps/MacAIConsole/Sources/MacAIConsole/AppUpdater.swift`（纯逻辑 + 网络检查 + 安装替换）与 `Views/UpdateSection.swift`（UI）。更新只针对 GUI 自身的 `.app` bundle，属于 GUI 生命周期，不进入 daemon、不新增 `/api` 端点；daemon 在安装前由 `AppUpdateState.setInstallPreparation` 注入的 `DaemonController.stopDaemon()` 停止，新实例按设置重新拉起。
-3. **更新 UI**：收敛到「设置」页「关于」Section（设置页唯一 owner 不变）：显示当前版本（`CFBundleShortVersionString`）、手动检查按钮、状态反馈（检查中 / 已最新 / 发现新版本 / 下载中 / 安装中 / 失败原因）与"启动时自动检查更新"开关（`AppSettings.autoUpdateCheckKey`，默认开启，启动 3 秒后静默检查一次，仅发现新版本才提示）。
+3. **更新 UI**：收敛到「设置」页「关于」Section（设置页唯一 owner 不变）：显示当前版本（`CFBundleShortVersionString`）、手动检查按钮、状态反馈（检查中 / 已最新 / 发现新版本 / 下载中 / 安装中 / 失败原因）与"启动时自动检查更新"开关（`AppSettings.autoUpdateCheckKey`，默认开启，启动 3 秒后静默检查一次，仅发现新版本才提示）。「关于」Section 另设「项目主页」行，提供 GitHub 仓库与更新日志（Releases）两个外链，指向 `AppUpdater.repositoryURL` / `releasesURL`（均派生自 `repository` 常量）；GitHub 标志以 SwiftUI Path 自绘（`Views/GitHubMark.swift`，Simple Icons 24×24 路径移植），不引入图片资产或第三方依赖。外链是信息导航而非更新能力，不 gated by `canInstall`，开发构建同样可见。
 4. **安装流程**（`AppUpdateState.downloadAndInstall`）：`URLSession.download` 将 DMG 与 `checksums.txt` 落盘下载（避免整包驻留内存）→ `FileHandle` 流式 SHA-256 校验 → 停止 aiworkd 并轮询等待其退出（最长 8 秒，避免新实例与垂死进程争抢 11435 端口）→ `hdiutil attach -mountpoint` 至临时目录 → 将当前 `.app` 移到临时备份、拷贝新 `.app` 回原路径（拷贝失败回滚）→ 卸载镜像并清理临时目录 → `open` 新 bundle 并 `exit(0)`。由于 `exit` 不展开 `defer`，现场清理显式发生在退出之前；子进程调用失败抛 `installFailed`（携带退出码）并触发恢复回调重新拉起 daemon。
 5. **版本号单一来源**：`build-app.sh` 从 workspace `Cargo.toml` 读取 `version` 注入 `CFBundleShortVersionString`（此前硬编码 0.1.0）；约定 release tag 与 workspace 版本一致（`v<version>`）。比较逻辑为数值化 semver 段比较，容忍 `v` 前缀与缺段；无 bundle 版本（开发构建）不视为可更新目标。
 6. **守护边界**：`AppUpdater.canInstall` 要求运行于 `.app` bundle 内，否则设置页不渲染更新区块且静默检查跳过；启动静默检查在 DEBUG 构建下整体跳过（手动检查仍可用，便于本地调试），避免开发构建被发布版本覆盖。
@@ -45,4 +45,5 @@
 | 全量 Swift 回归 | `swift test --enable-xctest`（57 tests, 0 failures） | Passed |
 | 版本号注入 | `build-app.sh release package` 构建产物 `Info.plist` 的 `CFBundleShortVersionString` 与 `Cargo.toml` 一致（0.1.0） | Passed |
 | 更新源与资产名匹配 | `GET /repos/Ash-one/MacAIConsole/releases/latest` 返回 v0.1.3，资产含 `MacAIConsole.dmg` 与 `checksums.txt` | Passed（真实 API） |
+| 「项目主页」行 GitHub 标志渲染正确且链接指向仓库 / Releases | `GitHubMark` 离屏渲染（240px，亮/暗底）与官方 invertocat 对照一致；`swift test --enable-xctest` 全量回归 | Passed |
 | 端到端"检查→下载→安装→重启" | 需已安装的 DMG 版应用与更新的发布版本同时存在，CI 无法自动化 GUI 自替换 | Not run：待下一次真实发布后手动验证 |

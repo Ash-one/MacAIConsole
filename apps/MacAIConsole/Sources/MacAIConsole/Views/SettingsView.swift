@@ -145,6 +145,20 @@ struct SettingsView: View {
                 if AppUpdater.canInstall {
                     UpdateSection()
                 }
+                LabeledContent {
+                    HStack(spacing: 16) {
+                        Link(destination: AppUpdater.repositoryURL) {
+                            Label { Text("GitHub") } icon: {
+                                GitHubMark().frame(width: 13, height: 13)
+                            }
+                        }
+                        Link(destination: AppUpdater.releasesURL) {
+                            Label("更新日志", systemImage: "doc.text")
+                        }
+                    }
+                } label: {
+                    Text("项目主页")
+                }
             }
         }
         .formStyle(.grouped)
