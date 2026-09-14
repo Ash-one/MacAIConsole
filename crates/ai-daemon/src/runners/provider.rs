@@ -682,7 +682,7 @@ impl ai_core::provider::ChatProvider for RunnerProvider {
             let infer_model = model.clone();
             let infer_completion = completion_id.clone();
             let driver = tokio::spawn(async move {
-                let mut tx = driver_tx;
+                let tx = driver_tx;
                 let events = instances.infer(
                     &infer_runner_id,
                     "chat.v1",

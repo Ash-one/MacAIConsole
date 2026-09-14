@@ -293,12 +293,12 @@ final class AppUpdateState {
             }
             try? fileManager.removeItem(at: backup)
         } catch {
-            try? await runProcess("/usr/bin/hdiutil", ["detach", mountPoint.path, "-quiet"])
+            _ = try? await runProcess("/usr/bin/hdiutil", ["detach", mountPoint.path, "-quiet"])
             throw error
         }
 
         // exit(0) 不展开 defer，现场清理必须显式发生在退出之前。
-        try? await runProcess("/usr/bin/hdiutil", ["detach", mountPoint.path, "-quiet"])
+        _ = try? await runProcess("/usr/bin/hdiutil", ["detach", mountPoint.path, "-quiet"])
         try? fileManager.removeItem(at: workDir)
 
         try await runProcess("/usr/bin/open", [currentBundle.path])

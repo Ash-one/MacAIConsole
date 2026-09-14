@@ -32,6 +32,8 @@
 
 ## 当前决策记录
 
+- [死代码清理与测试专用 Provider 收敛进 cfg(test)](2026-09-14-dead-code-cleanup-and-test-only-internalization.md)——`implemented`
+  （删除 HealthResponse、ai-cli serde/tokio、ai-daemon clap、kokoro 多余 json 导入；providers 测试 fixture 与 Runtime::new 显式 cfg(test)，release 二进制不再包含，bin 死代码告警清零；文档化保留项与复核方法。）
 - [TTS 音色清单覆盖参考音频型 Runner](2026-09-14-tts-voice-list-covers-reference-wav-runners.md)——`implemented`
   （voices 清单同时枚举 `*.safetensors` 文件名与 `*.wav` 相对路径，default_voice 始终保留；修复克隆型 Runner 在 GUI 无音色可选、default_voice 注册后仍不可见的问题。）
 - [Runner Provider 可用性与模型绑定解耦](2026-09-13-runner-provider-availability-unbound.md)——`implemented`

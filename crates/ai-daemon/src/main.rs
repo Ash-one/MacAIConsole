@@ -4,6 +4,8 @@
 //! load/unload。默认只绑定 127.0.0.1:11435。
 
 mod audio;
+// mock / macos-say 只由测试组合（Runtime::new）注入，不参与生产编译。
+#[cfg(test)]
 mod providers;
 mod pull;
 mod registry;

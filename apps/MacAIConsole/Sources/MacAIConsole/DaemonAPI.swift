@@ -2,17 +2,6 @@ import Foundation
 
 // MARK: - 数据模型（对齐 aiworkd 管理 API）
 
-struct HealthResponse: Decodable {
-    let status: String
-    let version: String
-    let modelCount: Int
-
-    enum CodingKeys: String, CodingKey {
-        case status, version
-        case modelCount = "model_count"
-    }
-}
-
 struct RuntimeInfo: Decodable {
     var version: String
     var pid: UInt32

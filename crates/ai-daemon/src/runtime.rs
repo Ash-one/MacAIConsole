@@ -22,6 +22,7 @@ use ai_core::response::{
 };
 use ai_core::AIError;
 
+#[cfg(test)]
 use crate::providers::{MacOSSayProvider, MockProvider};
 use crate::registry::{RegistryStore, StoredProfile};
 use crate::scheduler;
@@ -87,6 +88,7 @@ impl Drop for ModelLease {
 
 impl Runtime {
     /// 纯内存构造，仅供单元测试：额外注入 mock 与 macos-say 测试 provider。
+    #[cfg(test)]
     pub fn new() -> Self {
         let mut runtime = Self::with_options_and_seed(None, Vec::new(), HashMap::new());
         runtime.memory_budget = None;
@@ -95,8 +97,9 @@ impl Runtime {
     }
 
     /// 注入测试用 provider（mock 回显、macos-say 系统 TTS）。
-    /// 它们不进入生产 providers 表——管理面（/api/providers、/v1/models）
-    /// 只展示真实引擎；macos-say 仅作为 `macai speak` 未指定模型时的兜底能力。
+    /// 它们不进入生产 providers 表——生产 Runtime 的所有后端都由
+    /// bootstrap_runners 动态装配，`macai speak` 未指定模型时没有兜底。
+    #[cfg(test)]
     fn inject_test_providers(&mut self) {
         let mock = Arc::new(MockProvider);
         self.providers.insert("mock".to_string(), mock.clone());
@@ -362,6 +365,9 @@ impl Runtime {
 
     /// 注册一个模型。注册不等于常驻；初始状态始终为 unloaded。
     /// 已存在时更新规格（保留状态与使用时间）。
+    /// 生产注册路径携带 Profile 走 `register_with_profile`；无 Profile 的便捷
+    /// 入口只有单元测试使用。
+    #[cfg(test)]
     pub async fn register(&self, spec: ModelSpec) {
         self.register_with_profile(spec, None).await;
     }
