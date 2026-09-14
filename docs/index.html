@@ -434,6 +434,7 @@
       <a href="#providers">模型能力</a>
       <a href="#console">控制台</a>
       <a href="#quickstart">快速开始</a>
+      <a href="guide/">使用文档</a>
       <a href="#api">API</a>
     </div>
     <a class="nav-cta" href="https://github.com/GuanXuzeng/MacAI" target="_blank" rel="noopener">
@@ -683,6 +684,8 @@
           <li>「管理」页顶端置顶展示全部 7 个 Runner 引擎状态与一键安装控制</li>
           <li>模型仓库：注册、加载、卸载、改名与详细设置</li>
           <li>推荐模型一键下载（如 MiniCPM5 2B · MLX 4-bit）</li>
+          <li>输入 Hugging Face / ModelScope 仓库 ID，预览并下载模型到本地仓库</li>
+          <li>内置编辑器从模板新建单文件 Script Runner（PEP 723 · 依赖助手）</li>
           <li>Chat / STT / TTS 任务记录与详情回看</li>
           <li>GUI 与 daemon 双端日志，级别过滤着色</li>
           <li>菜单栏快速查看状态、启停 daemon</li>
@@ -862,13 +865,9 @@ macai transcribe · speak · voice · logging · serve</pre>
       <p class="sec-sub">项目还在活跃开发。当前实现状态以 README、代码和决策记录为准。</p>
     </div>
     <div class="roadmap-grid reveal">
-      <div class="rm">mlx-whisper / parakeet-mlx 适配</div>
-      <div class="rm">LLM / STT / TTS benchmark 框架（MLX vs llama.cpp 对比）</div>
-      <div class="rm">per-device 请求队列与持久任务回放</div>
-      <div class="rm">VAD、streaming STT 与 streaming TTS</div>
-      <div class="rm">GUI Chat、语音与 Hugging Face 下载界面</div>
-      <div class="rm">readiness / deep-health 与完整可观测性</div>
-      <div class="rm">Homebrew 分发、签名、公证与安装包</div>
+      <div class="rm">完整第三方 Runner package 的导入、更新与分发</div>
+      <div class="rm">Homebrew 分发、正式签名、公证与安装包</div>
+      <div class="rm">VAD 与 streaming STT / TTS 进阶支持</div>
       <div class="rm">发布版 API 稳定性承诺</div>
     </div>
   </div>
@@ -888,6 +887,7 @@ macai transcribe · speak · voice · logging · serve</pre>
         <a href="#features">特性</a>
         <a href="#architecture">架构</a>
         <a href="#quickstart">快速开始</a>
+        <a href="guide/">使用文档</a>
         <a href="#api">API</a>
         <a href="https://github.com/GuanXuzeng/MacAI/blob/main/README.md" target="_blank" rel="noopener">README</a>
       </div>
