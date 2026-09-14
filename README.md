@@ -7,12 +7,28 @@
 MacAI 是面向 Apple Silicon 的开源本地 AI 运行管理系统，你可以导入任意包括大语言模型（LLM）、语音转文字模型（STT）、文字转语音模型（TTS）在内的等多种 AI 模型，在一个 Mac 原生应用中利用 Mac Silicon 的 CoreML 与 Metal 加速，并以 OpenAI 兼容方式提供所有的本地服务，将所有语音隐私数据在本地完成转写和生成。
 > ⚠️项目处于开发阶段，适合本地开发、实验与个人工作流；目前无法承诺 API 稳定性和跨版本兼容。
 
+## 功能
+
+- **一站式配置 Apple GPU 加速的 AI 模型**： 包括大语言模型（LLM）、语音转文字模型（STT）、文字转语音模型（TTS），开箱下载即用所有推荐的开源 AI 模型，支持本地文件导入、Huggingface 下载、ModelScope 下载
+- **所有数据都在本地处理**：文字对话、语音转写、语音生成所有数据都在 Mac 上处理
+- **提供本地 AI 接口**：使用 OpenAI 兼容的格式调用，`/v1/chat/completions` `/v1/audio/transcriptions` `/v1/audio/speech`，无缝接入所有 AI 工具
+
+
+
+## 重要更新路线图
+
+- [x] LLM 现支持缓存保持，在守护进程退出前可以始终保留 prefill KV 缓存
+- [x] Runner 现在支持外部导入，可以通过 Prompt 指示 AI 生成 Runner 文件以获得任意模型的环境支持
+- [x] 为音色克隆模型提供自定义音色注册，当前支持命令行注册音色
+- [ ] 为自定义音色注册提供 GUI
+- [ ] Homebrew 分发、正式签名、公证与安装包
 
 ## 系统要求
 
 - Apple Silicon Mac
 - macOS 14 或更高版本
-- 源码构建额外需要：Rust stable toolchain、Xcode Command Line Tools、CMake、Python 3.12（若使用预打包 DMG，应用已自包含 `aiworkd` 与 `uv`，无需提前配置 Rust 或 Python 开发环境）
+- 使用`.DMG`安装，无需提前配置开发环境
+- 源码构建额外需要：Rust stable toolchain、Xcode Command Line Tools、CMake、Python 3.12
 
 仓库源码与 DMG 均不包含模型权重文件，所有推理产物均在本地受管目录按需生成或存储。
 
@@ -20,7 +36,7 @@ MacAI 是面向 Apple Silicon 的开源本地 AI 运行管理系统，你可以�
 ![](docs/imgs/MacAIConsole.png)
 
 > [!TIP]
-> 更系统的网页版使用说明见 **[docs/guide/](docs/guide/index.html)**：安装与 Gatekeeper 处理、控制台导览、引擎与模型管理、Chat / STT / TTS 实操、CLI 与 API 参考、按症状组织的故障排查。
+> 更系统的网页版使用说明见 **[docs/guide/](docs/guide/index.html)**（安装、控制台导览、模型实操与故障排查、开发者指南）。
 
 ### 当前支持与推荐模型
 
@@ -28,14 +44,14 @@ MacAI 原生支持大语言模型（LLM）、语音转文字（STT）和文字�
 
 | 类型 | 模型名称 / ID | 驱动引擎  | 预估内存 | 特点与说明 |
 | :--- | :--- | :--- | :--- |  :--- |
-| **LLM**（对话/文本） | **MiniCPM5 2B MLX 4-bit** | `org.macai.mlx-lm` | ~2.5 GB | **[开箱推荐]** 端侧旗舰通用大模型，Metal 原生加速，长上下文与工具调用优化 |
-| **LLM**（对话/文本） | **通用 GGUF 模型** | `org.macai.llama.cpp` | 视权重而定 | 支持本地直接导入并运行任意兼容的 GGUF 格式模型 |
-| **STT**（语音转文字） | **Whisper Large v3 Turbo Q5** | `org.macai.whisper.cpp` | ~570 MB | **[开箱推荐]** 高速多语言转写，支持可选 Core ML / Metal 加速 |
-| **STT**（语音转文字） | **Qwen3-ASR 0.6B MLX 4-bit** | `org.macai.qwen3-asr` | ~800 MB | **[开箱推荐]** 新一代高效语音识别，中文与混合语言识别精度优异 |
-| **STT**（语音转文字） | **sherpa-onnx Zipformer zh-int8** | `org.macai.sherpa-onnx`  | ~400 MB | 专注中文流式识别与长音频切片转写，CPU 轻量低功耗运行 |
-| **TTS**（文字转语音） | **Kokoro 82M zh** | `org.macai.kokoro` | ~400 MB | **[开箱推荐]** 高品质多音色语音合成，内置 20+ 款中英文音色 |
-| **TTS**（文字转语音） | **Qwen3-TTS 0.6B CustomVoice 4-bit** | `org.macai.qwen3-tts` |  ~1.7 GB | **[开箱推荐]** 表现力丰富，支持 9 款角色音色与情感指令控制 |
-| **TTS**（文字转语音） | **macOS 内置语音** (`macos_say`) | 内置系统 Provider | 系统级（极小） | 零权重下载开销，即刻发声 |
+| LLM | **MiniCPM5 2B MLX 4-bit** | `org.macai.mlx-lm` | ~2.5 GB | **[开箱推荐]** 端侧旗舰通用大模型，Metal 原生加速，长上下文与工具调用优化 |
+| LLM | **通用 GGUF 模型** | `org.macai.llama.cpp` | 视权重而定 | 支持本地直接导入并运行任意兼容的 GGUF 格式模型 |
+| STT | **Whisper Large v3 Turbo Q5** | `org.macai.whisper.cpp` | ~570 MB | **[开箱推荐]** 高速多语言转写，支持可选 Core ML / Metal 加速 |
+| STT | **Qwen3-ASR 0.6B MLX 4-bit** | `org.macai.qwen3-asr` | ~800 MB | **[开箱推荐]** 新一代高效语音识别，中文与混合语言识别精度优异 |
+| STT | **sherpa-onnx Zipformer zh-int8** | `org.macai.sherpa-onnx`  | ~400 MB | 专注中文流式识别与长音频切片转写，CPU 轻量低功耗运行 |
+| TTS | **Kokoro 82M zh** | `org.macai.kokoro` | ~400 MB | **[开箱推荐]** 高品质多音色语音合成，内置 20+ 款中英文音色 |
+| TTS | **Qwen3-TTS 0.6B CustomVoice 4-bit** | `org.macai.qwen3-tts` |  ~1.7 GB | **[开箱推荐]** 表现力丰富，支持 9 款角色音色与情感指令控制 |
+| TTS | **macOS 内置语音** (`macos_say`) | 内置系统 Provider | 系统级（极小） | 零权重下载开销，即刻发声 |
 
 > [!TIP]
 > - **一键下载**：在 `MacAIConsole` 侧边栏进入**「管理」**页，先安装对应引擎，再在“推荐模型”卡片点击**「下载」**，daemon 将自动在后台断点续传下载并完成注册。
@@ -51,7 +67,7 @@ MacAI 原生支持大语言模型（LLM）、语音转文字（STT）和文字�
      ```
    - 或前往 macOS「系统设置 → 隐私与安全性」，滑至最下方“安全性”区域，点击「仍要打开」。
 3. **首次配置与模型体验**：
-   - 启动 `MacAIConsole`（应用内置自包含的 `aiworkd` 守护进程与 `uv` 环境工具）；
+   - 启动 `MacAIConsole`；
    - 在左侧进入**「管理」**页，顶端「引擎」区点击**「安装」**所需引擎（如 `llama.cpp` 或 `mlx-lm`；Python 依赖由内置 `uv` 自动隔离部署，无需系统预装 Python）；
    - 在推荐模型列表点击**「下载」**（如 MiniCPM5 2B）；若网络较慢，可先在**「设置」**页将下载源切换为 `https://hf-mirror.com` 或配置代理；
    - 模型下载完成后即可直接在控制台加载启动，或通过本地 OpenAI 兼容 API（默认 `http://127.0.0.1:11435/v1`）接入任意客户端。
@@ -67,633 +83,18 @@ MacAI 原生支持大语言模型（LLM）、语音转文字（STT）和文字�
 ## 使用案例 2：为 CherryStudio 接入本地 LLM
 ![](docs/imgs/cherry_studio_sample.png)
 添加本地 API 地址： 
+
 ```
 http：//127.0.0.1:11435
 ```
 
 点击`获取模型列表`按钮会自动获取所有可提供的模型 ID
 
+## 使用案例 3：为 MacAI 增加新的模型和 Runner 支持
 
-<details>
-<summary><h2>
-从源码构建运行（开发者）</h2></summary>
+对于一个新的模型如果没有现有的 Runner 支持，可以自定义一个新的 Runner 支持。
 
-#### 1. 构建 workspace
-
-```bash
-cargo build --release --workspace
-```
-
-#### 2. 启动 daemon
-
-```bash
-./target/release/aiworkd
-```
-
-监听 `http://127.0.0.1:11435`。另开一个终端：
-
-```bash
-./target/release/macai status
-./target/release/macai list
-./target/release/macai ps
-```
-
-#### 3. 运行控制台 GUI（MacAIConsole）
-
-MacAIConsole 是基于 SwiftUI 构建的 macOS 原生图形控制台。作为无状态客户端，它通过 HTTP API 与 `aiworkd` 通信，提供开箱即用的引擎运维、推荐模型下载、模型加载控制与系统监控能力。
-
-**方式 A：一键联动构建并启动（推荐）**
-
-在本地开发调试时，可使用打包脚本一键编译前后端、打包自包含 App 并直接拉起：
-
-```bash
-cd apps/MacAIConsole
-scripts/build-app.sh release
-```
-
-该脚本会自动编译 Rust 后端（`aiworkd` 与 `macai`）和 SwiftUI 前端，并将 `uv` 工具与 `runners/` 目录组装至 `apps/MacAIConsole/build/MacAIConsole.app` 后自动拉起。之后如需单独启动已构建的应用：
-
-```bash
-open apps/MacAIConsole/build/MacAIConsole.app
-```
-
-**方式 B：快速以开发模式运行**
-
-若已经在步骤 2 中启动了 `./target/release/aiworkd`，亦可在 `apps/MacAIConsole` 目录下直接通过 Swift 启动开发版 GUI：
-
-```bash
-cd apps/MacAIConsole
-swift run
-```
-
-> [!TIP]
-> GUI 默认连接 `http://127.0.0.1:11435`。如果启动 GUI 时 daemon 尚未运行，GUI 会自动按顺序探测本地构建产物（`AIWORKD_PATH` → `target/release/aiworkd` → `target/debug/aiworkd`）并自动拉起守护进程。
-
-**通过 GUI 进行常用操作：**
-
-- **引擎安装与卸载**：进入侧边栏**「管理」**页，页面顶端「引擎」区块分类展示了全部 7 个 Runner 引擎（`llama.cpp`、`whisper.cpp`、`mlx-lm`、`kokoro`、`qwen3-asr`、`qwen3-tts`、`sherpa-onnx`）的环境状态。点击「安装」可由 daemon 配置依赖；已就绪引擎可从右键菜单卸载受管环境和原生引擎文件，之后可重新安装。正在使用该引擎的模型需要先卸载。
-- **推荐模型下载**：在「管理」页可浏览各引擎的精选推荐模型（如 MiniCPM5 2B、Kokoro-82M 等），点击「下载」即可由 daemon 在后台断点续传下载并存入本地受管目录（`~/Library/Application Support/MacAIConsole/Models/`）。如需使用国内镜像加速，可在**「设置」**页将下载源切换为 `https://hf-mirror.com`。
-- **管理页显示偏好**：引擎和推荐模型条目可通过右键菜单忽略；设置页可分别恢复全部条目，已下载的推荐模型不会重新显示。
-- **模型生命周期与参数设置**：下载完成后可直接在模型卡片上一键「启动」加载到内存或「卸载」；点击模型条目可进入详情页调整 `keep-alive` 空闲驻留时间、上下文长度或默认 TTS 音色。
-- **应用内更新**：DMG 安装版可在**「设置 → 关于」**检查 GitHub Releases 最新版本；发现新版本后下载 `MacAIConsole.dmg`，经 `checksums.txt` 的 SHA-256 校验通过后替换当前应用并自动重启（安装前会停止 aiworkd，新实例按设置重新拉起）。默认启动时静默检查一次（DEBUG 构建跳过），可在设置页关闭。开发构建（非 `.app` bundle）不提供更新入口。
-- **状态与任务观测**：
-  - **「运行状态」**：实时查看系统内存压力（5 分钟滑动折线与面积填充，随在线轮询逐点更新）、MacAI 内存预算、已加载模型常驻内存（RSS）与 Metal/ANE 加速状态。
-  - **「任务」**：实时查看会话请求流（Chat / STT / TTS）与每个请求的耗时与输入输出。
-  - **「日志」**：实时查看 daemon 与 GUI 的日志输出，支持按级别过滤和着色。
-
-<details>
-
-<summary>引擎与模型</summary>
-
-#### 4. 安装 llama.cpp 引擎（Runner）
-
-llama.cpp 已收敛至 Runner 架构（`org.macai.llama.cpp`）。引擎安装通过 daemon 统一入口执行——可经由 GUI「管理」页顶端「引擎」区块一键安装，或直接调用管理 API：
-
-```bash
-curl -X POST http://127.0.0.1:11435/api/runners/org.macai.llama.cpp/install
-```
-
-安装流程会自动同步 uv 受管的适配器环境，并下载验证过的 llama.cpp 预编译二进制（依赖 manifest `[engine]` 固定 tag 与 sha256 校验）到：
-`~/Library/Application Support/MacAIConsole/Engines/org.macai.llama.cpp/`。
-
-若本地已有兼容版本的可执行文件，可通过环境变量显式覆盖：
-
-```bash
-export MACAI_LLAMA_SERVER=/absolute/path/to/llama-server
-```
-
-注册并运行一个本地 GGUF：
-
-```bash
-./target/release/macai load /path/to/model.gguf \
-  --id local-model \
-  --type llm \
-  --keep-alive 5m \
-  --context-length 4096
-
-./target/release/macai chat local-model "Hello" \
-  --system "Answer concisely" \
-  --temperature 0.2 \
-  --max-tokens 256
-
-./target/release/macai tasks --limit 10
-./target/release/macai providers
-./target/release/macai unload local-model
-```
-
-常用生命周期管理：
-- 加载已注册模型：`./target/release/macai start <model>`
-- 调整空闲驻留时间：`./target/release/macai keep-alive <model> 30m`
-- 重命名模型 ID（运行中模型将先安全停用）：`./target/release/macai rename <old_id> <new_id>`
-- 注销模型记录（保留文件）：`./target/release/macai remove <model>`
-- TTS 音色查看与默认设置：`./target/release/macai voice <model>` 或 `./target/release/macai voice <model> <voice>`
-
-#### 5. 安装 whisper.cpp 引擎（Runner）
-
-```bash
-curl -X POST http://127.0.0.1:11435/api/runners/org.macai.whisper.cpp/install
-./scripts/download-whisper-model.sh base
-```
-
-安装流程会同步轻量适配器环境，校验 manifest 声明的 whisper.cpp 官方源码归档，并在临时暂存区构建静态链接的常驻 `whisper-server`，随后原子替换至：
-
-```text
-~/Library/Application Support/MacAIConsole/Engines/org.macai.whisper.cpp/build/bin/whisper-server
-.build/models/ggml-base.bin
-```
-
-若本机已有对应版本的 server 二进制，可通过环境变量覆盖：
-
-```bash
-export MACAI_WHISPER_SERVER=/absolute/path/to/whisper-server
-```
-
-注册 `.bin` 格式 STT 模型时若省略 `--provider`，将默认路由至 `org.macai.whisper.cpp`；旧别名 `whisper.cpp` 会被自动规范化并持久化记录选择依据。常驻 server 在加载时初始化模型，后续转写请求均复用该内存实例。
-
-Core ML encoder 为可选性能优化组件。将编译好的 `.mlmodelc` 目录置于与 `.bin` 模型同级的路径下并保持对应命名：
-
-```text
-ggml-large-v3-turbo.bin
-ggml-large-v3-turbo-encoder.mlmodelc/
-```
-
-若未提供 encoder 目录，引擎将自动走 Metal 计算路径。
-
-#### 6. 准备 Qwen3-ASR 0.6B
-
-Qwen3-ASR 由 daemon 的 Qwen3-ASR Runner（`org.macai.qwen3-asr`）提供服务，Apple Silicon 上走 MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole「管理」页顶端对 `org.macai.qwen3-asr` 执行安装，或手动：
-
-```bash
-uv sync --project runners/qwen3-asr --locked --no-dev
-```
-
-推荐模型（4-bit，Hugging Face: `mlx-community/Qwen3-ASR-0.6B-4bit`）可以在 MacAIConsole「管理」页一键下载；模型目录放进 `~/Library/Application Support/MacAIConsole/Models/stt/`。
-
-注册时显式选择 Runner provider `org.macai.qwen3-asr`，模型 ID 必须与目录名一致：
-
-```bash
-./target/release/macai load \
-  "$HOME/Library/Application Support/MacAIConsole/Models/stt/Qwen3-ASR-0.6B-MLX-4bit" \
-  --id Qwen3-ASR-0.6B-MLX-4bit \
-  --type stt \
-  --provider org.macai.qwen3-asr \
-  --keep-alive always
-
-./target/release/macai transcribe meeting.wav \
-  --model Qwen3-ASR-0.6B-MLX-4bit \
-  --language zh
-```
-
-直接调用 HTTP API 时，音频必须以 multipart 文件字节上传，例如
-`-F 'file=@/path/to/audio.wav'`。若 `file` 中是路径字符串、URL、空文件或截断数据，
-daemon 返回 HTTP 400，并在 JSON 错误中说明收到的字节数和正确 curl 用法。
-
-#### 7. 准备 sherpa-onnx zh-int8-2025（Runner）
-
-sherpa-onnx 由 daemon 的 sherpa-onnx Runner（`org.macai.sherpa-onnx`）提供服务，
-Python 环境由 uv 受管：在 MacAIConsole「管理」页顶端对
-`org.macai.sherpa-onnx` 执行安装，或手动：
-
-```bash
-uv sync --project runners/sherpa-onnx --locked --no-dev
-```
-
-sherpa-onnx 使用官方 streaming Zipformer 中文 int8 模型
-`sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30`。模型目录必须保留以下
-四个文件；模型权重不提交到仓库：
-
-```text
-sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/
-├── tokens.txt
-├── encoder.int8.onnx
-├── decoder.onnx
-└── joiner.int8.onnx
-```
-
-模型下载（GitHub release 包或维护者 HF 镜像均可，布局一致）：
-
-```bash
-curl -L -o sherpa-onnx-model.tar.bz2 \
-  https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30.tar.bz2
-tar xf sherpa-onnx-model.tar.bz2
-rm sherpa-onnx-model.tar.bz2
-```
-
-注册时显式选择 Runner provider `org.macai.sherpa-onnx`，模型 ID 与目录名一致：
-
-```bash
-./target/release/macai load \
-  ./sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30 \
-  --id sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30 \
-  --type stt \
-  --provider org.macai.sherpa-onnx \
-  --keep-alive always
-
-./target/release/macai transcribe meeting.m4a \
-  --model sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30 \
-  --language zh
-```
-
-上传入口会把 wav / mp3 / flac / ogg / m4a 统一解码为 PCM WAV；Runner 再将
-多声道输入下混为单声道并按 streaming chunk 解码，因此长录音不会因一次性
-把全部音频交给模型而改变内存行为。该模型只支持中文；`--language` 省略或
-使用 `zh` / `zh-CN` / `Chinese` 均可。当前 Runner 固定 CPU 推理（Core ML
-provider 需 runner 包内显式启用后另行声明）。
-
-#### 8. 准备 Kokoro TTS
-
-Kokoro 由 daemon 的 Kokoro Runner（`org.macai.kokoro`）提供服务，Python 环境由 uv 受管：在 MacAIConsole「管理」页顶端对 `org.macai.kokoro` 执行安装，或手动：
-
-```bash
-uv sync --project runners/kokoro --locked --no-dev
-```
-
-下载 [Kokoro-82M-zh-MLX](https://huggingface.co/1038lab/Kokoro-82M-zh-MLX)（推荐模型可在 MacAIConsole「管理」页一键下载），模型目录放进：
-
-```text
-~/Library/Application Support/MacAIConsole/Models/tts/
-```
-
-注册时显式选择 Runner provider `org.macai.kokoro`，模型 ID 与目录名一致：
-
-```bash
-./target/release/macai load \
-  "$HOME/Library/Application Support/MacAIConsole/Models/tts/kokoro-82m-zh" \
-  --id kokoro-82m-zh \
-  --type tts \
-  --provider org.macai.kokoro \
-  --keep-alive always
-```
-
-#### 9. 准备 Qwen3-TTS CustomVoice（Runner）
-
-Qwen3-TTS 由 daemon 的 Qwen3-TTS Runner（`org.macai.qwen3-tts`）提供服务，
-Apple Silicon 上走 MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole
-「管理」页顶端对 `org.macai.qwen3-tts` 执行安装，或手动：
-
-```bash
-uv sync --project runners/qwen3-tts --locked --no-dev
-```
-
-推荐模型（Qwen3-TTS 0.6B · CustomVoice 4-bit）可以在 MacAIConsole「管理」页一键下载；
-或者手动下载 [mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit](https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit)，
-模型目录放进 `~/Library/Application Support/MacAIConsole/Models/tts/`。
-
-注册时显式选择 Runner provider `org.macai.qwen3-tts`，模型 ID 与目录名一致：
-
-```bash
-./target/release/macai load \
-  "$HOME/Library/Application Support/MacAIConsole/Models/tts/Qwen3-TTS-0.6B-CustomVoice-4bit" \
-  --id Qwen3-TTS-0.6B-CustomVoice-4bit \
-  --type tts \
-  --provider org.macai.qwen3-tts \
-  --keep-alive always
-
-./target/release/macai speak Qwen3-TTS-0.6B-CustomVoice-4bit "你好，这是本地模型。"
-```
-
-请求只支持 WAV；`voice` 传递 Qwen3-TTS 的 speaker，
-例如 `Vivian`。首版支持用逗号携带情感指令（`Vivian, very happy`）。
-`speed` 参数仍按 `0.25..=4.0` 校验，但当前 `mlx-audio` 的
-`generate_custom_voice` 没有 speed 参数，因此通过校验后不改变合成速度；后续
-若上游提供原生支持再透传。详细设置中的默认音色提供 Qwen3-TTS 官方内置的
-`Vivian`、`Serena`、`Uncle_Fu`、`Dylan`、`Eric`、`Ryan`、`Aiden`、
-`Ono_Anna`、`Sohee`；首版不包含流式、声音克隆或 VoiceDesign。
-
-#### 10. 准备 MLX-LM（Runner）
-
-MLX LLM 由 daemon 的 mlx-lm Runner（`org.macai.mlx-lm`）提供服务，Apple Silicon 上走
-MLX/Metal 加速。Python 环境由 uv 受管：在 MacAIConsole「管理」页顶端
-对 `org.macai.mlx-lm` 执行安装，或手动：
-
-```bash
-uv sync --project runners/mlx-lm --locked --no-dev
-```
-
-推荐模型（SmolLM2-135M-Instruct-8bit、MiniCPM5 2B · MLX 4-bit）可以在 MacAIConsole
-「管理」页一键下载；或者手动把 MLX 格式模型目录（含 `config.json` 与 safetensors 权重，
-例如 [openbmb/MiniCPM5-2B-MLX](https://huggingface.co/openbmb/MiniCPM5-2B-MLX)）
-放进：
-
-```text
-~/Library/Application Support/MacAIConsole/Models/llm/
-```
-
-注册时显式选择 Runner provider `org.macai.mlx-lm`，模型 ID 与目录名一致：
-
-```bash
-./target/release/macai load \
-  "$HOME/Library/Application Support/MacAIConsole/Models/llm/SmolLM2-135M-Instruct-8bit" \
-  --id SmolLM2-135M-Instruct-8bit \
-  --type llm \
-  --provider org.macai.mlx-lm \
-  --keep-alive 5m
-```
-
-模型权重格式与 Runner 对应关系明确：GGUF 格式由 llama.cpp 加载，MLX 格式模型目录由 mlx-lm Runner 加载。
-
-</details>
-</details>
-
-## 架构
-
-```text
-macai CLI ────────────┐
-MacAIConsole (SwiftUI) ├── HTTP ──> aiworkd ──> Runners ─┬── whisper.cpp / llama.cpp（受管原生引擎）
-OpenAI-compatible SDK ┘                                  └── MLX / Kokoro / Qwen3 / sherpa-onnx
-
-                                             ├── SQLite model registry
-                                             ├── memory budget / LRU / keep-alive
-                                             ├── bounded task history
-                                             └── local logs
-```
-
-CLI 与 SwiftUI 应用（MacAIConsole）均为无状态客户端。在 MacAI 中，客户端不维护常驻运行状态，所有界面数据均从 daemon 的 HTTP API 实时拉取。客户端退出或重载不会影响后台已驻留的推理实例。
-
-## 详细介绍
-
-### Runtime
-
-- 默认监听 `127.0.0.1:11435`
-- OpenAI-compatible Chat、STT 和 TTS endpoints
-- Chat Completion 支持逐 token SSE streaming；推理模型通过可选 `reasoning_content` 与最终 `content` 分流
-- STT 音频上传支持 wav / mp3 / flac / ogg / m4a，由 daemon 在入口统一解码为 PCM WAV，下游 Provider 仅接收标准 PCM WAV 数据流（计划支持更多格式的输出）
-- SQLite 模型注册表，重启后注册记录持久化保留
-- 模型 load / unload、busy guard 和请求期 model lease：模型卸载操作绝不打断正在处理中的请求
-- 内存预算默认 `min(RAM×0.75, RAM−8GB)`，支持 LRU 自动逐出、keep-alive 策略与空闲自动卸载
-- 支持查看 worker RSS 驻留内存、硬件加速设备与活跃请求状态
-- 维护 Chat / STT / TTS 的有界会话内任务历史
-- 提供 GUI 与 daemon 的本地持久化日志
-
-### Provider
-
-| 能力 | Runner | 模型/输入 | 加速 |
-| --- | --- | --- | --- |
-| LLM | org.macai.llama.cpp | GGUF | Metal / Accelerate |
-| LLM | org.macai.mlx-lm | MLX 模型目录（safetensors） | MLX / Metal |
-| STT | org.macai.whisper.cpp | `.bin` + PCM WAV | Core ML 优先，Metal 回退 |
-| STT | org.macai.sherpa-onnx | zh-int8-2025 model directory + PCM WAV | CPU |
-| STT | org.macai.qwen3-asr | Qwen3-ASR MLX 模型目录 + PCM WAV | MLX / Metal GPU |
-| TTS | org.macai.qwen3-tts | Qwen3-TTS CustomVoice 模型目录 | MLX / Metal GPU |
-| TTS | org.macai.kokoro | Kokoro 模型目录 | MLX / Metal GPU |
-
-Runner 架构中 daemon 自动发现 `runners/` 下的 Runner 包并装配为动态 Provider。Python 环境与原生 C++ 引擎共用同一套安装接口；`/api/model-profiles` 向客户端暴露数据化 catalog，按 Profile ID 下载时由 daemon 展开源地址、产物路径与 Runner 绑定。已注册模型会固化当时的 Profile 快照，不受后续 catalog 变更影响。
-
-简单的 Python 后端可在「管理」页点击“新建 Runner”，从 Chat / STT / TTS 模板编辑一个
-带 PEP 723 metadata 的 `.macai.py`。推理库可从预设选择，也可粘贴官方 `pip install` /
-`uv add` 命令；用户只需给出直接依赖，uv 自动解析完整依赖树。daemon 静态检查并展示依赖、
-权限与源码摘要；确认后在临时环境完成 lock、sync 和 import/hook probe，再将标准 Runner
-package 保存到应用支持目录 `Plugins/<runner-id>/`。重启 `aiworkd` 后，该 Runner 走现有
-进程隔离、环境安装和模型生命周期链路。
-
-`/api/models/load` 将调用方请求的 Provider、daemon 选定的 Provider 与裁决理由一并持久化记录；
-`/v1/models` 和 `/api/runtime` 暴露 `requested_provider`、`provider`、
-`provider_selection_reason` 及 `effective_device`，便于审计选择逻辑与兼容别名。
-LLM 注册项还持久化默认 `temperature`（1.0）与 `top_p`（0.95）；可通过
-`POST /api/models/{id}/generation` 更新。Chat 请求显式参数优先，省略时由 daemon
-注入该模型的默认值。
-
-本地目录通过 `POST /api/models/inspect` 由 daemon 信任的 Runner manifest 静态探测；只有
-唯一匹配时才会颁发短期 routing token。CLI 可使用 `macai inspect <directory>` 查看检测结果，并通过
-`macai load <directory> --routing-token <token>` 完成注册。GUI 采用相同诊断，不自行推断 Runner。
-未被任何探测器识别的模型目录在注册时会被直接拒绝，提示检查模型是否下载完整或新建/安装
-对应 Runner，默认 Provider 选择链路只服务 `.gguf` / `.bin` 单文件模型。
-
-当前 Runner Protocol v1 针对单实例、单活动推理设计。信任特定 Runner 意味着允许其以
-`aiworkd` 用户权限运行本地代码；digest 校验、环境变量白名单和输出路径检查不构成操作系统沙箱。
-
-所有生产 Provider 均运行于独立 Runner 进程中，实现进程级故障隔离：当推理引擎发生段错误或 Python worker 发生 OOM 时，`aiworkd` 保持稳定存活并向客户端返回结构化的 `backend_crashed` 错误，其余模型服务不受影响。此外，系统坚持确定性调度：显式通过 `--provider` 指定引擎属于硬选择，若目标 Provider 不可用将直接失败并返回具体原因，不进行静默回退，确保推理延迟与硬件开销完全透明可溯。
-
-### 客户端
-
-CLI `macai` 当前提供：
-
-```text
-status      list        ps          providers   tasks
-load        start       unload      remove      rename
-keep-alive  pull        chat        run         transcribe
-speak       voice       logging     serve
-```
-
-完整命令索引可通过 `macai --help` 查询，具体参数与示例参见 `macai <命令> --help`。关键语义说明：`start`、`unload`、`rename`、`keep-alive` 与 `remove` 统一操作 daemon 的运行时状态或 SQLite 注册表；`remove` 仅注销模型条目，磁盘上的模型源文件保持不变。由 Model Profile 绑定的模型 ID 具有固定命名约束，不支持 rename。
-
-MacAIConsole 当前提供：
-
-- Runtime 状态和系统内存压力
-- 已加载模型、驻留内存和有效加速设备
-- 「管理」页顶端置顶展示全部 7 个 Runner 引擎环境状态与一键安装控制（按 LLM、STT、TTS 顺序分类排列）
-- 模型仓库、注册、加载、卸载、改名和详细设置
-- 从 daemon Profile catalog 展示并一键下载推荐模型；引擎未就绪时行内提示引导参考顶部引擎区块，安装完成后可直接注册启动，无需修改或重启 GUI
-- 「添加模型」支持输入公开 Hugging Face 或 ModelScope 仓库 ID/URL，预览文件与大小后下载到本地模型仓库；下载不会自动注册或加载
-- Chat / STT / TTS 任务记录与详情
-- GUI / daemon 最近日志，支持 Info / Debug 过滤和级别着色
-- 菜单栏状态与 daemon 启停
-- 设置页支持切换 Hugging Face 官方源、`hf-mirror.com` 或自定义 Hugging Face 兼容源
-
-
-
-
-## MacAIConsole
-
-本地开发与打包：
-
-```bash
-cd apps/MacAIConsole
-
-# 本地联调：停止旧进程、重新编译前后端并启动 app
-scripts/build-app.sh release
-
-# 打包自包含 DMG 安装镜像（产物为 build/MacAIConsole.dmg）
-scripts/build-app.sh dmg
-```
-
-日常本地联调使用 `release` 动作即可；产物位于 `apps/MacAIConsole/build/MacAIConsole.app`（或 DMG 镜像 `build/MacAIConsole.dmg`）。
-
-GUI 可以连接已经在跑的 `aiworkd`。GUI 自动启动 daemon 时按顺序探测：`AIWORKD_PATH` 环境变量 → 仓库 `target/release/aiworkd` → `target/debug/aiworkd`。
-
-模型下载默认使用 `https://huggingface.co`。MacAIConsole 的「设置 → 模型下载源」可切换
-到 `https://hf-mirror.com` 或填写自定义 HTTP(S) 地址；修改后点击「应用设置并重启
-aiworkd」。下载由 daemon 统一执行，使用 HTTP/1.1、`.part` 断点续传，并在响应体中断
-时自动重试；管理页和在线仓库下载窗口会显示当前文件序号与百分比，daemon 日志按
-5% 台阶记录百分比。手动启动 daemon 时可设置：
-
-```bash
-AIWORKD_HF_ENDPOINT=https://hf-mirror.com ./target/release/aiworkd
-```
-
-自定义源只支持 HTTP(S) 主机和可选路径，不支持凭据、查询参数或片段。
-
-## HTTP API
-
-### Health
-
-```bash
-curl http://127.0.0.1:11435/health
-```
-
-### Chat Completion
-
-```bash
-curl http://127.0.0.1:11435/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "model": "local-model",
-    "messages": [{"role": "user", "content": "Hello"}],
-    "stream": false
-  }'
-```
-
-流式请求把 `stream` 设为 `true`，响应以 `data: [DONE]` 结束。请求可显式传入
-`temperature` 与 `top_p`；省略时使用模型注册项保存的默认值。
-
-推理模型的非流式响应在 `choices[].message.reasoning_content` 返回思考内容，最终回答
-仍位于 `choices[].message.content`。流式响应分别使用
-`choices[].delta.reasoning_content` 与 `choices[].delta.content`；非推理模型省略
-reasoning 字段。assistant 历史消息可传 `reasoning_content`，输入也兼容
-`reasoning` 别名。
-
-请求可携带可选 `session_id`（不透明字符串）声明对话延续性，daemon 原样透传给
-Runner 侧，缺省时请求行为与序列化均与现状一致。两个 LLM Runner 依托常驻 worker
-复用多轮对话的 KV 前缀：MLX-LM 对与上一轮公共前缀一致的 token 增量 prefill（长
-历史下 TTFT 显著下降），llama.cpp 由 llama-server 的 `--cache-reuse` 在 slot 上
-分块复用；Metal 数值精度差异可能使缓存命中后的 temp=0 输出与全量 prefill 偶发
-分岔。
-
-### OpenAI Python SDK
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://127.0.0.1:11435/v1",
-    api_key="local",
-)
-
-response = client.chat.completions.create(
-    model="local-model",
-    messages=[{"role": "user", "content": "Hello"}],
-)
-print(response.choices[0].message.content)
-```
-
-支持任何标准 OpenAI SDK，配置对应的 `base_url` 与模型 ID 即可接入。
-
-### 主要 endpoints
-
-```text
-GET  /health
-GET  /v1/models
-POST /v1/chat/completions
-POST /v1/audio/transcriptions
-POST /v1/audio/speech
-
-GET  /api/runtime
-GET  /api/providers
-GET  /api/runners
-POST /api/runners/{runner}/install
-DELETE /api/runners/{runner}/install
-GET  /api/runner-scripts/template/{chat|stt|tts}
-GET  /api/runner-scripts/dependency-presets
-POST /api/runner-scripts/dependencies
-POST /api/runner-scripts/inspect
-POST /api/runner-scripts
-GET  /api/tasks
-GET  /api/tasks/{id}
-GET  /api/logging
-POST /api/logging
-POST /api/models/pull
-POST /api/models/inspect
-POST /api/models/remote/inspect
-GET  /api/downloads/{progress_id}
-POST /api/models/load
-POST /api/models/{id}/load
-POST /api/models/{id}/unload
-DELETE /api/models/{id}
-POST /api/models/{id}/rename
-POST /api/models/{id}/keep-alive
-GET  /api/models/{id}/voices
-POST /api/models/{id}/voice
-```
-
-`/v1/*` 面向推理，`/api/*` 面向运行时管理。
-
-## 本地数据
-
-MacAIConsole 使用以下目录：
-
-```text
-~/Library/Application Support/MacAIConsole/
-├── Models/
-│   ├── llm/
-│   ├── stt/
-│   └── tts/
-├── model-settings.json
-├── models.db
-└── logs/
-    ├── aiworkd.log
-    └── gui.log
-```
-
-日志到 5 MB 轮换，保留一份 `.1` 文件。日志页面默认显示 Info 及以上级别；启用 Debug 会同时调整 GUI 和 daemon 的运行时日志级别。Debug 模式下，daemon 使用同一 `request_id` 记录每个 HTTP 请求的开始与完成结果；记录方法、路径、响应状态码和耗时，不记录查询参数、请求体或响应体。
-
-## 安全边界
-
-`aiworkd` 默认仅监听本地回环地址（`127.0.0.1`），且未内置身份鉴权机制。如需通过端口转发、反向代理或局域网访问，务必在前端配置健全的安全隔离与身份认证。
-
-任务历史可能包含 Prompt、转写结果与 TTS 文本输入。系统遵循数据最小化原则：原始音频数据不落盘写入任务历史，日志系统亦会主动过滤 API Token 与模型上下文内容。
-
-## 开发与验证
-
-Rust：
-
-```bash
-cargo fmt --all -- --check
-cargo test --workspace
-cargo build --workspace
-```
-
-MacAIConsole：
-
-```bash
-cd apps/MacAIConsole
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  swift test --enable-xctest
-scripts/build-app.sh release
-```
-
-## 仓库结构
-
-```text
-crates/
-├── ai-core/       # 共享模型、Provider、请求与响应类型
-├── ai-daemon/     # aiworkd、Provider、调度与管理 API；Runner discovery/environment/instance bridge
-└── ai-cli/        # macai 命令行客户端
-
-apps/
-└── MacAIConsole/  # 原生 SwiftUI 控制台
-
-scripts/           # 模型下载、可选开发构建与真实 Runner smoke
-runners/           # daemon 自动发现的七个 Runner 包（含 llama.cpp 与 whisper.cpp）
-samples/           # 第三方集成示例（含 Hermes TTS/STT 适配器）
-docs/              # 项目主页（index.html）、网页版用户指南（guide/）、当前工作提案、已落地决策与精确契约
-```
-
-## 架构基石与路线图
-
-### 已落地核心架构
-
-- [Runner 插件架构决策](docs/decisions/2026-09-02-runner-plugin-architecture.md)：所有生产模型接入收敛为可发现 Runner 与数据化 Model Profile。
-- [uv Python 环境决策](docs/decisions/2026-09-02-uv-python-environments.md)：所有 Python Runner 使用可复现、可探测的受管 `uv` 环境。
-- [whisper.cpp 与 llama.cpp 原生 Runner 迁移](docs/decisions/2026-09-05-whisper-runner-migration.md)：官方源码/二进制、常驻 server 与进程级隔离。
-- [管理页置顶 Runner 引擎状态与安装](docs/decisions/2026-09-07-management-view-engine-status-and-compact-recommendations.md)：一站式管理引擎环境与模型生命周期。
-- [单文件 Script Runner](docs/decisions/2026-09-08-single-file-script-runner.md)：在 GUI 中用一个 PEP 723 Python 文件创建受管 Runner。
-
-### 后续规划
-
-- 完整第三方 Runner package 的导入、更新与分发
-- Homebrew 分发、正式签名、公证与安装包
-- VAD 与 streaming STT / TTS 进阶支持
-
+详情见链接：[案例](samples/Hojo_TTS_Light_40M_sample.md)
 
 ## 社区与贡献
 

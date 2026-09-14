@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MacAI 使用文档 — 从安装到排障</title>
-<meta name="description" content="MacAI 用户使用说明：DMG 与源码安装、控制台导览、引擎与模型管理、Chat / STT / TTS 实操、macai CLI 与 OpenAI 兼容 API 参考、数据目录与故障排查。">
+<title>MacAI 使用与开发文档 — 从入门到系统参考</title>
+<meta name="description" content="MacAI 综合使用与开发者文档：涵盖 DMG 与源码构建、控制台导览、7 大 Runner 引擎深度实操与环境准备、模型生命周期、Chat / STT / TTS 核心能力、macai CLI 与 HTTP API 参考、系统架构机制、测试规范与故障排查。">
 <link rel="icon" type="image/png" href="../logo.png">
 <style>
   :root {
@@ -43,13 +43,13 @@
   /* ---------- top bar ---------- */
   .topbar {
     position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-    background: rgba(5, 5, 7, 0.78);
+    background: rgba(5, 5, 7, 0.8);
     -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
     border-bottom: 1px solid var(--border);
   }
   .topbar-inner {
     display: flex; align-items: center; gap: 22px;
-    max-width: 1240px; margin: 0 auto; padding: 0 24px; height: 58px;
+    max-width: 1280px; margin: 0 auto; padding: 0 24px; height: 58px;
   }
   .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 16px; color: var(--text); }
   .brand:hover { text-decoration: none; }
@@ -64,10 +64,10 @@
   .topbar-links a:hover { color: var(--text); text-decoration: none; }
 
   /* ---------- layout ---------- */
-  .layout { display: grid; grid-template-columns: 236px minmax(0, 1fr); max-width: 1240px; margin: 0 auto; }
+  .layout { display: grid; grid-template-columns: 248px minmax(0, 1fr); max-width: 1280px; margin: 0 auto; }
   .sidebar {
     position: sticky; top: 58px; height: calc(100vh - 58px); overflow-y: auto;
-    padding: 34px 18px 40px 24px; border-right: 1px solid var(--border);
+    padding: 30px 16px 40px 22px; border-right: 1px solid var(--border);
     font-size: 13.5px;
   }
   .sidebar .group { margin-bottom: 22px; }
@@ -80,9 +80,9 @@
     border-left: 2px solid transparent; line-height: 1.5;
   }
   .sidebar a:hover { color: var(--text); text-decoration: none; background: var(--card); }
-  .sidebar a.on { color: var(--accent-2); background: rgba(10, 132, 255, 0.08); }
+  .sidebar a.on { color: var(--accent-2); background: rgba(10, 132, 255, 0.08); font-weight: 550; }
 
-  article { padding: 96px 48px 80px; max-width: 880px; }
+  article { padding: 90px 48px 80px; max-width: 930px; }
 
   /* ---------- content ---------- */
   section.doc { margin-bottom: 72px; scroll-margin-top: 76px; }
@@ -95,7 +95,11 @@
     line-height: 1.3; margin-bottom: 16px;
   }
   section.doc h3 {
-    font-size: 1.08rem; font-weight: 650; margin: 30px 0 10px; letter-spacing: -0.01em;
+    font-size: 1.15rem; font-weight: 650; margin: 34px 0 12px; letter-spacing: -0.01em;
+    color: var(--text);
+  }
+  section.doc h4 {
+    font-size: 0.98rem; font-weight: 650; margin: 20px 0 8px; color: #e1e1e8;
   }
   section.doc p { color: #cfcfd6; margin-bottom: 12px; }
   section.doc p b, section.doc li b { color: var(--text); }
@@ -135,6 +139,7 @@
   .codeblock .cm { color: var(--dim); }
   .codeblock .str { color: #7ee0a3; }
   .codeblock .arg { color: #cfe4ff; }
+  .codeblock pre code { background: none; border: none; padding: 0; color: inherit; font-size: inherit; white-space: inherit; }
   .copy-btn {
     position: absolute; top: 8px; right: 8px;
     background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border-strong);
@@ -208,7 +213,7 @@
   <div class="topbar-inner">
     <a class="brand" href="../index.html">
       <span class="logo"><img src="../logo.png" alt="MacAI logo"></span>
-      MacAI <small>使用文档</small>
+      MacAI <small>使用与开发文档</small>
     </a>
     <div class="topbar-links">
       <a class="hide-sm" href="../index.html">项目主页</a>
@@ -222,541 +227,841 @@
 
   <aside class="sidebar" aria-label="文档目录">
     <div class="group">
-      <b>入门</b>
-      <a href="#about">开始之前</a>
-      <a href="#requirements">系统要求</a>
-      <a href="#install">安装</a>
-      <a href="#quickstart">五分钟跑通</a>
+      <b>快速入门</b>
+      <a href="#about">系统定位与要求</a>
+      <a href="#install">安装与启动（DMG / 源码）</a>
+      <a href="#quickstart">五分钟跑通主线</a>
     </div>
     <div class="group">
-      <b>日常使用</b>
+      <b>控制台与日常使用</b>
       <a href="#console">控制台导览</a>
-      <a href="#engines">引擎与 Runner</a>
-      <a href="#models">模型获取与注册</a>
+      <a href="#models">模型获取与生命周期</a>
+      <a href="#chat">对话 Chat 实操</a>
+      <a href="#stt">语音识别 STT 实操</a>
+      <a href="#tts">语音合成 TTS 实操</a>
     </div>
     <div class="group">
-      <b>三大能力</b>
-      <a href="#chat">对话 Chat</a>
-      <a href="#stt">语音识别 STT</a>
-      <a href="#tts">语音合成 TTS</a>
+      <b>Runner 引擎实操</b>
+      <a href="#engines-overview">Runner 架构与环境管理</a>
+      <a href="#runner-llama">llama.cpp (GGUF LLM)</a>
+      <a href="#runner-whisper">whisper.cpp (STT)</a>
+      <a href="#runner-qwen3-asr">Qwen3-ASR (STT)</a>
+      <a href="#runner-sherpa">sherpa-onnx (STT)</a>
+      <a href="#runner-kokoro">Kokoro (TTS)</a>
+      <a href="#runner-qwen3-tts">Qwen3-TTS (TTS)</a>
+      <a href="#runner-mlx-lm">MLX-LM (LLM)</a>
+      <a href="#runner-script">自制 Script Runner 扩展</a>
     </div>
     <div class="group">
-      <b>参考</b>
-      <a href="#cli">macai 命令行</a>
-      <a href="#api">HTTP API</a>
-      <a href="#data">数据、日志与内存</a>
+      <b>接口与客户端参考</b>
+      <a href="#cli">macai CLI 命令行参考</a>
+      <a href="#api">HTTP API 与 OpenAI SDK</a>
+      <a href="#third-party">第三方应用接入</a>
     </div>
     <div class="group">
-      <b>帮助</b>
-      <a href="#troubleshoot">故障排查</a>
-      <a href="#security">安全与已知限制</a>
+      <b>核心架构与内部机制</b>
+      <a href="#architecture">系统架构概览</a>
+      <a href="#runtime">Runtime 调度与内存租约</a>
+      <a href="#data">本地数据与环境变量</a>
+      <a href="#security">安全边界与隐私守则</a>
+    </div>
+    <div class="group">
+      <b>工程规范与故障排查</b>
+      <a href="#verification">构建验证与测试流水线</a>
+      <a href="#repo">仓库结构地图</a>
+      <a href="#troubleshoot">常见问题与故障排查</a>
     </div>
   </aside>
 
   <article>
 
     <details class="toc-mobile">
-      <summary>本文目录</summary>
+      <summary>文档目录</summary>
       <nav>
-        <a href="#about">开始之前</a>
-        <a href="#requirements">系统要求</a>
-        <a href="#install">安装</a>
-        <a href="#quickstart">五分钟跑通</a>
+        <a href="#about">系统定位与要求</a>
+        <a href="#install">安装与启动</a>
+        <a href="#quickstart">五分钟跑通主线</a>
         <a href="#console">控制台导览</a>
-        <a href="#engines">引擎与 Runner</a>
-        <a href="#models">模型获取与注册</a>
-        <a href="#chat">对话 Chat</a>
-        <a href="#stt">语音识别 STT</a>
-        <a href="#tts">语音合成 TTS</a>
-        <a href="#cli">macai 命令行</a>
-        <a href="#api">HTTP API</a>
-        <a href="#data">数据、日志与内存</a>
-        <a href="#troubleshoot">故障排查</a>
-        <a href="#security">安全与已知限制</a>
+        <a href="#models">模型获取与生命周期</a>
+        <a href="#chat">对话 Chat 实操</a>
+        <a href="#stt">语音识别 STT 实操</a>
+        <a href="#tts">语音合成 TTS 实操</a>
+        <a href="#engines-overview">Runner 架构与环境管理</a>
+        <a href="#runner-llama">llama.cpp (GGUF)</a>
+        <a href="#runner-whisper">whisper.cpp (STT)</a>
+        <a href="#runner-qwen3-asr">Qwen3-ASR (STT)</a>
+        <a href="#runner-sherpa">sherpa-onnx (STT)</a>
+        <a href="#runner-kokoro">Kokoro (TTS)</a>
+        <a href="#runner-qwen3-tts">Qwen3-TTS (TTS)</a>
+        <a href="#runner-mlx-lm">MLX-LM (LLM)</a>
+        <a href="#runner-script">自制 Script Runner</a>
+        <a href="#cli">macai CLI 命令行参考</a>
+        <a href="#api">HTTP API 与 OpenAI SDK</a>
+        <a href="#third-party">第三方应用接入</a>
+        <a href="#architecture">系统架构概览</a>
+        <a href="#runtime">Runtime 调度与内存租约</a>
+        <a href="#data">本地数据与环境变量</a>
+        <a href="#security">安全边界与隐私守则</a>
+        <a href="#verification">构建验证与测试</a>
+        <a href="#repo">仓库结构地图</a>
+        <a href="#troubleshoot">常见问题与故障排查</a>
       </nav>
     </details>
 
-    <!-- ==================== 开始之前 ==================== -->
+    <!-- ==================== 1. 系统定位与要求 ==================== -->
     <section class="doc" id="about">
-      <span class="doc-tag">入门</span>
-      <h2>开始之前</h2>
-      <p>MacAI 是一个跑在 Apple Silicon Mac 上的本地 AI 运行管理系统。你把 LLM、语音识别（STT）、语音合成（TTS）模型导入进来，它在本机用 Metal / MLX / Core ML 加速完成推理，并按 OpenAI 兼容格式对外提供服务——数据不出这台 Mac，断网也能用。</p>
-      <p>所有功能都经由一个本地守护进程 <code>aiworkd</code>（默认 <code>127.0.0.1:11435</code>）提供。三种客户端连的都是它：</p>
+      <span class="doc-tag">快速入门</span>
+      <h2>系统定位与要求</h2>
+      <p>MacAI 是面向 Apple Silicon 的本地 AI 运行管理系统。它将大语言模型（LLM）、语音转文字（STT）和文字转语音（TTS）统一装进一个 Rust 守护进程 <code>aiworkd</code>（默认监听 <code>127.0.0.1:11435</code>），在本机通过 Metal、MLX 与 Core ML 加速完成推理，并以 OpenAI 兼容格式对外提供服务——所有数据均在 Mac 本地处理，断网可用。</p>
+
+      <h3>客户端分工</h3>
+      <p>在 MacAI 中，所有客户端均为<b>无状态客户端</b>，不维护模型或推理状态，所有界面数据与操作均经由 <code>aiworkd</code> 的 HTTP API 进行：</p>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>客户端</th><th>适合</th><th>说明</th></tr></thead>
+        <thead><tr><th>客户端</th><th>适合场景</th><th>职责说明</th></tr></thead>
         <tbody>
-          <tr><td><b>MacAIConsole</b>（GUI）</td><td>日常使用</td><td>SwiftUI 原生应用：引擎安装、模型下载注册、任务与日志观测、设置。本文以它为主线。</td></tr>
-          <tr><td><b>macai</b> CLI</td><td>脚本与远程 SSH</td><td>Rust 命令行，覆盖全部模型生命周期操作，见 <a href="#cli">macai 命令行</a>。</td></tr>
-          <tr><td><b>OpenAI SDK / 任意 HTTP 客户端</b></td><td>接入第三方应用</td><td>CherryStudio、Hermes 等，把 base_url 指到本机即可，见 <a href="#api">HTTP API</a>。</td></tr>
+          <tr><td><b>MacAIConsole</b> (GUI)</td><td>日常使用与可视化观测</td><td>SwiftUI 原生图形控制台：一键安装引擎、推荐模型下载、模型启停、内存压力实时监控、会话任务流与日志过滤。</td></tr>
+          <tr><td><b>macai</b> CLI</td><td>终端脚本与自动化</td><td>Rust 命令行客户端，覆盖模型完整生命周期操作，支持单次提问、交互式对话、音频转写与语音合成。</td></tr>
+          <tr><td><b>OpenAI SDK / 第三方客户端</b></td><td>应用接入</td><td>CherryStudio、Hermes 等第三方工具，将 <code>base_url</code> 配置为本机 <code>http://127.0.0.1:11435/v1</code> 即可直接接入。</td></tr>
         </tbody>
       </table></div>
-      <div class="warn"><b>先说清楚边界：</b>项目处于活跃开发阶段，适合本地开发、实验与个人工作流，目前无法承诺 API 稳定性和跨版本兼容。要放在生产环境的话，建议锁定版本并自测。</div>
+
+      <h3>系统与运行环境要求</h3>
+      <ul>
+        <li><b>硬件</b>：Apple Silicon Mac（M1 及之后芯片）</li>
+        <li><b>系统</b>：macOS 14 (Sonoma) 或更高版本</li>
+        <li><b>DMG 安装</b>：自包含 <code>aiworkd</code>、<code>macai</code>、<code>uv</code> 和全部 Runner 适配器，开箱即用，无需预装 Rust 或 Python 环境。</li>
+        <li><b>源码构建额外依赖</b>：
+          <ul>
+            <li>Rust stable toolchain（建议 <code>rustup update stable</code>）</li>
+            <li>Xcode Command Line Tools（<code>xcode-select --install</code>）</li>
+            <li>CMake（<code>brew install cmake</code>）——仅编译 whisper.cpp 原生引擎时必需</li>
+            <li>Python 3.12（运行适配器单元测试时使用；实际生产 Runner 的环境由内置 uv 独立管理）</li>
+          </ul>
+        </li>
+      </ul>
+      <div class="warn"><b>阶段声明：</b>项目处于活跃迭代阶段，适合本地开发、实验与个人工作流，目前无法承诺跨版本 API 契约的绝对兼容。若在关键流程中使用，建议锁定版本并自测。</div>
     </section>
 
-    <!-- ==================== 系统要求 ==================== -->
-    <section class="doc" id="requirements">
-      <span class="doc-tag">入门</span>
-      <h2>系统要求</h2>
-      <ul>
-        <li>Apple Silicon Mac（M1 及之后）</li>
-        <li>macOS 14 或更高版本</li>
-      </ul>
-      <p>用 DMG 安装包就只有这两条：应用自包含 <code>aiworkd</code>、<code>macai</code>、<code>uv</code> 和全部 Runner 适配器，不需要预装 Rust 或 Python。</p>
-      <p>从源码构建额外需要：</p>
-      <ul>
-        <li>Rust stable toolchain</li>
-        <li>Xcode Command Line Tools</li>
-        <li>CMake（<code>brew install cmake</code>）——只有编译 whisper.cpp 引擎时用到</li>
-        <li>Python 3.12（构建与测试环境使用；Python 系列 Runner 的运行环境由内置 uv 自行管理，不依赖系统 Python）</li>
-      </ul>
-      <p>仓库与安装包都不包含模型权重。所有模型在首次使用时下载，或从你已有的本地文件导入。</p>
-    </section>
-
-    <!-- ==================== 安装 ==================== -->
+    <!-- ==================== 2. 安装与启动 ==================== -->
     <section class="doc" id="install">
-      <span class="doc-tag">入门</span>
-      <h2>安装</h2>
+      <span class="doc-tag">快速入门</span>
+      <h2>安装与启动</h2>
 
       <h3>方式一：DMG 安装包（推荐普通用户）</h3>
       <ol>
-        <li>从 <a href="https://github.com/GuanXuzeng/MacAI/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载 <code>MacAIConsole.dmg</code>，打开后把 <code>MacAIConsole.app</code> 拖入「应用程序」。</li>
-        <li>首次打开可能被 Gatekeeper 拦截（应用未签名）。两种处理任选：
+        <li>从 <a href="https://github.com/GuanXuzeng/MacAI/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载最新的 <code>MacAIConsole.dmg</code>。</li>
+        <li>双击打开 DMG，将 <code>MacAIConsole.app</code> 拖入「应用程序（Applications）」文件夹。</li>
+        <li>首次打开若遇 Gatekeeper 拦截（提示“已损坏，无法打开”或“未知的开发者”），在终端执行以下命令清除隔离标记：
           <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
-<pre><span class="cm"># 终端清除隔离标记</span>
-xattr -cr /Applications/MacAIConsole.app</pre></div>
-          或者到「系统设置 → 隐私与安全性」，滑到最下方「安全性」区域点「仍要打开」。</li>
-        <li>启动应用即可。它内置的 <code>aiworkd</code> 会随之拉起，无需任何命令行操作。</li>
+<pre>xattr -cr /Applications/MacAIConsole.app</pre></div>
+          或前往 macOS「系统设置 → 隐私与安全性」，滑至最下方“安全性”区域点击「仍要打开」。</li>
+        <li>启动应用后，内置的 <code>aiworkd</code> 会自动随之拉起，无需任何命令行操作。</li>
       </ol>
 
-      <h3>方式二：从源码构建（开发者）</h3>
+      <h3>方式二：从源码构建运行（开发者）</h3>
+      <p>1. 克隆代码仓库并编译整个 Workspace：</p>
       <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
 <pre>git clone https://github.com/GuanXuzeng/MacAI.git
 cd MacAI
-cd apps/MacAIConsole
+cargo build --release --workspace</pre></div>
+      <p>产物将位于 <code>target/release/</code>，包括守护进程 <code>aiworkd</code> 与命令行客户端 <code>macai</code>。</p>
+
+      <p>2. 启动 daemon：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>./target/release/aiworkd</pre></div>
+      <p>守护进程启动后默认监听 <code>http://127.0.0.1:11435</code>。另开一个终端窗口即可使用 CLI 验证连通性：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>./target/release/macai status
+./target/release/macai list
+./target/release/macai ps</pre></div>
+
+      <p>3. 运行 MacAIConsole GUI：</p>
+      <ul>
+        <li><b>一键联动构建并启动（推荐）</b>：
+          <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>cd apps/MacAIConsole
 scripts/build-app.sh release</pre></div>
-      <p>该脚本会联动编译后端和 GUI、组装应用并直接拉起。开发调试也可以在 <code>apps/MacAIConsole</code> 下直接 <code>swift run</code>；此时需先自行构建并启动 daemon。打 DMG 用 <code>scripts/build-app.sh dmg</code>，产物在 <code>apps/MacAIConsole/build/</code>。</p>
-      <div class="note"><b>daemon 由谁启动？</b>GUI 启动时会自动按顺序探测并拉起：<code>AIWORKD_PATH</code> 环境变量 → 仓库 <code>target/release/aiworkd</code> → <code>target/debug/aiworkd</code>。也可以完全不用 GUI，手动 <code>./target/release/aiworkd</code> 后只用 CLI 和 API。</div>
+          该脚本自动编译 Rust 后端与 SwiftUI 前端，组装 <code>uv</code> 与 <code>runners/</code> 目录至 <code>apps/MacAIConsole/build/MacAIConsole.app</code> 并自动拉起。如需打包发布用 DMG：<code>scripts/build-app.sh dmg</code>。
+        </li>
+        <li><b>快速开发模式</b>：在 daemon 已经在运行的情况下，直接在 <code>apps/MacAIConsole</code> 目录下执行：
+          <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>cd apps/MacAIConsole
+swift run</pre></div>
+        </li>
+      </ul>
+      <div class="note"><b>GUI 的 daemon 自动探测机制：</b>GUI 默认连接 <code>http://127.0.0.1:11435</code>。若启动 GUI 时守护进程未运行，GUI 会按顺序探测本地构建产物：<code>AIWORKD_PATH</code> 环境变量 → <code>target/release/aiworkd</code> → <code>target/debug/aiworkd</code>，并自动拉起守护进程。</div>
     </section>
 
-    <!-- ==================== 五分钟跑通 ==================== -->
+    <!-- ==================== 3. 五分钟跑通主线 ==================== -->
     <section class="doc" id="quickstart">
-      <span class="doc-tag">入门</span>
-      <h2>五分钟跑通</h2>
-      <p>下面用推荐的 MiniCPM5 2B（MLX 4-bit，约 2.5 GB）走通第一条链路。STT / TTS 的流程完全一样，只是换一个引擎和模型。</p>
+      <span class="doc-tag">快速入门</span>
+      <h2>五分钟跑通主线</h2>
+      <p>以下以推荐的大语言模型 <b>MiniCPM5 2B MLX 4-bit</b>（约 2.5 GB）为例，带你完整走通从引擎配置、模型下载到推理调用的全流程：</p>
       <ol>
-        <li><b>装引擎。</b>打开 MacAIConsole，侧边栏进「管理」页。顶端「引擎」区找到 <code>mlx-lm</code>，点「安装」。Python 依赖由内置 uv 自动部署，不需要你装 Python。</li>
-        <li><b>下模型。</b>在「管理」页推荐模型卡片里找到 <b>MiniCPM5 2B MLX 4-bit</b>，点「下载」。daemon 在后台断点续传，完成后自动注册。网络慢的话，先去「设置 → 模型下载源」切到 <code>hf-mirror.com</code>。</li>
-        <li><b>加载。</b>模型卡片上点「启动」，等状态变为常驻（resident）。「运行状态」页能看到它占用的内存和加速设备。</li>
-        <li><b>验证。</b>用 CLI 或 OpenAI 兼容 API 发起请求；完成后可在 GUI「任务」页查看记录：
+        <li><b>安装引擎</b>：打开 MacAIConsole，进入左侧<b>「管理」</b>页。在顶端「引擎」区域找到 <code>mlx-lm</code>，点击「安装」。Python 依赖由内置 <code>uv</code> 自动隔离部署，无需配置系统 Python。</li>
+        <li><b>下载模型</b>：在推荐模型列表中找到 <b>MiniCPM5 2B MLX 4-bit</b>，点击「下载」。后台由 daemon 自动进行断点续传下载并完成注册。若网络环境较慢，可先在「设置」页将下载源切换为国内镜像 <code>https://hf-mirror.com</code>。</li>
+        <li><b>启动加载</b>：模型下载完成后，在模型卡片上点击「启动」，等待状态变为常驻（resident）。此时在「运行状态」页可实时查看到其常驻内存（RSS）与 Metal 加速状态。</li>
+        <li><b>发起对话验证</b>：
           <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
-<pre><span class="cm"># ① CLI</span>
+<pre><span class="cm"># ① 使用 macai CLI</span>
 macai chat MiniCPM5-2B-MLX-4bit <span class="str">"用一句话介绍你自己"</span>
 
-<span class="cm"># ② OpenAI 兼容 API</span>
+<span class="cm"># ② 使用 OpenAI 兼容 API</span>
 curl http://127.0.0.1:11435/v1/chat/completions <span class="arg">\</span>
   -H <span class="str">'Content-Type: application/json'</span> <span class="arg">\</span>
   -d <span class="str">'{"model":"MiniCPM5-2B-MLX-4bit","messages":[{"role":"user","content":"Hello"}]}'</span></pre></div>
         </li>
       </ol>
-      <p>跑通了就继续看 <a href="#console">控制台导览</a> 和 <a href="#models">模型获取与注册</a>；哪一步卡住了直接翻 <a href="#troubleshoot">故障排查</a>。</p>
+      <p>调用成功后，在 GUI 的「任务」页中即可实时观测到本次请求的耗时、首 Token 延迟与详细输入输出。</p>
     </section>
 
-    <!-- ==================== 控制台导览 ==================== -->
+    <!-- ==================== 4. 控制台导览 ==================== -->
     <section class="doc" id="console">
-      <span class="doc-tag">日常使用</span>
+      <span class="doc-tag">控制台与日常使用</span>
       <h2>控制台导览</h2>
-      <img class="shot" src="../imgs/MacAIConsole.png" alt="MacAIConsole 主界面">
-      <p class="shot-cap">MacAIConsole 主界面。GUI 是无状态客户端，界面上每个数字都实时来自 daemon。</p>
+      <img class="shot" src="../imgs/MacAIConsole.png" alt="MacAIConsole 控制台主界面">
+      <p class="shot-cap">MacAIConsole 主界面。作为无状态客户端，界面呈现的数据全部实时来自 daemon。</p>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>页面</th><th>能做什么</th></tr></thead>
+        <thead><tr><th>页面</th><th>核心功能与观测指标</th></tr></thead>
         <tbody>
-          <tr><td><b>运行状态</b></td><td>daemon 版本与 PID、内存预算、系统内存压力折线（5 分钟滑动窗口）、活跃请求、已加载模型的常驻内存与加速设备。模型条目点进去是详细设置。</td></tr>
-          <tr><td><b>任务</b></td><td>当前运行与最近完成的 Chat / STT / TTS 请求，含耗时、输入输出与错误。推理模型的思考过程与最终回答分开显示。</td></tr>
-          <tr><td><b>管理</b></td><td>本文档的核心页面，见下两节：<a href="#engines">引擎与 Runner</a>、<a href="#models">模型获取与注册</a>。</td></tr>
-          <tr><td><b>日志</b></td><td>GUI 与 daemon 双端日志，默认 Info，可开 Debug，按级别着色；「在访达中显示」直接打开日志目录。</td></tr>
-          <tr><td><b>设置</b></td><td>外观（跟随系统 / 明亮 / 暗黑）、自动拉起 daemon、内存预算、网络代理、模型下载源、恢复已忽略的引擎与推荐模型、检查更新（关于）。</td></tr>
+          <tr><td><b>运行状态</b></td><td>查看 daemon 版本与 PID、内存预算设定、系统内存压力折线图（5 分钟滑动窗口）、活跃请求计数、已加载模型的常驻内存（RSS）与加速设备（Metal / ANE / CPU）。点击条目可进入模型详情设置。</td></tr>
+          <tr><td><b>任务</b></td><td>实时展示 Chat / STT / TTS 的会话请求流，保留最近 100 条有界任务。推理模型的思考过程（<code>reasoning_content</code>）与最终回答分区显示，呈现请求各阶段耗时。</td></tr>
+          <tr><td><b>管理</b></td><td>控制台核心枢纽：置顶展示 7 大 Runner 引擎环境状态与安装卸载控制；提供官方精选推荐模型卡片（一键下载注册）；支持导入本地模型或通过 URL 远端拉取；提供单文件 Script Runner 在线创建入口。</td></tr>
+          <tr><td><b>日志</b></td><td>聚合展示 GUI 与 daemon 本地持久化日志，支持按 Info / Debug 过滤及日志级别着色；提供快捷按钮直接在访达中定位日志文件。</td></tr>
+          <tr><td><b>设置</b></td><td>配置外观主题（跟随系统 / 明亮 / 暗黑）、后台 daemon 自动拉起开关、自定义内存预算、网络代理、下载源切换（官方源 / hf-mirror / 自定义）、恢复已忽略的引擎/模型条目，并在「关于」中检查应用更新。</td></tr>
         </tbody>
       </table></div>
-      <p>菜单栏常驻图标可以快速查看 daemon 状态并启停。任务历史是有界的：终态任务保留最近 100 条。</p>
+      <p>MacAIConsole 在菜单栏常驻图标，支持随时查看后台守护进程状态并执行一键启停。应用内更新支持 DMG 自动下载、SHA-256 校验与无缝热重启。</p>
     </section>
 
-    <!-- ==================== 引擎与 Runner ==================== -->
-    <section class="doc" id="engines">
-      <span class="doc-tag">日常使用</span>
-      <h2>引擎与 Runner</h2>
-      <p>每个推理引擎都是一个独立的 Runner 进程（以 <code>org.macai.*</code> 命名），由 daemon 统一安装环境、装配与监控。某个引擎崩溃不会拖垮 daemon——客户端拿到的是 <code>backend_crashed</code> 这类结构化错误，其他模型继续服务。</p>
-      <div class="tbl-wrap"><table>
-        <thead><tr><th>Runner</th><th>能力</th><th>加速</th><th>安装说明</th></tr></thead>
-        <tbody>
-          <tr><td><code>org.macai.llama.cpp</code></td><td>LLM · GGUF</td><td>Metal / Accelerate</td><td>下载预编译二进制（manifest 固定 tag + sha256 校验）</td></tr>
-          <tr><td><code>org.macai.mlx-lm</code></td><td>LLM · MLX</td><td>MLX / Metal</td><td>uv 自动部署 Python 环境</td></tr>
-          <tr><td><code>org.macai.whisper.cpp</code></td><td>STT · .bin</td><td>Core ML 优先，Metal 回退</td><td><b>需本机编译</b>：要预装 Xcode CLT 与 CMake，安装时下载官方源码构建常驻 server</td></tr>
-          <tr><td><code>org.macai.qwen3-asr</code></td><td>STT</td><td>MLX / Metal GPU</td><td>uv 自动部署</td></tr>
-          <tr><td><code>org.macai.sherpa-onnx</code></td><td>STT · 中文</td><td>CPU</td><td>uv 自动部署</td></tr>
-          <tr><td><code>org.macai.qwen3-tts</code></td><td>TTS</td><td>MLX / Metal GPU</td><td>uv 自动部署</td></tr>
-          <tr><td><code>org.macai.kokoro</code></td><td>TTS</td><td>MLX / Metal GPU</td><td>uv 自动部署</td></tr>
-        </tbody>
-      </table></div>
-      <h3>安装与卸载</h3>
-      <p>在「管理」页顶端按 LLM / STT / TTS 分组点「安装」即可；也可以直接调 API：</p>
-      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
-<pre>curl -X POST http://127.0.0.1:11435/api/runners/org.macai.mlx-lm/install</pre></div>
-      <p>已就绪的引擎在右键菜单里可以卸载受管环境和引擎文件，之后能重装。正在使用该引擎的模型要先卸载。如果本机已有同版本引擎二进制，可以用环境变量跳过下载：<code>MACAI_LLAMA_SERVER</code>、<code>MACAI_WHISPER_SERVER</code>（绝对路径）。</p>
-      <h3>新建自己的 Runner（Script Runner）</h3>
-      <p>「管理」页的「新建 Runner」可以从 Chat / STT / TTS 模板编辑一个带 PEP 723 元数据的 <code>.macai.py</code> 单文件。内置编辑器带语法高亮和依赖助手：推理库从预设里选，或直接粘贴官方 <code>pip install</code> / <code>uv add</code> 命令；也可以导入本地 <code>.py</code>（覆盖前有确认），或一键复制一段完整的 Prompt 交给外部 AI 帮你生成脚本。保存时 daemon 会静态检查依赖与权限，在临时环境完成 lock、sync 和导入探针，通过后作为标准 Runner 保存到 <code>Plugins/&lt;runner-id&gt;/</code>，重启 <code>aiworkd</code> 后即可像内置 Runner 一样注册模型。</p>
-      <div class="warn"><b>信任边界：</b>Runner 以 <code>aiworkd</code> 的用户权限运行本地代码，digest 校验和环境变量白名单不构成操作系统沙箱。只安装你读过或信得过的脚本。单文件示例可以参考仓库 <code>samples/</code> 下的 Hojo-TTS-Light。</div>
-    </section>
-
-    <!-- ==================== 模型获取与注册 ==================== -->
+    <!-- ==================== 5. 模型获取与生命周期 ==================== -->
     <section class="doc" id="models">
-      <span class="doc-tag">日常使用</span>
-      <h2>模型获取与注册</h2>
+      <span class="doc-tag">控制台与日常使用</span>
+      <h2>模型获取与生命周期</h2>
 
-      <h3>推荐模型（开箱即用）</h3>
+      <h3>推荐模型清单</h3>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>类型</th><th>模型</th><th>Runner</th><th>预估内存</th><th>说明</th></tr></thead>
+        <thead><tr><th>类型</th><th>模型名称</th><th>驱动引擎 (Runner)</th><th>预估内存</th><th>说明</th></tr></thead>
         <tbody>
-          <tr><td>LLM</td><td>MiniCPM5 2B MLX 4-bit <span class="hot">推荐</span></td><td><code>org.macai.mlx-lm</code></td><td>~2.5 GB</td><td>端侧通用对话，长上下文与工具调用优化</td></tr>
-          <tr><td>LLM</td><td>任意 GGUF</td><td><code>org.macai.llama.cpp</code></td><td>视权重</td><td>本地导入任意兼容 GGUF</td></tr>
-          <tr><td>STT</td><td>Whisper Large v3 Turbo Q5 <span class="hot">推荐</span></td><td><code>org.macai.whisper.cpp</code></td><td>~570 MB</td><td>多语言高速转写，可选 Core ML 加速</td></tr>
-          <tr><td>STT</td><td>Qwen3-ASR 0.6B MLX 4-bit <span class="hot">推荐</span></td><td><code>org.macai.qwen3-asr</code></td><td>~800 MB</td><td>中文与混合语言识别精度好</td></tr>
-          <tr><td>STT</td><td>sherpa-onnx Zipformer zh-int8</td><td><code>org.macai.sherpa-onnx</code></td><td>~400 MB</td><td>中文流式识别，长音频内存平稳，CPU 低功耗</td></tr>
-          <tr><td>TTS</td><td>Kokoro 82M zh <span class="hot">推荐</span></td><td><code>org.macai.kokoro</code></td><td>~400 MB</td><td>内置 20+ 中英文音色</td></tr>
-          <tr><td>TTS</td><td>Qwen3-TTS 0.6B CustomVoice 4-bit <span class="hot">推荐</span></td><td><code>org.macai.qwen3-tts</code></td><td>~1.7 GB</td><td>9 款角色音色，支持情感指令</td></tr>
-          <tr><td>TTS</td><td>macOS 内置语音</td><td>系统 Provider <code>macos_say</code></td><td>极小</td><td>零下载，即刻发声，音质一般</td></tr>
+          <tr><td>LLM</td><td>MiniCPM5 2B MLX 4-bit <span class="hot">推荐</span></td><td><code>org.macai.mlx-lm</code></td><td>~2.5 GB</td><td>端侧旗舰大模型，长上下文与工具调用优化，Metal 原生加速</td></tr>
+          <tr><td>LLM</td><td>任意兼容 GGUF</td><td><code>org.macai.llama.cpp</code></td><td>视权重而定</td><td>支持本地导入任意兼容的 GGUF 格式模型</td></tr>
+          <tr><td>STT</td><td>Whisper Large v3 Turbo Q5 <span class="hot">推荐</span></td><td><code>org.macai.whisper.cpp</code></td><td>~570 MB</td><td>多语言高速转写，支持可选 Core ML / Metal 加速</td></tr>
+          <tr><td>STT</td><td>Qwen3-ASR 0.6B MLX 4-bit <span class="hot">推荐</span></td><td><code>org.macai.qwen3-asr</code></td><td>~800 MB</td><td>新一代语音识别，中文与多语言混合转写精度优异</td></tr>
+          <tr><td>STT</td><td>sherpa-onnx Zipformer zh-int8</td><td><code>org.macai.sherpa-onnx</code></td><td>~400 MB</td><td>中文流式分块识别，长音频内存极其平稳，纯 CPU 低功耗运行</td></tr>
+          <tr><td>TTS</td><td>Kokoro 82M zh <span class="hot">推荐</span></td><td><code>org.macai.kokoro</code></td><td>~400 MB</td><td>高品质语音合成，内置 20+ 款中英文音色，支持中英混读</td></tr>
+          <tr><td>TTS</td><td>Qwen3-TTS 0.6B CustomVoice 4-bit <span class="hot">推荐</span></td><td><code>org.macai.qwen3-tts</code></td><td>~1.7 GB</td><td>内置 9 款官方角色音色，文本支持逗号携带情感控制指令</td></tr>
+          <tr><td>TTS</td><td>macOS 内置语音</td><td>系统 Provider <code>macos_say</code></td><td>系统级（极小）</td><td>零下载开销，即刻发声，适合快速链路冒烟</td></tr>
         </tbody>
       </table></div>
-      <p>推荐模型在「管理」页点「下载」即可，daemon 自动下载（断点续传）并注册。对某条引擎或推荐模型不感兴趣，右键忽略即可，设置页可以恢复。</p>
 
-      <h3>三种获取模型的方式</h3>
+      <h3>三种获取与导入方式</h3>
       <ol>
-        <li><b>推荐模型一键下载</b>：如上，最省事。</li>
-        <li><b>「添加模型」远端下载</b>：输入公开 Hugging Face 或 ModelScope 的仓库 ID / URL，预览文件与大小后勾选下载到模型仓库。<b>下载不会自动注册或加载</b>，完成后需手动启动。</li>
-        <li><b>导入本地已有模型</b>：GGUF / whisper <code>.bin</code> 单文件直接在「添加模型 → 本地文件」导入；MLX 等目录型模型放进对应子目录后注册（或用 CLI <code>macai load</code>）。目录约定在 <a href="#data">数据、日志与内存</a>。</li>
+        <li><b>推荐模型一键下载</b>：在「管理」页点击卡片上的「下载」，daemon 负责断点续传下载并自动注册。对不需要的条目可右键忽略。</li>
+        <li><b>远端仓库下载</b>：点击管理页顶部的「+ 添加模型 → 在线下载」，输入 Hugging Face 或 ModelScope 的仓库 ID / URL，预览文件与体积后下载至本地模型仓库。<b>下载后需手动点击启动注册</b>。</li>
+        <li><b>导入本地已有模型</b>：单文件（<code>.gguf</code> / <code>.bin</code>）可通过「添加模型 → 本地文件」直接选择；目录型模型（MLX 目录、sherpa-onnx 等）复制到本地模型受管目录对应子目录后，使用 CLI 或在管理页完成注册。</li>
       </ol>
 
-      <h3>注册语义：这些规则先知道，能少踩坑</h3>
+      <h3>模型注册与路由语义</h3>
       <ul>
-        <li>目录型模型（MLX、sherpa-onnx、Qwen3 等）<b>模型 ID 必须与目录名一致</b>；GGUF / .bin 单文件没有这个限制。</li>
-        <li>daemon 用目录签名静态探测模型属于哪个 Runner。识别不了的目录会<b>直接拒绝注册</b>，提示检查模型是否下载完整，或安装 / 新建对应 Runner——不会瞎猜。CLI 上可用 <code>macai inspect &lt;目录&gt;</code> 先看诊断。</li>
-        <li>显式 <code>--provider</code> 是硬选择：指定的 Runner 不可用就报错，绝不静默换成别的。注册时的选择结果（requested / selected / 理由 / 有效设备）会被持久化记录，可在 API 返回里审计。</li>
-        <li>LLM 注册默认上下文 4096，可在详情设置调整；默认采样参数 temperature 1.0、top_p 0.95 同样可改。</li>
+        <li><b>目录命名约束</b>：目录型模型（MLX、sherpa-onnx、Qwen3 等）的<b>模型 ID 必须与目录名完全一致</b>；单文件 GGUF 模型无此限制。</li>
+        <li><b>静态目录检测器</b>：daemon 通过预设 manifest 静态探测目录签名以确定归属 Runner，无法识别的目录将直接拒绝注册，防止静默错误；可用 <code>macai inspect &lt;目录&gt;</code> 查看诊断。</li>
+        <li><b>硬选择原则</b>：命令行或 API 显式通过 <code>--provider</code> 指定引擎属于硬选择，若目标 Provider 不可用将直接报错并给出原因，绝不进行静默降级。</li>
+        <li><b>默认参数持久化</b>：LLM 注册项默认上下文为 4096，默认采样参数 temperature 为 1.0、top_p 为 0.95，可在模型详情页修改并持久化生效。</li>
       </ul>
 
-      <h3>生命周期：load / start / unload / remove / rename</h3>
+      <h3>模型生命周期语义对照</h3>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>操作</th><th>作用</th><th>磁盘文件</th></tr></thead>
+        <thead><tr><th>操作</th><th>语义</th><th>磁盘模型文件</th></tr></thead>
         <tbody>
-          <tr><td><code>load</code>（注册并加载）</td><td>新模型注册进 SQLite 注册表并立即加载</td><td>不动</td></tr>
-          <tr><td><code>start</code></td><td>把注册表中已有模型加载进内存</td><td>不动</td></tr>
-          <tr><td><code>unload</code></td><td>停 worker、释放内存；注册记录保留</td><td>不动</td></tr>
-          <tr><td><code>remove</code></td><td>只删注册记录</td><td>保留，可重新注册</td></tr>
-          <tr><td><code>rename</code></td><td>改 ID，运行中的模型先安全停止</td><td>不动</td></tr>
+          <tr><td><code>load</code></td><td>注册新模型到 SQLite 并立即加载进内存</td><td>保持不变</td></tr>
+          <tr><td><code>start</code></td><td>将 SQLite 注册表中已有的模型拉起加载到内存</td><td>保持不变</td></tr>
+          <tr><td><code>unload</code> (<code>stop</code>)</td><td>停用后端 Runner worker，释放常驻内存，保留注册表记录</td><td>保持不变</td></tr>
+          <tr><td><code>remove</code> (<code>rm</code>)</td><td>从 SQLite 注册表中注销该模型记录</td><td>保持不变（文件保留，可重新注册）</td></tr>
+          <tr><td><code>rename</code></td><td>重命名模型 ID（运行中的模型将先安全停用）</td><td>保持不变（Profile 绑定模型不支持改名）</td></tr>
         </tbody>
       </table></div>
-      <p>卸载请求不会打断进行中的推理——请求期间模型挂着 lease，手动卸载、LRU 逐出和空闲回收都要等它释放。由推荐模型 Profile 绑定创建的模型 ID 是固定的，不支持 rename。</p>
 
-      <h3>驻留与内存</h3>
-      <p>「启动」≠ 永久占内存。每个模型有 keep-alive 空闲驻留策略（<code>0</code> / <code>5m</code> / <code>2h</code> / <code>always</code>），到点无人使用就自动卸载；内存紧张时 daemon 按 LRU 逐出。daemon 的内存预算默认 <code>min(RAM×0.75, RAM−8GB)</code>，设置页可改，也可用 <code>AIWORKD_MEMORY_BUDGET</code>（字节）覆盖。跑大模型前先看看预算还剩多少。</p>
+      <h3>内存预算与空闲驻留机制</h3>
+      <p>模型在内存中的驻留由 <b>Lease 锁</b> 与 <b>Keep-Alive Reaper</b> 共同管理：</p>
+      <ul>
+        <li>每个请求处理期间模型持有租约（lease count > 0），手动卸载、空闲超时回收和 LRU 逐出<b>绝不会打断正在进行中的推理请求</b>。</li>
+        <li>每个模型支持配置 <code>keep-alive</code> 空闲驻留时间（例如 <code>0</code> 用完即卸、<code>5m</code>、<code>2h</code>、<code>always</code> 永久驻留）。</li>
+        <li>daemon 的全局内存预算默认计算公式为 <code>min(RAM×0.75, RAM−8GB)</code>，超过预算时按最近最少使用（LRU）原则自动逐出空闲模型。</li>
+      </ul>
     </section>
 
-    <!-- ==================== Chat ==================== -->
+    <!-- ==================== 6. 对话 Chat 实操 ==================== -->
     <section class="doc" id="chat">
-      <span class="doc-tag">三大能力</span>
-      <h2>对话 Chat</h2>
-      <h3>GUI</h3>
-      <p>通过 CLI 或 API 发起 Chat 请求后，「任务」页会记录运行状态与结果；推理模型（如 DeepSeek 系）的思考过程单独分区展示，不与最终回答混在一起。模型的默认采样参数在运行状态页的模型详情里调整，右键「使用示例」会带上这三个参数生成现成的 API 代码。</p>
-      <h3>CLI</h3>
-      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
-<pre><span class="cm"># 一次性提问（无上下文记忆）</span>
-macai chat local-model <span class="str">"Hello"</span> <span class="arg">--system</span> <span class="str">"Answer concisely"</span> <span class="arg">--temperature</span> 0.2
+      <span class="doc-tag">控制台与日常使用</span>
+      <h2>对话 Chat 实操</h2>
+      <h3>1. 控制台观测</h3>
+      <p>发起对话后，「任务」页会实时滚动展示会话状态；推理模型（如 DeepSeek 系）的思维链（Thinking process）会通过独立卡片折叠/展开，不与最终回复混排。模型详情页可右键点击「使用示例」复制现成 API 请求代码。</p>
 
-<span class="cm"># 交互式多轮对话（带上下文记忆），Ctrl-D 退出</span>
-macai run local-model <span class="arg">--max-tokens</span> 256</pre></div>
-      <h3>API</h3>
-      <p>标准 <code>POST /v1/chat/completions</code>。<code>"stream": true</code> 时逐 token SSE 推送，以 <code>data: [DONE]</code> 结束；省略 <code>temperature</code> / <code>top_p</code> 时使用模型注册时保存的默认值。</p>
-      <p>推理模型会通过 <code>reasoning_content</code> 字段返回思考内容，最终回答仍在 <code>content</code>；非推理模型没有该字段。请求带可选 <code>session_id</code>（不透明字符串）可声明多轮延续：两个 LLM Runner 都依托常驻 worker 复用对话前缀的 KV 缓存，长历史下首 token 延迟明显下降。</p>
-      <div class="note"><b>一个诚实的怪癖：</b>Metal 数值精度差异可能使缓存命中后 <code>temperature=0</code> 的输出与全量重算偶发不同。要严格可复现的实验，别依赖 <code>session_id</code> 复用。</div>
-      <p>Python SDK 接入：</p>
+      <h3>2. 命令行调用</h3>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre><span class="cm"># 单次提问（无记忆模式）</span>
+macai chat local-model <span class="str">"请用一句话解释量子计算"</span> <span class="arg">--temperature</span> 0.2
+
+<span class="cm"># 交互式终端多轮对话（保留上下文），Ctrl-D 退出</span>
+macai run local-model <span class="arg">--max-tokens</span> 512</pre></div>
+
+      <h3>3. HTTP API 与流式输出</h3>
+      <p>标准端点 <code>POST /v1/chat/completions</code>，设置 <code>"stream": true</code> 即可开启逐 Token SSE 流式响应，流以 <code>data: [DONE]</code> 结束：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>curl http://127.0.0.1:11435/v1/chat/completions <span class="arg">\</span>
+  -H <span class="str">'Content-Type: application/json'</span> <span class="arg">\</span>
+  -d '{
+    "model": "MiniCPM5-2B-MLX-4bit",
+    "messages": [{"role": "user", "content": "你好"}],
+    "stream": true
+  }'</pre></div>
+
+      <div class="note"><b>Prompt Cache 与 Session KV 前缀复用：</b>请求中可传入可选字段 <code>session_id</code>（不透明字符串）标明会话连续性。MLX-LM 对公共前缀 token 仅做增量 prefill，llama.cpp 利用 <code>--cache-reuse</code> 分块命中缓存，大幅降低长对话下的首 Token 延迟（TTFT）。<br>
+      <i>注意：Metal 底层数值精度的细微差异可能使缓存命中时的 <code>temperature=0</code> 输出与全量重算偶发存在细微差异。</i></div>
+
+      <h3>4. Python OpenAI SDK 接入</h3>
       <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
 <pre>from openai import OpenAI
 
 client = OpenAI(
     base_url=<span class="str">"http://127.0.0.1:11435/v1"</span>,
-    api_key=<span class="str">"local"</span>,  <span class="cm"># daemon 无鉴权，占位即可</span>
+    api_key=<span class="str">"local"</span>,  <span class="cm"># 本地无鉴权，占位即可</span>
 )
 
-resp = client.chat.completions.create(
+response = client.chat.completions.create(
     model=<span class="str">"MiniCPM5-2B-MLX-4bit"</span>,
-    messages=[{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: <span class="str">"你好"</span>}],
+    messages=[{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: <span class="str">"Hello!"</span>}],
 )
-print(resp.choices[0].message.content)</pre></div>
+print(response.choices[0].message.content)</pre></div>
     </section>
 
-    <!-- ==================== STT ==================== -->
+    <!-- ==================== 7. 语音识别 STT 实操 ==================== -->
     <section class="doc" id="stt">
-      <span class="doc-tag">三大能力</span>
-      <h2>语音识别 STT</h2>
-      <p>上传 <code>wav / mp3 / flac / ogg / m4a</code> 都可以，daemon 在入口统一解码为 PCM WAV 再交给 Runner，所以各 Runner 对格式的要求是一致的。注意 HTTP API 上传的是<b>音频字节</b>（multipart 的 <code>file</code> 字段），不是路径字符串——传路径、URL 或空文件会收到 400，错误信息里会写明收到的字节数和正确用法。</p>
-      <h3>选哪个引擎</h3>
+      <span class="doc-tag">控制台与日常使用</span>
+      <h2>语音识别 STT 实操</h2>
+      <p>MacAI 在音频接入入口（<code>crates/ai-daemon/src/audio.rs</code>）统一采用纯 Rust 实现的 <b>Decode-on-Ingest</b> 架构，支持上传 <code>wav / mp3 / flac / ogg / m4a</code> 常见音频格式。音频在进入 daemon 时统一归一化为 16kHz 16-bit 单声道标准 PCM WAV 流，下游所有 Provider 契约极其精简，均只接收标准 WAV 数据流。</p>
+
+      <h3>引擎选型指南</h3>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>Runner</th><th>语言</th><th>特点</th></tr></thead>
+        <thead><tr><th>引擎</th><th>适用语言</th><th>特点与硬件加速</th></tr></thead>
         <tbody>
-          <tr><td>whisper.cpp</td><td>多语言</td><td>ggml .bin 模型；Core ML encoder 可选，缺失时自动走 Metal，不是错误</td></tr>
-          <tr><td>Qwen3-ASR 0.6B</td><td>多语言</td><td>MLX 4-bit，中文与混合语言表现好，可指定语言提示</td></tr>
-          <tr><td>sherpa-onnx Zipformer</td><td>仅中文</td><td>流式分块转写，长录音内存平稳，纯 CPU</td></tr>
+          <tr><td><code>org.macai.whisper.cpp</code></td><td>多语言通用</td><td>使用 <code>.bin</code> 格式权重，支持可选 Core ML 编码器加速（ANE），无 Core ML 时自动回退至 Metal。</td></tr>
+          <tr><td><code>org.macai.qwen3-asr</code></td><td>多语言（中英优异）</td><td>基于 MLX / Metal GPU 加速，中英文混合、方言与背景噪音下识别精度优异。</td></tr>
+          <tr><td><code>org.macai.sherpa-onnx</code></td><td>专注中文</td><td>基于 streaming Zipformer 中文 int8 模型，流式分块解码，长录音内存平稳，纯 CPU 低功耗运行。</td></tr>
         </tbody>
       </table></div>
-      <h3>CLI</h3>
+
+      <h3>命令行转写</h3>
       <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
-<pre>macai transcribe meeting.m4a <span class="arg">--model</span> Whisper-Large-v3-Turbo-Q5 <span class="arg">--language</span> zh</pre></div>
-      <h3>API</h3>
+<pre><span class="cm"># 转写本地音频文件</span>
+macai transcribe meeting.m4a <span class="arg">--model</span> Whisper-Large-v3-Turbo-Q5 <span class="arg">--language</span> zh</pre></div>
+
+      <h3>HTTP API 调用</h3>
       <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
 <pre>curl http://127.0.0.1:11435/v1/audio/transcriptions <span class="arg">\</span>
   -F <span class="str">"file=@/path/to/meeting.wav"</span> <span class="arg">\</span>
   -F <span class="str">"model=Qwen3-ASR-0.6B-MLX-4bit"</span> <span class="arg">\</span>
   -F <span class="str">"language=zh"</span></pre></div>
-      <div class="note"><b>whisper.cpp 进阶：</b>把编译好的 Core ML encoder 目录（如 <code>ggml-large-v3-turbo-encoder.mlmodelc/</code>）放在 .bin 模型同级并保持对应命名即可启用 ANE 编码器；不提供则自动 Metal 回退。sherpa-onnx 的模型目录必须完整保留 <code>tokens.txt</code>、<code>encoder.int8.onnx</code>、<code>decoder.onnx</code>、<code>joiner.int8.onnx</code> 四个文件。</div>
+      <div class="warn"><b>必须以 multipart 字节上传：</b>调用 HTTP API 时音频必须以真实的二进制字节上传（<code>file=@...</code>）。若传路径字符串、URL 或空文件，daemon 将返回 HTTP 400 并明确给出正确用法。</div>
     </section>
 
-    <!-- ==================== TTS ==================== -->
+    <!-- ==================== 8. 语音合成 TTS 实操 ==================== -->
     <section class="doc" id="tts">
-      <span class="doc-tag">三大能力</span>
-      <h2>语音合成 TTS</h2>
+      <span class="doc-tag">控制台与日常使用</span>
+      <h2>语音合成 TTS 实操</h2>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>Runner</th><th>音色</th><th>特点</th></tr></thead>
+        <thead><tr><th>引擎</th><th>音色数量</th><th>特点与交互能力</th></tr></thead>
         <tbody>
-          <tr><td>Kokoro 82M zh</td><td>20+ 中英文音色</td><td>中英混读，长文本自动分段拼接</td></tr>
-          <tr><td>Qwen3-TTS 0.6B</td><td>9 款官方角色音色</td><td>表现力强，文本中可用逗号携带情感指令</td></tr>
-          <tr><td>macos_say</td><td>系统语音</td><td>零下载零加载，适合快速验证链路</td></tr>
+          <tr><td><code>org.macai.kokoro</code></td><td>20+ 款中英音色</td><td>发音自然度高，长文本自动按句切片分段合成，CLI 默认音色为 <code>zf_001</code>。</td></tr>
+          <tr><td><code>org.macai.qwen3-tts</code></td><td>9 款内置角色音色</td><td>表现力强，支持在合成文本开头用逗号携带情感指令（如 <code>Vivian, very happy</code>）。</td></tr>
+          <tr><td><code>macos_say</code></td><td>系统内置音色</td><td>内置系统 Provider，零下载零加载开销，快速冒烟测试。</td></tr>
         </tbody>
       </table></div>
-      <h3>音色选择与试听</h3>
-      <p>运行状态页和模型详情里的音色下拉框支持滚轮快速步进：滚轮停下后自动保存为该模型默认音色并试听（可在设置里关掉自动试听）；试听播放随时会被下一次选择打断。命令行对应：</p>
-      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
-<pre>macai voice kokoro-82m-zh              <span class="cm"># 列出可用音色</span>
-macai voice kokoro-82m-zh zf_001       <span class="cm"># 设置默认音色</span>
-macai voice Qwen3-TTS-0.6B-CustomVoice-4bit --clear  <span class="cm"># 清除默认音色</span></pre></div>
-      <h3>合成</h3>
-      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
-<pre><span class="cm"># CLI：生成 WAV 文件</span>
-macai speak <span class="str">"你好，这是本地合成的语音。"</span> <span class="arg">--model</span> kokoro-82m-zh <span class="arg">--output</span> hello.wav
 
-<span class="cm"># Qwen3-TTS 情感指令：逗号后跟情绪描述</span>
-macai speak <span class="str">"Vivian, very happy 我们明天见！"</span> <span class="arg">--model</span> Qwen3-TTS-0.6B-CustomVoice-4bit
+      <h3>音色滚轮切换与试听</h3>
+      <p>MacAIConsole 的运行状态页与模型详情页提供了基于滚轮优化的快速音色选择器：滚轮滚动停下后防抖持久化为默认音色并自动发声试听（试听播放随时会被下一次滚动打断）。命令行下可随时查询与设置默认音色：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre><span class="cm"># 列出模型支持的所有音色清单</span>
+macai voice kokoro-82m-zh
 
-<span class="cm"># API</span>
+<span class="cm"># 设置默认音色</span>
+macai voice kokoro-82m-zh zf_001
+
+<span class="cm"># 清除默认音色设置</span>
+macai voice Qwen3-TTS-0.6B-CustomVoice-4bit --clear</pre></div>
+
+      <h3>语音合成调用</h3>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre><span class="cm"># CLI 合成并输出至本地 WAV 文件</span>
+macai speak <span class="str">"你好，这是通过本地模型合成的语音。"</span> <span class="arg">--model</span> kokoro-82m-zh <span class="arg">--output</span> hello.wav
+
+<span class="cm"># Qwen3-TTS 情感指令合成</span>
+macai speak <span class="str">"Vivian, very happy 祝你今天过得愉快！"</span> <span class="arg">--model</span> Qwen3-TTS-0.6B-CustomVoice-4bit
+
+<span class="cm"># HTTP API 调用</span>
 curl http://127.0.0.1:11435/v1/audio/speech <span class="arg">\</span>
   -H <span class="str">'Content-Type: application/json'</span> <span class="arg">\</span>
   -d <span class="str">'{"model":"kokoro-82m-zh","input":"你好","voice":"zf_001"}'</span> <span class="arg">\</span>
   --output speech.wav</pre></div>
-      <p>Qwen3-TTS 内置音色：<code>Vivian</code>、<code>Serena</code>、<code>Uncle_Fu</code>、<code>Dylan</code>、<code>Eric</code>、<code>Ryan</code>、<code>Aiden</code>、<code>Ono_Anna</code>、<code>Sohee</code>。</p>
-      <div class="warn"><b>已知限制：</b><code>speed</code> 参数当前会被校验（0.25–4.0）但对 Qwen3-TTS 实际不生效（上游 mlx-audio 尚无对应参数）；Qwen3-TTS 首版不含流式输出与声音克隆。Kokoro 的 CLI 默认音色是 <code>zf_001</code>。</div>
+      <p>Qwen3-TTS 官方内置音色列表：<code>Vivian</code>、<code>Serena</code>、<code>Uncle_Fu</code>、<code>Dylan</code>、<code>Eric</code>、<code>Ryan</code>、<code>Aiden</code>、<code>Ono_Anna</code>、<code>Sohee</code>。</p>
     </section>
 
-    <!-- ==================== CLI ==================== -->
-    <section class="doc" id="cli">
-      <span class="doc-tag">参考</span>
-      <h2>macai 命令行</h2>
-      <p><code>macai</code> 只跟 daemon 通信，daemon 没跑它就什么也做不了（会提示启动方法）。全局参数 <code>-a, --addr HOST:PORT</code> 指定 daemon 地址，默认 <code>127.0.0.1:11435</code>。每个子命令的完整参数用 <code>macai &lt;命令&gt; --help</code> 查询。</p>
+    <!-- ==================== 9. Runner 架构与环境管理 ==================== -->
+    <section class="doc" id="engines-overview">
+      <span class="doc-tag">Runner 引擎实操</span>
+      <h2>Runner 架构与环境管理</h2>
+      <p>为了保证系统可靠性，MacAI 的所有生产推理引擎均收敛至 <b>Runner 插件架构</b>。每个 Runner 是一个独立的操作系统子进程（以 <code>org.macai.*</code> 命名），由 <code>aiworkd</code> 统一进行环境依赖配置、启动心跳探测与 IPC 进程生命周期监管。</p>
+      <ul>
+        <li><b>进程级故障隔离</b>：推理过程中哪怕底层 C++ 引擎发生段错误（Segmentation fault）或 Python worker 触发 OOM，受影响的仅是该子进程。<code>aiworkd</code> 守护进程本身始终存活，并将异常转化为结构化的 <code>backend_crashed</code> 错误返回给客户端，其余并发运行的模型完全不受影响。</li>
+        <li><b>统一环境管理</b>：C++ 原生二进制构建（whisper.cpp）与 Python 依赖环境（uv 受管）共享统一的安装接口 <code>POST /api/runners/{runner}/install</code>。</li>
+      </ul>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>命令</th><th>用途</th></tr></thead>
+        <thead><tr><th>Runner ID</th><th>负责模型</th><th>加速硬件</th><th>环境管理机制</th></tr></thead>
         <tbody>
-          <tr><td><code>status</code></td><td>daemon、请求与系统内存概况</td></tr>
-          <tr><td><code>list</code>（<code>models</code>）</td><td>已注册模型及加载状态</td></tr>
-          <tr><td><code>ps</code></td><td>运行中模型、内存占用、设备与驻留策略</td></tr>
-          <tr><td><code>providers</code></td><td>Provider 可用性、设备与不可用原因</td></tr>
-          <tr><td><code>tasks [id] [--limit N]</code></td><td>近期任务列表或单个任务详情</td></tr>
-          <tr><td><code>load &lt;path&gt;</code></td><td>注册并加载本地模型；<code>--id --type llm|stt|tts --provider --context-length --keep-alive --routing-token</code></td></tr>
-          <tr><td><code>inspect &lt;dir&gt;...</code></td><td>目录模型路由诊断，输出 routing token</td></tr>
-          <tr><td><code>start &lt;model&gt;</code></td><td>加载已注册模型</td></tr>
-          <tr><td><code>unload &lt;model&gt;</code>（<code>stop</code>）</td><td>停止 worker 释放内存，注册保留</td></tr>
-          <tr><td><code>remove &lt;model&gt;</code>（<code>rm</code>）</td><td>删除注册记录，文件保留</td></tr>
-          <tr><td><code>rename &lt;model&gt; &lt;new&gt;</code></td><td>改 ID（运行中先安全停止）</td></tr>
-          <tr><td><code>keep-alive &lt;model&gt; &lt;v&gt;</code></td><td>空闲驻留：<code>0 / 5m / 2h / always</code></td></tr>
-          <tr><td><code>pull &lt;repo&gt; &lt;file&gt;</code></td><td>从 HuggingFace 下载单文件到模型仓库并注册加载</td></tr>
-          <tr><td><code>chat &lt;model&gt; &lt;msg|-&gt;</code></td><td>一次性对话（无记忆）</td></tr>
-          <tr><td><code>run &lt;model&gt;</code></td><td>交互式多轮对话（有记忆）</td></tr>
-          <tr><td><code>transcribe &lt;file&gt;</code></td><td>语音转文字，<code>--model --language</code></td></tr>
-          <tr><td><code>speak &lt;text|-&gt;</code></td><td>语音合成，<code>--model --voice --output --speed</code></td></tr>
-          <tr><td><code>voice &lt;model&gt; [v] [--clear]</code></td><td>查看 / 设置 / 清除 TTS 默认音色</td></tr>
-          <tr><td><code>logging [info|debug]</code></td><td>查询或调整 daemon 日志级别</td></tr>
-          <tr><td><code>serve</code></td><td>检查 API server 是否在运行，未运行给出启动提示</td></tr>
+          <tr><td><code>org.macai.llama.cpp</code></td><td>GGUF 格式 LLM</td><td>Metal / Accelerate</td><td>下载验证过的预编译固定 release 二进制（sha256 校验）</td></tr>
+          <tr><td><code>org.macai.whisper.cpp</code></td><td><code>.bin</code> 格式 STT</td><td>Core ML / Metal</td><td>下载官方源码归档并在本机 CMake 静态编译常驻 server</td></tr>
+          <tr><td><code>org.macai.mlx-lm</code></td><td>MLX 格式 LLM</td><td>MLX / Metal</td><td>uv 锁定部署 Python 虚拟环境</td></tr>
+          <tr><td><code>org.macai.qwen3-asr</code></td><td>Qwen3-ASR 模型</td><td>MLX / Metal GPU</td><td>uv 锁定部署 Python 虚拟环境</td></tr>
+          <tr><td><code>org.macai.sherpa-onnx</code></td><td>Zipformer int8 STT</td><td>CPU</td><td>uv 锁定部署 Python 虚拟环境</td></tr>
+          <tr><td><code>org.macai.kokoro</code></td><td>Kokoro-82M TTS</td><td>MLX / Metal GPU</td><td>uv 锁定部署 Python 虚拟环境</td></tr>
+          <tr><td><code>org.macai.qwen3-tts</code></td><td>Qwen3-TTS 0.6B</td><td>MLX / Metal GPU</td><td>uv 锁定部署 Python 虚拟环境</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <!-- ==================== 10. llama.cpp 实操 ==================== -->
+    <section class="doc" id="runner-llama">
+      <span class="doc-tag">Runner 引擎实操</span>
+      <h2>4. 安装 llama.cpp 引擎（Runner）</h2>
+      <p>llama.cpp Runner（<code>org.macai.llama.cpp</code>）用于高效执行 GGUF 格式的 LLM 模型。可通过管理页一键安装，或调用 API：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>curl -X POST http://127.0.0.1:11435/api/runners/org.macai.llama.cpp/install</pre></div>
+      <p>安装过程会自动同步 uv 适配器环境，并下载验证过的 llama.cpp 预编译二进制到：<br>
+      <code>~/Library/Application Support/MacAIConsole/Engines/org.macai.llama.cpp/</code>。</p>
+      <p>若本机已有自定义编译的二进制，可通过环境变量显式覆盖：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>export MACAI_LLAMA_SERVER=/absolute/path/to/llama-server</pre></div>
+
+      <h3>注册并运行本地 GGUF 模型</h3>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>./target/release/macai load /path/to/model.gguf \
+  --id local-model \
+  --type llm \
+  --keep-alive 5m \
+  --context-length 4096
+
+./target/release/macai chat local-model "Hello" --temperature 0.2
+./target/release/macai unload local-model</pre></div>
+    </section>
+
+    <!-- ==================== 11. whisper.cpp 实操 ==================== -->
+    <section class="doc" id="runner-whisper">
+      <span class="doc-tag">Runner 引擎实操</span>
+      <h2>5. 安装 whisper.cpp 引擎（Runner）</h2>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>curl -X POST http://127.0.0.1:11435/api/runners/org.macai.whisper.cpp/install
+./scripts/download-whisper-model.sh base</pre></div>
+      <p>安装流程会校验官方源码归档，在临时暂存区构建静态链接的常驻 <code>whisper-server</code>，随后原子替换至：</p>
+      <div class="codeblock"><pre>~/Library/Application Support/MacAIConsole/Engines/org.macai.whisper.cpp/build/bin/whisper-server
+.build/models/ggml-base.bin</pre></div>
+      <p>覆盖已有 server 二进制：<code>export MACAI_WHISPER_SERVER=/absolute/path/to/whisper-server</code>。</p>
+      <p>注册 <code>.bin</code> 模型若省略 <code>--provider</code>，将默认路由至 <code>org.macai.whisper.cpp</code>。若将编译好的 Core ML <code>.mlmodelc</code> 目录置于 <code>.bin</code> 同级并同名，将优先走 ANE 硬件加速，否则自动 Metal 回退。</p>
+    </section>
+
+    <!-- ==================== 12. Qwen3-ASR 实操 ==================== -->
+    <section class="doc" id="runner-qwen3-asr">
+      <span class="doc-tag">Runner 引擎实操</span>
+      <h2>6. 准备 Qwen3-ASR 0.6B</h2>
+      <p>Qwen3-ASR 由 <code>org.macai.qwen3-asr</code> 提供，走 MLX/Metal 加速。Python 环境可通过管理页安装，或在仓库根目录下手动执行：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>uv sync --project runners/qwen3-asr --locked --no-dev</pre></div>
+      <p>推荐模型（<code>mlx-community/Qwen3-ASR-0.6B-4bit</code>）放进 <code>~/Library/Application Support/MacAIConsole/Models/stt/</code>。注册时模型 ID 必须与目录名一致：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>./target/release/macai load \
+  "$HOME/Library/Application Support/MacAIConsole/Models/stt/Qwen3-ASR-0.6B-MLX-4bit" \
+  --id Qwen3-ASR-0.6B-MLX-4bit \
+  --type stt \
+  --provider org.macai.qwen3-asr \
+  --keep-alive always
+
+./target/release/macai transcribe meeting.wav --model Qwen3-ASR-0.6B-MLX-4bit --language zh</pre></div>
+    </section>
+
+    <!-- ==================== 13. sherpa-onnx 实操 ==================== -->
+    <section class="doc" id="runner-sherpa">
+      <span class="doc-tag">Runner 引擎实操</span>
+      <h2>7. 准备 sherpa-onnx zh-int8-2025（Runner）</h2>
+      <p>sherpa-onnx 由 <code>org.macai.sherpa-onnx</code> 提供服务，纯 CPU 运行。手动配置 Python 环境：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>uv sync --project runners/sherpa-onnx --locked --no-dev</pre></div>
+      <p>模型目录必须完整保留以下四个文件：</p>
+      <div class="codeblock"><pre>sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/
+├── tokens.txt
+├── encoder.int8.onnx
+├── decoder.onnx
+└── joiner.int8.onnx</pre></div>
+      <p>模型下载解包与注册：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>curl -L -o sherpa-onnx-model.tar.bz2 \
+  https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30.tar.bz2
+tar xf sherpa-onnx-model.tar.bz2 && rm sherpa-onnx-model.tar.bz2
+
+./target/release/macai load ./sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30 \
+  --id sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30 \
+  --type stt \
+  --provider org.macai.sherpa-onnx \
+  --keep-alive always</pre></div>
+    </section>
+
+    <!-- ==================== 14. Kokoro TTS 实操 ==================== -->
+    <section class="doc" id="runner-kokoro">
+      <span class="doc-tag">Runner 引擎实操</span>
+      <h2>8. 准备 Kokoro TTS</h2>
+      <p>Kokoro 由 <code>org.macai.kokoro</code> 提供服务，MLX 加速。手动部署环境：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>uv sync --project runners/kokoro --locked --no-dev</pre></div>
+      <p>模型 <a href="https://huggingface.co/1038lab/Kokoro-82M-zh-MLX" target="_blank" rel="noopener">Kokoro-82M-zh-MLX</a> 放入 <code>~/Library/Application Support/MacAIConsole/Models/tts/</code> 并注册：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>./target/release/macai load \
+  "$HOME/Library/Application Support/MacAIConsole/Models/tts/kokoro-82m-zh" \
+  --id kokoro-82m-zh \
+  --type tts \
+  --provider org.macai.kokoro \
+  --keep-alive always</pre></div>
+    </section>
+
+    <!-- ==================== 15. Qwen3-TTS 实操 ==================== -->
+    <section class="doc" id="runner-qwen3-tts">
+      <span class="doc-tag">Runner 引擎实操</span>
+      <h2>9. 准备 Qwen3-TTS CustomVoice（Runner）</h2>
+      <p>Qwen3-TTS 由 <code>org.macai.qwen3-tts</code> 驱动，MLX/Metal 加速。手动部署环境：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>uv sync --project runners/qwen3-tts --locked --no-dev</pre></div>
+      <p>模型目录（<a href="https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit" target="_blank" rel="noopener">mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-4bit</a>）放入 <code>Models/tts/</code> 并注册：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>./target/release/macai load \
+  "$HOME/Library/Application Support/MacAIConsole/Models/tts/Qwen3-TTS-0.6B-CustomVoice-4bit" \
+  --id Qwen3-TTS-0.6B-CustomVoice-4bit \
+  --type tts \
+  --provider org.macai.qwen3-tts \
+  --keep-alive always
+
+./target/release/macai speak Qwen3-TTS-0.6B-CustomVoice-4bit "你好，这是本地模型。"</pre></div>
+      <div class="warn"><b>参数现状：</b><code>speed</code> 参数仍按 0.25..=4.0 进行输入校验，但因上游 <code>mlx-audio</code> 库限制目前不改变合成速率；首版暂不含声音克隆。</div>
+    </section>
+
+    <!-- ==================== 16. MLX-LM 实操 ==================== -->
+    <section class="doc" id="runner-mlx-lm">
+      <span class="doc-tag">Runner 引擎实操</span>
+      <h2>10. 准备 MLX-LM（Runner）</h2>
+      <p>MLX LLM 由 <code>org.macai.mlx-lm</code> 提供服务，通过 Apple Metal 原生加速。手动部署环境：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>uv sync --project runners/mlx-lm --locked --no-dev</pre></div>
+      <p>推荐模型（如 SmolLM2-135M 或 <a href="https://huggingface.co/openbmb/MiniCPM5-2B-MLX" target="_blank" rel="noopener">MiniCPM5-2B-MLX</a> 目录）放入 <code>~/Library/Application Support/MacAIConsole/Models/llm/</code> 并注册：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>./target/release/macai load \
+  "$HOME/Library/Application Support/MacAIConsole/Models/llm/SmolLM2-135M-Instruct-8bit" \
+  --id SmolLM2-135M-Instruct-8bit \
+  --type llm \
+  --provider org.macai.mlx-lm \
+  --keep-alive 5m</pre></div>
+      <div class="note"><b>权重格式对应规则：</b><code>.gguf</code> 单文件格式由 <code>llama.cpp</code> 加载；包含 <code>config.json</code> 与 safetensors 权重的目录型模型由 <code>mlx-lm</code> Runner 加载。</div>
+    </section>
+
+    <!-- ==================== 17. 自制 Script Runner ==================== -->
+    <section class="doc" id="runner-script">
+      <span class="doc-tag">Runner 引擎实操</span>
+      <h2>自制 Script Runner 扩展</h2>
+      <p>MacAI 支持通过单文件 Python 脚本快速扩展全新的模型或推理库：在「管理」页点击「新建 Runner」，从 Chat / STT / TTS 模板编辑一个带 <b>PEP 723</b> 依赖元数据的 <code>.macai.py</code> 文件：</p>
+      <ul>
+        <li><b>依赖自动管理</b>：支持直接粘贴官方 <code>pip install</code> 或 <code>uv add</code> 依赖命令，uv 会自动解析完整的依赖树。</li>
+        <li><b>AI 协作与本地导入</b>：支持导入本地已有的 <code>.py</code> 脚本，或一键复制专门为 AI 提示词设计的脚手架交由外部大模型帮你编写实现。</li>
+        <li><b>环境沙箱与持久化</b>：保存时 daemon 对代码进行静态依赖和权限检查，在临时沙箱完成依赖 lock 与 sync，验证通过后作为标准包持久化存储至应用支持目录 <code>Plugins/&lt;runner-id&gt;/</code>。</li>
+      </ul>
+      <div class="warn"><b>信任边界提示：</b>Runner 以当前 Mac 登录用户的权限运行，digest 校验与白名单机制不构成操作系统安全沙箱。仅安装你阅读过或完全信赖的脚本代码。单文件示例可参考仓库 <code>samples/Hojo_TTS_Light_40M_sample.md</code>。</div>
+    </section>
+
+    <!-- ==================== 18. macai CLI 参考 ==================== -->
+    <section class="doc" id="cli">
+      <span class="doc-tag">接口与客户端参考</span>
+      <h2>macai CLI 命令行参考</h2>
+      <p><code>macai</code> 全局参数 <code>-a, --addr HOST:PORT</code> 指定 daemon 地址，默认 <code>127.0.0.1:11435</code>。各子命令完整参数通过 <code>macai &lt;命令&gt; --help</code> 查看：</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>子命令</th><th>语法与参数</th><th>功能说明</th></tr></thead>
+        <tbody>
+          <tr><td><code>status</code></td><td><code>macai status</code></td><td>查询 daemon 运行状态、请求计数与系统内存概况</td></tr>
+          <tr><td><code>list</code> (<code>models</code>)</td><td><code>macai list</code></td><td>列出 SQLite 中已注册的全部模型及常驻状态</td></tr>
+          <tr><td><code>ps</code></td><td><code>macai ps</code></td><td>列出常驻内存中的模型、实际 RSS 内存与硬件加速设备</td></tr>
+          <tr><td><code>providers</code></td><td><code>macai providers</code></td><td>探测系统所有可用 Provider 及未就绪的具体原因</td></tr>
+          <tr><td><code>tasks</code></td><td><code>macai tasks [id] [--limit N]</code></td><td>查看近期 Chat/STT/TTS 任务流水或单任务详情</td></tr>
+          <tr><td><code>load</code></td><td><code>macai load &lt;path&gt; --id &lt;id&gt; --type &lt;t&gt;</code></td><td>注册并加载模型（支持 <code>--keep-alive</code>、<code>--context-length</code> 等）</td></tr>
+          <tr><td><code>inspect</code></td><td><code>macai inspect &lt;dir&gt;...</code></td><td>静态诊断模型目录归属并颁发 routing token</td></tr>
+          <tr><td><code>start</code></td><td><code>macai start &lt;model&gt;</code></td><td>把注册表中已有模型拉起加载到内存</td></tr>
+          <tr><td><code>unload</code></td><td><code>macai unload &lt;model&gt;</code></td><td>停止 worker 释放内存，注册记录与文件完好保留</td></tr>
+          <tr><td><code>remove</code></td><td><code>macai remove &lt;model&gt;</code></td><td>仅删除 SQLite 注册记录，磁盘源文件保持不变</td></tr>
+          <tr><td><code>rename</code></td><td><code>macai rename &lt;old&gt; &lt;new&gt;</code></td><td>重命名模型 ID（运行中模型将先安全停用）</td></tr>
+          <tr><td><code>keep-alive</code></td><td><code>macai keep-alive &lt;model&gt; &lt;val&gt;</code></td><td>修改空闲驻留策略（<code>0</code> / <code>5m</code> / <code>2h</code> / <code>always</code>）</td></tr>
+          <tr><td><code>pull</code></td><td><code>macai pull &lt;repo&gt; &lt;file&gt;</code></td><td>从 Hugging Face 下载单文件到模型仓库并自动注册</td></tr>
+          <tr><td><code>chat</code></td><td><code>macai chat &lt;model&gt; &lt;msg&gt;</code></td><td>单次提问（支持 <code>--system</code>、<code>--temperature</code>）</td></tr>
+          <tr><td><code>run</code></td><td><code>macai run &lt;model&gt;</code></td><td>交互式多轮对话（保留上下文）</td></tr>
+          <tr><td><code>transcribe</code></td><td><code>macai transcribe &lt;file&gt;</code></td><td>识别音频，支持 <code>--model</code>、<code>--language</code></td></tr>
+          <tr><td><code>speak</code></td><td><code>macai speak &lt;text&gt;</code></td><td>文字转语音，支持 <code>--voice</code>、<code>--output</code></td></tr>
+          <tr><td><code>voice</code></td><td><code>macai voice &lt;model&gt; [v]</code></td><td>查看可用音色列表或设置默认音色（<code>--clear</code> 清除）</td></tr>
+          <tr><td><code>logging</code></td><td><code>macai logging [info|debug]</code></td><td>查询或动态切换日志输出级别</td></tr>
+          <tr><td><code>serve</code></td><td><code>macai serve</code></td><td>检查后台服务是否已正常就绪</td></tr>
         </tbody>
       </table></div>
       <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
-<pre><span class="cm"># 日常巡检</span>
-macai status &amp;&amp; macai ps &amp;&amp; macai tasks --limit 5
-
-<span class="cm"># 从 HF 拉一个 GGUF 直接开聊</span>
-macai pull Qwen/Qwen2.5-0.5B-Instruct-GGUF qwen2.5-0.5b-instruct-q4_k_m.gguf
-macai chat qwen2.5-0.5b-instruct-q4_k_m <span class="str">"ping"</span></pre></div>
+<pre><span class="cm"># 常用巡检组合</span>
+macai status && macai ps && macai tasks --limit 5</pre></div>
     </section>
 
-    <!-- ==================== API ==================== -->
+    <!-- ==================== 19. HTTP API ==================== -->
     <section class="doc" id="api">
-      <span class="doc-tag">参考</span>
-      <h2>HTTP API</h2>
-      <p><code>/v1/*</code> 面向推理（OpenAI 兼容），<code>/api/*</code> 面向运行时管理。没有鉴权，api_key 填任意占位值。</p>
+      <span class="doc-tag">接口与客户端参考</span>
+      <h2>HTTP API 与 OpenAI SDK</h2>
+      <p><code>/v1/*</code> 面向标准推理（OpenAI 兼容），<code>/api/*</code> 面向运行时控制与模型管理。服务本地运行无鉴权，调用方 <code>api_key</code> 可填任意占位字符串：</p>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>方法</th><th>路径</th><th>用途</th></tr></thead>
+        <thead><tr><th>方法</th><th>端点路径</th><th>用途说明</th></tr></thead>
         <tbody>
           <tr><td>GET</td><td><code>/health</code></td><td>健康检查</td></tr>
-          <tr><td>GET</td><td><code>/v1/models</code></td><td>模型列表（含 provider 选择审计字段）</td></tr>
-          <tr><td>POST</td><td><code>/v1/chat/completions</code></td><td>对话，支持 SSE 流式与 reasoning_content</td></tr>
-          <tr><td>POST</td><td><code>/v1/audio/transcriptions</code></td><td>语音转文字（multipart 音频字节）</td></tr>
-          <tr><td>POST</td><td><code>/v1/audio/speech</code></td><td>语音合成，返回 WAV</td></tr>
-          <tr><td>GET</td><td><code>/api/runtime</code></td><td>运行状态：内存预算、压力、已加载模型</td></tr>
-          <tr><td>GET</td><td><code>/api/providers</code></td><td>Provider 状态与不可用原因</td></tr>
-          <tr><td>GET / POST</td><td><code>/api/runners</code> · <code>/api/runners/{runner}/install</code></td><td>Runner 列表与安装 / 卸载（DELETE）</td></tr>
-          <tr><td>POST</td><td><code>/api/models/pull</code></td><td>从 HF / ModelScope 下载</td></tr>
-          <tr><td>POST</td><td><code>/api/models/inspect</code> · <code>/api/models/remote/inspect</code></td><td>本地目录探测 / 远端仓库预览</td></tr>
-          <tr><td>POST</td><td><code>/api/models/load</code></td><td>注册模型</td></tr>
-          <tr><td>POST</td><td><code>/api/models/{id}/load · unload · keep-alive · rename · voice</code></td><td>单模型操作</td></tr>
-          <tr><td>GET</td><td><code>/api/models/{id}/voices</code></td><td>TTS 音色清单</td></tr>
-          <tr><td>DELETE</td><td><code>/api/models/{id}</code></td><td>删除注册</td></tr>
-          <tr><td>GET</td><td><code>/api/tasks</code> · <code>/api/tasks/{id}</code></td><td>任务历史与详情</td></tr>
-          <tr><td>GET / POST</td><td><code>/api/logging</code></td><td>查看 / 调整日志级别</td></tr>
-          <tr><td>GET</td><td><code>/api/downloads/{progress_id}</code></td><td>下载进度</td></tr>
+          <tr><td>GET</td><td><code>/v1/models</code></td><td>OpenAI 兼容模型列表（包含 provider 选择审计字段）</td></tr>
+          <tr><td>POST</td><td><code>/v1/chat/completions</code></td><td>对话补全（支持 SSE 流式分块与 <code>reasoning_content</code> 思考分流）</td></tr>
+          <tr><td>POST</td><td><code>/v1/audio/transcriptions</code></td><td>语音转文字（接收 multipart 音频字节）</td></tr>
+          <tr><td>POST</td><td><code>/v1/audio/speech</code></td><td>语音合成（返回二进制 PCM WAV）</td></tr>
+          <tr><td>GET</td><td><code>/api/runtime</code></td><td>运行时全局概览：内存预算、系统压力、常驻模型列表</td></tr>
+          <tr><td>GET</td><td><code>/api/providers</code></td><td>各 Provider 就绪状态与未就绪原因</td></tr>
+          <tr><td>GET / POST / DELETE</td><td><code>/api/runners</code> · <code>/api/runners/{runner}/install</code></td><td>Runner 清单查询、环境依赖安装与卸载</td></tr>
+          <tr><td>POST</td><td><code>/api/models/pull</code></td><td>从 HF 或 ModelScope 下载模型文件</td></tr>
+          <tr><td>POST</td><td><code>/api/models/inspect</code> · <code>remote/inspect</code></td><td>本地目录探测诊断 / 远端仓库文件结构预览</td></tr>
+          <tr><td>POST</td><td><code>/api/models/load</code></td><td>注册新模型并持久化 Provider 选择理由</td></tr>
+          <tr><td>POST</td><td><code>/api/models/{id}/load · unload · keep-alive · rename</code></td><td>操作单个模型的生命周期状态</td></tr>
+          <tr><td>GET / POST</td><td><code>/api/models/{id}/voices · /voice</code></td><td>查询模型支持的音色清单 / 设置默认音色</td></tr>
+          <tr><td>DELETE</td><td><code>/api/models/{id}</code></td><td>删除指定模型的注册表记录</td></tr>
+          <tr><td>GET</td><td><code>/api/tasks</code> · <code>/api/tasks/{id}</code></td><td>查询近期有界任务流或单任务详细指标</td></tr>
+          <tr><td>GET / POST</td><td><code>/api/logging</code></td><td>获取或动态调整全局日志级别</td></tr>
+          <tr><td>GET</td><td><code>/api/downloads/{progress_id}</code></td><td>查询后台模型下载进度条数据</td></tr>
         </tbody>
       </table></div>
-      <h3>接入第三方应用</h3>
-      <p>任何支持自定义 OpenAI 接口的客户端都能接。以 CherryStudio 为例：添加供应商，API 地址填 <code>http://127.0.0.1:11435</code>，点「获取模型列表」会自动列出所有可用模型 ID。</p>
-      <img class="shot" src="../imgs/cherry_studio_sample.png" alt="CherryStudio 接入 MacAI">
-      <p class="shot-cap">CherryStudio 接入示例。</p>
-      <p>为 Hermes Desktop 提供本地 TTS / STT 的完整案例（含配置脚本，无需改 Hermes 代码）见仓库 <a href="https://github.com/GuanXuzeng/MacAI/blob/main/samples/Hermes_TTS_STT_sample.md" target="_blank" rel="noopener">samples/Hermes_TTS_STT_sample.md</a>。</p>
     </section>
 
-    <!-- ==================== 数据 ==================== -->
+    <!-- ==================== 20. 第三方应用接入 ==================== -->
+    <section class="doc" id="third-party">
+      <span class="doc-tag">接口与客户端参考</span>
+      <h2>第三方应用接入</h2>
+
+      <h3>接入 CherryStudio</h3>
+      <p>在 CherryStudio 中添加自定义 OpenAI 提供商，将 API 地址配置为 <code>http://127.0.0.1:11435</code>，点击「获取模型列表」按钮即可自动拉取当前已注册的所有可用模型 ID：</p>
+      <img class="shot" src="../imgs/cherry_studio_sample.png" alt="CherryStudio 接入 MacAI 示例">
+      <p class="shot-cap">CherryStudio 接入配置示例。</p>
+
+      <h3>为 Hermes Desktop 提供本地 TTS / STT</h3>
+      <p>通过本地适配脚本即可将 MacAI 的语音能力无缝接入 Hermes Desktop 桌面助手，无需改动其核心代码。完整适配配置参见仓库文件：<br>
+      <a href="https://github.com/GuanXuzeng/MacAI/blob/main/samples/Hermes_TTS_STT_sample.md" target="_blank" rel="noopener"><code>samples/Hermes_TTS_STT_sample.md</code></a>。</p>
+    </section>
+
+    <!-- ==================== 21. 系统架构概览 ==================== -->
+    <section class="doc" id="architecture">
+      <span class="doc-tag">核心架构与内部机制</span>
+      <h2>系统架构概览</h2>
+      <div class="codeblock"><pre>macai CLI ────────────┐
+MacAIConsole (SwiftUI) ├── HTTP ──> aiworkd ──> Runners ─┬── whisper.cpp / llama.cpp（受管原生引擎）
+OpenAI-compatible SDK ┘                                  └── MLX / Kokoro / Qwen3 / sherpa-onnx
+
+                                             ├── SQLite model registry
+                                             ├── memory budget / LRU / keep-alive
+                                             ├── bounded task history
+                                             └── local logs</pre></div>
+      <p><b>Runtime Authority 唯一性</b>：在 MacAI 体系中，Rust 守护进程 <code>aiworkd</code> 是系统唯一的运行权威（Runtime Authority），统一承载模型注册、内存分配与回收、任务路由与对外 HTTP 接口。GUI 与 CLI 均是轻量无状态客户端，客户端的退出或重启不会中断后台正在处理的推理任务。</p>
+    </section>
+
+    <!-- ==================== 22. Runtime 调度与内存租约 ==================== -->
+    <section class="doc" id="runtime">
+      <span class="doc-tag">核心架构与内部机制</span>
+      <h2>Runtime 调度与内存租约</h2>
+      <ul>
+        <li><b>模型 Lease 租约与 Busy Guard</b>：
+          当某个模型开始处理推理请求时，daemon 为其增加 lease 引用计数。在此期间，无论是用户手动执行 <code>unload</code>、内存压力触发的 LRU 逐出，还是定时器触发的空闲 Reaper 回收，都会被 Busy Guard 拦截，必须等待全部请求完成并释放租约后才会执行卸载。</li>
+        <li><b>内存自适应预算</b>：
+          默认预算公式为 <code>min(RAM × 0.75, RAM - 8GB)</code>，保留充足系统开销。当总常驻内存逼近阈值时，自动触发 LRU 算法逐出最近最少使用的空闲模型。可使用环境变量 <code>AIWORKD_MEMORY_BUDGET</code> 显式指定字节数。</li>
+        <li><b>SQLite 持久化与内存索引</b>：
+          模型元数据持久化存储于 SQLite，而在运行时由内存 HashMap 提供单源并发读取，保证服务即使重启也能完整恢复模型配置。</li>
+        <li><b>有界任务流记录</b>：
+          系统在内存环形队列中维护最近 100 条终态任务，避免长时间运行造成内存无限制泄漏。</li>
+      </ul>
+    </section>
+
+    <!-- ==================== 23. 本地数据与环境变量 ==================== -->
     <section class="doc" id="data">
-      <span class="doc-tag">参考</span>
-      <h2>数据、日志与内存</h2>
-      <p>所有运行时数据都在一个目录里，删掉它等于完整重置（模型会重新下载）：</p>
-      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
-<pre>~/Library/Application Support/MacAIConsole/
-├── Models/
+      <span class="doc-tag">核心架构与内部机制</span>
+      <h2>本地数据与环境变量</h2>
+      <p>MacAI 的所有受管数据均集中在用户的 Application Support 目录下，删除该目录即完成完整数据重置：</p>
+      <div class="codeblock"><pre>~/Library/Application Support/MacAIConsole/
+├── Models/             <span class="cm"># 本地模型仓库</span>
 │   ├── llm/            <span class="cm"># MLX 格式 LLM 目录</span>
 │   ├── stt/            <span class="cm"># Qwen3-ASR、sherpa-onnx 等 STT 目录</span>
 │   └── tts/            <span class="cm"># Kokoro、Qwen3-TTS 等 TTS 目录</span>
-├── Engines/            <span class="cm"># llama.cpp / whisper.cpp 受管引擎</span>
-├── Plugins/            <span class="cm"># 用户创建的 Script Runner</span>
-├── model-settings.json
-├── models.db           <span class="cm"># SQLite 模型注册表（重启持久）</span>
-└── logs/
-    ├── aiworkd.log
-    └── gui.log</pre></div>
-      <ul>
-        <li>日志按 5 MB 轮换，保留一份 <code>.1</code>。默认 Info；「日志」页或 <code>macai logging debug</code> 开启后，daemon 用同一 <code>request_id</code> 记录每个 HTTP 请求的方法、路径、状态码与耗时——不记查询参数、请求体和响应体。</li>
-        <li>任务历史有界：终态任务保留最近 100 条。</li>
-        <li>原始音频不写入任务历史；日志会主动过滤 API token 与模型内容。</li>
-      </ul>
-      <h3>常用的环境变量（手动跑 daemon 时）</h3>
+├── Engines/            <span class="cm"># llama.cpp 与 whisper.cpp 受管引擎构建产物</span>
+├── Plugins/            <span class="cm"># 用户自制 Script Runner 插件目录</span>
+├── model-settings.json <span class="cm"># GUI 本地展示与偏好设置</span>
+├── models.db           <span class="cm"># SQLite 模型持久化数据库</span>
+└── logs/               <span class="cm"># 本地日志</span>
+    ├── aiworkd.log     <span class="cm"># 守护进程日志（5MB 轮换，保留一份 .1）</span>
+    └── gui.log         <span class="cm"># 控制台界面日志</span></pre></div>
+
+      <h3>常用环境变量参考</h3>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>变量</th><th>作用</th></tr></thead>
+        <thead><tr><th>环境变量</th><th>类型</th><th>说明</th></tr></thead>
         <tbody>
-          <tr><td><code>AIWORKD_MEMORY_BUDGET</code></td><td>内存预算（字节），覆盖默认公式</td></tr>
-          <tr><td><code>AIWORKD_HF_ENDPOINT</code></td><td>下载源，如 <code>https://hf-mirror.com</code></td></tr>
-          <tr><td><code>AIWORKD_PATH</code></td><td>GUI 探测 daemon 二进制的显式路径</td></tr>
-          <tr><td><code>MACAI_LLAMA_SERVER</code> / <code>MACAI_WHISPER_SERVER</code></td><td>用本机已有引擎二进制，跳过受管下载</td></tr>
-          <tr><td><code>MACAI_UV_PATH</code> / <code>MACAI_RUNNERS_DIR</code></td><td>uv 与 runners 目录显式覆盖（App 内已自动注入）</td></tr>
-          <tr><td><code>MACAI_UV_PYTHON_INSTALL_MIRROR</code></td><td>uv 下载 Python 解释器的镜像</td></tr>
+          <tr><td><code>AIWORKD_PATH</code></td><td>路径</td><td>显式指定 GUI 探测和启动 <code>aiworkd</code> 二进制的路径</td></tr>
+          <tr><td><code>AIWORKD_MEMORY_BUDGET</code></td><td>整数（字节）</td><td>显式覆盖 daemon 内存预算上限</td></tr>
+          <tr><td><code>AIWORKD_HF_ENDPOINT</code></td><td>URL</td><td>Hugging Face 镜像地址（如 <code>https://hf-mirror.com</code>）</td></tr>
+          <tr><td><code>MACAI_LLAMA_SERVER</code></td><td>路径</td><td>显式指定本机现成的 <code>llama-server</code> 路径</td></tr>
+          <tr><td><code>MACAI_WHISPER_SERVER</code></td><td>路径</td><td>显式指定本机现成的 <code>whisper-server</code> 路径</td></tr>
+          <tr><td><code>MACAI_UV_PATH</code></td><td>路径</td><td>显式指定 <code>uv</code> 可执行文件路径（App 已自动注入）</td></tr>
+          <tr><td><code>MACAI_RUNNERS_DIR</code></td><td>路径</td><td>显式指定内置 Runner 包根目录（App 已自动注入）</td></tr>
+          <tr><td><code>MACAI_UV_PYTHON_INSTALL_MIRROR</code></td><td>URL</td><td>配置 uv 自动下载独立 Python 解释器的镜像源</td></tr>
         </tbody>
       </table></div>
     </section>
 
-    <!-- ==================== 故障排查 ==================== -->
+    <!-- ==================== 24. 安全边界与隐私守则 ==================== -->
+    <section class="doc" id="security">
+      <span class="doc-tag">核心架构与内部机制</span>
+      <h2>安全边界与隐私守则</h2>
+      <ul>
+        <li><b>本地回环安全</b>：<code>aiworkd</code> 默认严格绑定 <code>127.0.0.1</code> 且未内置身份认证鉴权，<b>严禁直接通过端口转发暴露至局域网或公网</b>。若需远程调用，务必在前端反向代理配置健全的鉴权与 TLS 加密。</li>
+        <li><b>数据隐私最小化</b>：用户上传的原始音频字节仅在内存流中归一化解码，绝不持久化落盘至任务历史；日志模块主动过滤 API Token 与 Prompt 上下文内容。</li>
+        <li><b>进程权限边界</b>：Runner 进程以运行 daemon 的当前系统用户权限执行，并不构成操作系统的沙箱隔离，请仅加载来自受信任来源的模型权重与 Script Runner 脚本。</li>
+      </ul>
+    </section>
+
+    <!-- ==================== 25. 构建验证与测试流水线 ==================== -->
+    <section class="doc" id="verification">
+      <span class="doc-tag">工程规范与故障排查</span>
+      <h2>构建验证与测试流水线</h2>
+      <p>修改代码后，需根据修改范围运行对应语言的完整测试套件：</p>
+
+      <h3>1. Rust 后端校验（CI 门禁）</h3>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre><span class="cm"># 代码格式检查（硬门槛）</span>
+cargo fmt --all -- --check
+
+<span class="cm"># 全 Workspace 单元测试与集成测试</span>
+cargo test --workspace
+
+<span class="cm"># 完整编译校验</span>
+cargo build --workspace</pre></div>
+
+      <h3>2. MacAIConsole 前端校验</h3>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>cd apps/MacAIConsole
+
+<span class="cm"># 必须显式指定 Xcode 的 DEVELOPER_DIR，否则 Command Line Tools 无法定位 SDK</span>
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --enable-xctest
+
+<span class="cm"># 本地发布联调构建验证</span>
+scripts/build-app.sh release</pre></div>
+
+      <h3>3. Runner Package 适配器测试</h3>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>for runner in runners/*; do
+  test -f "$runner/pyproject.toml" || continue
+  uv lock --check --project "$runner"
+  PYTHONPATH="$runner/src" python3.12 -m pytest "$runner/tests" -v
+done</pre></div>
+    </section>
+
+    <!-- ==================== 26. 仓库结构地图 ==================== -->
+    <section class="doc" id="repo">
+      <span class="doc-tag">工程规范与故障排查</span>
+      <h2>仓库结构地图</h2>
+      <div class="codeblock"><pre>crates/
+├── ai-core/       # 共享类型：模型、Provider、请求与响应结构、统一错误类型
+├── ai-daemon/     # aiworkd 守护进程：HTTP 路由、调度器、SQLite 注册表、Runner 桥接
+└── ai-cli/        # macai 命令行客户端：基于 clap 的单文件终端工具
+
+apps/
+└── MacAIConsole/  # 原生 SwiftUI 控制台：DaemonAPI、DaemonController、Views
+
+scripts/           # 辅助脚本：whisper 模型下载、打包 build-app.sh 与 smoke 校验
+runners/           # 内置七个 Runner 引擎包（llama.cpp、whisper.cpp、mlx-lm 等）
+samples/           # 示例项目：Hermes 适配器配置、单文件 Hojo-TTS 脚本示例
+docs/              # 项目主页（index.html）、综合文档（guide/）、已落地决策（decisions/）与规范（specs/）</pre></div>
+    </section>
+
+    <!-- ==================== 27. 常见问题与故障排查 ==================== -->
     <section class="doc" id="troubleshoot">
-      <span class="doc-tag">帮助</span>
-      <h2>故障排查</h2>
-      <p>先看「日志」页或 <code>logs/aiworkd.log</code>——错误信息都落在那里。下面是按出现频率排的常见问题。</p>
+      <span class="doc-tag">工程规范与故障排查</span>
+      <h2>常见问题与故障排查</h2>
+      <p>遇到异常时，建议优先查阅 GUI「日志」页或本地文件 <code>logs/aiworkd.log</code>。以下是常见症状与对应方案：</p>
 
       <details class="qa"><summary>打开应用提示「已损坏，无法打开」或「未知的开发者」</summary>
         <div class="answer">
-          <p>应用未做签名公证，被 Gatekeeper 拦了，不是真的损坏。终端执行 <code>xattr -cr /Applications/MacAIConsole.app</code>，或在「系统设置 → 隐私与安全性」底部点「仍要打开」。见 <a href="#install">安装</a>。</p>
+          <p>应用未做公证书签名，被 macOS Gatekeeper 拦截。请在终端执行 <code>xattr -cr /Applications/MacAIConsole.app</code> 清除隔离属性，或在「系统设置 → 隐私与安全性」底部点击「仍要打开」。</p>
         </div>
       </details>
 
-      <details class="qa"><summary>GUI 打开后一直连不上 daemon</summary>
+      <details class="qa"><summary>GUI 启动后一直显示连不上 daemon</summary>
         <div class="answer">
-          <p>GUI 按顺序探测 <code>AIWORKD_PATH</code> → <code>target/release/aiworkd</code> → <code>target/debug/aiworkd</code>。DMG 版自带 daemon，一般不会遇到；源码版请先 <code>cargo build --release --workspace</code> 或手动启动 <code>./target/release/aiworkd</code>，再用 <code>curl http://127.0.0.1:11435/health</code> 验证。设置页可以关掉「自动拉起」排查冲突。</p>
+          <p>GUI 会依次探测 <code>AIWORKD_PATH</code> → <code>target/release/aiworkd</code> → <code>target/debug/aiworkd</code>。DMG 版本内置后端二进制；若是源码运行，请确认是否已执行 <code>cargo build --release --workspace</code>，或手动运行 <code>./target/release/aiworkd</code> 后用 <code>curl http://127.0.0.1:11435/health</code> 验证。</p>
         </div>
       </details>
 
-      <details class="qa"><summary>引擎安装失败</summary>
+      <details class="qa"><summary>引擎安装失败或报错</summary>
         <div class="answer">
-          <p>分两种：<b>whisper.cpp</b> 要在本机编译，需预装 Xcode Command Line Tools 和 CMake（<code>brew install cmake</code>），编译耗时属正常；<b>Python 系列</b>（mlx-lm、kokoro、qwen3-asr、qwen3-tts、sherpa-onnx）由 uv 装 wheel，首次安装要联网拉取解释器与依赖，网络不通时配代理或设 <code>MACAI_UV_PYTHON_INSTALL_MIRROR</code>。普通用户建议先装预编译完善的 llama.cpp、mlx-lm、qwen3-asr 或 kokoro。</p>
+          <p>如果是 <b>whisper.cpp</b>，必须在本机进行 CMake 编译，请确认已安装 Xcode 命令行工具及 CMake（<code>brew install cmake</code>）；如果是 <b>Python 系列引擎</b>，首次安装由 uv 联网下载预编译 wheel，若网络受阻请在设置页配置网络代理或配置环境变量 <code>MACAI_UV_PYTHON_INSTALL_MIRROR</code>。</p>
         </div>
       </details>
 
-      <details class="qa"><summary>注册模型被拒绝：「未识别的模型目录」</summary>
+      <details class="qa"><summary>注册模型时提示「未识别的模型目录」被拒绝</summary>
         <div class="answer">
-          <p>daemon 靠目录签名识别模型归属的 Runner，识别不了就拒绝，不会乱猜。按提示检查：模型是否下载完整（远端下载中断会缺文件）；对应引擎是否已安装；目录型模型 ID 是否与目录名一致。用 <code>macai inspect &lt;目录&gt;</code> 看具体诊断。确认无误仍不识别的话，说明这类模型还没有对应 Runner，可在「新建 Runner」里自制。</p>
+          <p>daemon 基于文件签名静态识别模型所匹配的 Runner。若被拒绝，请排查：① 模型是否完整下载（检查是否有 <code>.part</code> 残留）；② 目录型模型的模型 ID 是否与目录名一致；③ 对应引擎是否已经安装就绪。可在终端执行 <code>macai inspect &lt;目录&gt;</code> 查看诊断详情。</p>
         </div>
       </details>
 
-      <details class="qa"><summary>请求返回 <code>backend_crashed</code></summary>
+      <details class="qa"><summary>推理请求返回 <code>backend_crashed</code> 结构化错误</summary>
         <div class="answer">
-          <p>承载该模型的引擎进程崩了（段错误、OOM 都算）。daemon 本身不受影响，其他模型照常服务。在「日志」页看崩溃前后的输出；重试一次通常可恢复。同一模型持续崩溃的话，带上日志提 issue。</p>
+          <p>说明承载该模型的子进程发生了段错误或内存 OOM 崩溃。由于采用独立子进程隔离，<code>aiworkd</code> 依然稳健存活，其他模型不受影响。可查看日志排查崩溃原因，并尝试重新发起请求。</p>
         </div>
       </details>
 
-      <details class="qa"><summary>模型刚启动，头几个请求报 503</summary>
+      <details class="qa"><summary>模型刚启动时前几次请求报 503 Service Unavailable</summary>
         <div class="answer">
-          <p>llama.cpp 常驻 server 在初始化模型，最早几秒的请求可能返回 503，稍后重试即可。大模型首次加载慢是正常的，加载完成状态以「运行状态」页为准。</p>
+          <p>llama.cpp 常驻服务在冷启动加载模型权重的过程中需要数秒初始化，初始化完成前会返回 503，稍候重试即可，加载完成以控制台「运行状态」页变为 resident 为准。</p>
         </div>
       </details>
 
-      <details class="qa"><summary>模型下载很慢或失败</summary>
+      <details class="qa"><summary>模型下载速度慢或连接中断</summary>
         <div class="answer">
-          <p>「设置 → 模型下载源」切到 <code>https://hf-mirror.com</code> 或自定义源（也可启动时设 <code>AIWORKD_HF_ENDPOINT</code>）。下载支持断点续传（<code>.part</code> 文件），中断后重试会接着传，不用从头来。下载进度在管理页和下载窗口可见，daemon 日志每 5% 记一笔。</p>
+          <p>可在「设置」页将模型下载源切换为 <code>https://hf-mirror.com</code> 或配置 HTTP 代理。MacAI 下载采用 HTTP/1.1 与 <code>.part</code> 断点续传，若遇意外中断，重新点击下载将自动在中断处续传。</p>
         </div>
       </details>
 
-      <details class="qa"><summary>内存吃紧，模型总被自动卸载</summary>
+      <details class="qa"><summary>内存占用较高，模型频繁被自动逐出</summary>
         <div class="answer">
-          <p>daemon 的预算默认 <code>min(RAM×0.75, RAM−8GB)</code>，超预算时按 LRU 逐出。可以：调小其他模型的 <code>keep-alive</code>（如 <code>0</code>，用完即卸）；卸掉暂时不用的模型；或在设置页 / <code>AIWORKD_MEMORY_BUDGET</code> 里改预算。正在服务的请求不会被逐出打断（lease 保护）。</p>
+          <p>daemon 的内存预算默认计算为 <code>min(RAM×0.75, RAM−8GB)</code>，超预算时按 LRU 逐出。可调整不需要常驻模型的 <code>keep-alive</code> 为 <code>0</code>（用完即卸），或在设置中手动调大内存预算。</p>
         </div>
       </details>
 
-      <details class="qa"><summary>temperature 设为 0，两次回答还是不一样</summary>
+      <details class="qa"><summary>temperature 设为 0 时两次输出仍有细微差异</summary>
         <div class="answer">
-          <p>带 <code>session_id</code> 的多轮对话会复用 KV 缓存，Metal 数值精度差异可能让缓存命中后的输出与全量重算偶发分岔。要严格可复现，去掉 <code>session_id</code> 每轮全量计算。</p>
+          <p>在开启 <code>session_id</code> 的多轮对话中，Metal 底层矩阵乘法在 KV 缓存命中与全量重算时的浮点数累加顺序存在微小误差。若需要严格的确定性实验复现，请省略 <code>session_id</code> 进行单次独立计算。</p>
         </div>
       </details>
 
-      <details class="qa"><summary>想升级应用</summary>
+      <details class="qa"><summary>如何升级应用新版本</summary>
         <div class="answer">
-          <p>DMG 版在「设置 → 关于」点检查更新：发现新版本后自动下载 DMG、按官方 <code>checksums.txt</code> 做 SHA-256 校验，通过后替换应用并重启（安装前会停掉 aiworkd，新实例按原设置拉起）。默认启动时静默检查一次，设置页可关。开发构建（非 .app bundle）没有更新入口，自己 <code>git pull</code> 重建。</p>
+          <p>DMG 版本可在「设置 → 关于」点击「检查更新」，应用会自动比对官方 release 的 <code>checksums.txt</code> 进行 SHA-256 完整性校验，确认无误后替换自身并平滑重启。源码构建者直接 <code>git pull</code> 并重新执行编译脚本即可。</p>
         </div>
       </details>
-    </section>
-
-    <!-- ==================== 安全 ==================== -->
-    <section class="doc" id="security">
-      <span class="doc-tag">帮助</span>
-      <h2>安全与已知限制</h2>
-      <h3>安全边界</h3>
-      <ul>
-        <li><code>aiworkd</code> 只绑定 <code>127.0.0.1</code>，<b>没有身份认证</b>。别通过端口转发、反向代理把它暴露到局域网或公网——真要远程访问，请在前端加健全的隔离与认证。</li>
-        <li>任务历史包含 Prompt、转写结果与 TTS 输入文本；原始音频不落盘进历史，日志过滤 token 与模型内容。</li>
-        <li>Runner 以你的用户权限运行本地代码，不是沙箱。脚本 Runner 只装信得过的。</li>
-      </ul>
-      <h3>当前限制（截至 2026-09）</h3>
-      <ul>
-        <li>API 稳定性与跨版本兼容尚无承诺，升级可能需要调整调用方。</li>
-        <li>Qwen3-TTS 的 <code>speed</code> 参数校验但不生效；流式合成与声音克隆未支持。</li>
-        <li>sherpa-onnx 仅支持中文。</li>
-        <li>whisper.cpp 引擎需本机编译（CMake），是唯一有编译依赖的引擎。</li>
-        <li>完整第三方 Runner package 的导入、更新与分发还在规划中，当前以本机创建的 Script Runner 为主。</li>
-      </ul>
-      <p>漏洞报告与完整威胁模型见 <a href="https://github.com/GuanXuzeng/MacAI/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>；贡献指引见 <a href="https://github.com/GuanXuzeng/MacAI/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">CONTRIBUTING.md</a>。行为细节与设计理由以仓库 <a href="https://github.com/GuanXuzeng/MacAI/tree/main/docs/decisions" target="_blank" rel="noopener">决策记录</a> 为准。</p>
     </section>
 
   </article>
 </div>
 
 <footer class="site">
-  <p>MacAI 使用文档 · 最后更新 2026-09-14 · 行为以 README、代码与决策记录为准</p>
+  <p>MacAI 使用与开发文档 · 最后更新 2026-09-14 · 行为以 README、代码与决策记录为准</p>
   <p><a href="../index.html">项目主页</a> · <a href="https://github.com/GuanXuzeng/MacAI" target="_blank" rel="noopener">GitHub</a> · MIT License · © 2026 GuanXuzeng</p>
 </footer>
 
