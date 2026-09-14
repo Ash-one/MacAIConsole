@@ -20,7 +20,7 @@
 
 ## 代码地图与架构不变量
 
-在编写代码前，请对照 MacAI 的核心架构边界与约定（详见 [AGENTS.md](AGENTS.md) 与 [docs/decisions/](docs/decisions/README.md)）：
+在编写代码前，请对照 MacAI 的核心架构边界与约定（详见 [AGENTS.md](AGENTS.md) 与 [开发使用指南](docs/guide/index.html)）：
 
 1. **客户端不拥有模型状态**：GUI（`MacAIConsole`）、CLI（`macai`）和第三方 SDK 只是客户端。所有的模型注册、生命周期维护、内存调度和推理状态，**必须由 `aiworkd` daemon 统一管理**。客户端展示的数据必须来自 daemon 的 HTTP API，不得在客户端重复实现推理逻辑或状态缓存。
 2. **进程级故障隔离**：生产推理引擎均由独立的 Runner 进程承载（例如 `llama.cpp`、`whisper.cpp`、`mlx-lm` 等）。Worker 进程异常退出或 OOM 时，`aiworkd` 必须保持稳定存活并返回结构化错误。
@@ -37,8 +37,8 @@ MacAI 代码地图：
 ├── apps/
 │   └── MacAIConsole   # macOS 原生 SwiftUI 控制台应用
 ├── docs/
-│   ├── decisions/     # 架构设计决策记录（所有非机械改动的理由 owner）
-│   └── specs/         # 精确协议与 Wire Format 契约
+│   ├── guide/         # 综合使用与开发者指南站点
+│   └── index.html     # 项目主页与说明
 └── scripts/           # 辅助脚本
 ```
 
@@ -87,7 +87,7 @@ Python 文件实现返回模型对象的 `load` 与对应推理 hook；`unload(m
 manifest、uv project、lock 和协议 host；需要多文件、原生资产或多 capability 时再使用
 完整 Runner 包。
 
-若要接入新的开源模型推理引擎，建议按照 [Runner 插件架构决策](docs/decisions/2026-09-02-runner-plugin-architecture.md) 进行：
+若要接入新的开源模型推理引擎，建议按照 [Runner 引擎实操与架构说明](docs/guide/index.html#runner-manual) 进行：
 
 1. 在 `runners/<engine-name>/` 下创建 Runner 包；
 2. 提供 `pyproject.toml`（或编译说明）与受管的 `uv.lock`；
@@ -95,7 +95,7 @@ manifest、uv project、lock 和协议 host；需要多文件、原生资产或�
 4. 实现标准 JSONL 双向协议：`hello` 握手、`load`、`infer`（支持 chunk 流式返回）、`unload`；
 5. 编写单元测试覆盖适配器解析与协议序列化；
 6. 在 `crates/ai-daemon` 注册对应的模型识别或内置 Runner 装配规则；
-7. 同步编写/更新相关的 decision record。
+7. 同步更新相关架构与实操文档。
 
 ---
 
@@ -106,8 +106,8 @@ manifest、uv project、lock 和协议 host；需要多文件、原生资产或�
    - 常用类型：`feat`（新特性）、`fix`（缺陷修复）、`docs`（文档）、`test`（测试）、`refactor`（重构）、`perf`（性能优化）；
    - 示例：`feat: 支持新的 MLX 语音识别 Runner`、`fix: 修复客户端断开连接时的任务状态泄漏`。
 
-2. **Decision Record 同步**：
-   - 任何涉及行为、架构、协议格式或工具链变更的非机械修改，请在 `docs/decisions/` 中新增或更新对应的决策记录。
+2. **文档与规范同步**：
+   - 任何涉及行为、架构、协议格式或工具链变更的非机械修改，请同步更新相关文档与架构说明。
 
 3. **创建 Pull Request**：
    - 保持 PR 职责单一，聚焦于具体问题或特性；

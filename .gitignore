@@ -66,6 +66,8 @@ venv/
 !.env.example
 
 # Local-only documentation, notes, and scratchpads
+/docs/decisions/
+/docs/specs/
 /docs/icon-concepts/
 /docs/plans/*
 !/docs/plans/.gitkeep

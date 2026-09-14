@@ -2,7 +2,7 @@
 
 [Hojo-TTS-Light-40M](https://huggingface.co/HojoAI/Hojo-TTS-Light-40M)（Apache-2.0）是
 约 40M 参数的 ONNX 中英双语 TTS 模型，纯 CPU 推理、无 PyTorch 依赖。本示例演示用
-[单文件 Script Runner](../docs/decisions/2026-09-08-single-file-script-runner.md)
+[单文件 Script Runner](../docs/guide/index.html#runner-manual)
 把它接入 MacAI，全程不需要修改 daemon 代码：
 
 | 项目 | 值 |
