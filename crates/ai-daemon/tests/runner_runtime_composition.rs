@@ -5,7 +5,6 @@
 //! lease/busy guard、错误映射、输出目录清理与 shutdown 均在此验证。
 
 use std::collections::HashSet;
-use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -80,6 +79,11 @@ fn test_root(label: &str) -> std::path::PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!("macai-1c-{label}-{}-{unique}", std::process::id()))
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 /// 组装完整 fake Runner 环境：package + registry + environment + instance manager。
@@ -651,42 +655,32 @@ async fn runner_model_spec_carries_profile_defaults() {
 #[tokio::test]
 async fn child_process_is_reaped_after_shutdown() {
     let (root, provider, instances) = fixture("reap").await;
-    // 通过 ps 查找 fake-runner 子进程；shutdown 后数量必须回到基线。
-    let find_pids = || -> Vec<String> {
-        let output = Command::new("/bin/ps")
-            .args(["-eo", "pid=,comm="])
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter(|line| line.contains("fake-runner"))
-            .map(|line| line.trim().split_whitespace().next().unwrap().to_string())
-            .collect()
-    };
-    let baseline = find_pids().len();
     provider.load(&model_spec()).await.expect("load");
+    let pid = instances
+        .instance_snapshot("org.example.fake")
+        .await
+        .and_then(|snapshot| snapshot.pid)
+        .expect("loaded fake-runner must expose its pid");
     assert!(
-        find_pids().len() > baseline,
+        process_is_alive(pid),
         "fake-runner process must be alive after load"
     );
     instances
         .shutdown_instance("org.example.fake")
         .await
         .expect("shutdown");
-    // graceful shutdown 后进程退出；轮询等待 ps 视图收敛（进程退出与
-    // 父进程 reap 各需一点时间），最多等 3 秒。
+    // graceful shutdown 后进程退出；轮询等待进程表收敛，最多等 3 秒。
     let mut reaped = false;
     for _ in 0..30 {
         tokio::time::sleep(Duration::from_millis(100)).await;
-        if find_pids().len() == baseline {
+        if !process_is_alive(pid) {
             reaped = true;
             break;
         }
     }
     assert!(
         reaped,
-        "fake-runner process must be reaped after shutdown (baseline={baseline}, now={:?})",
-        find_pids()
+        "fake-runner process {pid} must be reaped after shutdown"
     );
     let _ = std::fs::remove_dir_all(root);
 }

@@ -294,7 +294,7 @@ commit `cadfa31` 收敛了已发现的启动、契约与信任边界：
 
 | Acceptance | Failure surface | Direct evidence | Result |
 | --- | --- | --- | --- |
-| 已验证 package 的 fake Runner 可在 isolated test 中完成发现、信任、加载、调用和卸载；启动失败不留下进程，源码 package 修改后不可执行 | manifest、trust、supervision、composition | `cargo test -p ai-daemon --test runner_plugin_composition` | passed at `cadfa31`（5 tests） |
+| 已验证 package 的 fake Runner 可在 isolated test 中完成发现、信任、加载、调用和卸载；shutdown 按实例 PID 验证进程回收，不受并行测试的同名进程干扰；启动失败不留下进程，源码 package 修改后不可执行 | manifest、trust、supervision、composition | `cargo test -p ai-daemon --test runner_plugin_composition` + `runner_runtime_composition::child_process_is_reaped_after_shutdown` | passed at `cadfa31`（5 tests）；PID 回收断言 2026-09-14 更新 |
 | 新 Model Profile 可选择 Runner，且首次下载前 Runner 已装配 | profile resolution、registration | `builtin_runner_attaches_before_its_model_artifact_exists`；动态 provider 按 descriptor 能力判定 | passed（2026-09-03） |
 | 已注册模型恢复注册时 Profile，catalog 更新不改写它 | persistence、restart | registry binding roundtrip + `registered_runner_model_restores_its_immutable_profile_snapshot` | passed（2026-09-03） |
 | Worker 崩溃返回 `backend_crashed`、清空 resident，并可重新 load | process supervision、status、recovery | `crashed_worker_clears_residency_and_can_be_reloaded` | passed（2026-09-03） |
