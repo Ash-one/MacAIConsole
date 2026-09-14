@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MacAI 使用文档 — 从安装到排障</title>
+<meta name="description" content="MacAI 用户使用说明：DMG 与源码安装、控制台导览、引擎与模型管理、Chat / STT / TTS 实操、macai CLI 与 OpenAI 兼容 API 参考、数据目录与故障排查。">
+<link rel="icon" type="image/png" href="../logo.png">
+<style>
+  :root {
+    --bg: #050507;
+    --bg-soft: #0b0b0f;
+    --card: rgba(255, 255, 255, 0.035);
+    --card-hover: rgba(255, 255, 255, 0.055);
+    --border: rgba(255, 255, 255, 0.09);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --text: #f5f5f7;
+    --muted: #9b9ba3;
+    --dim: #6e6e76;
+    --accent: #0a84ff;
+    --accent-2: #5ac8fa;
+    --green: #30d158;
+    --amber: #ffd60a;
+    --red: #ff453a;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15.5px;
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: rgba(10, 132, 255, 0.35); }
+  a { color: var(--accent-2); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+  /* ---------- top bar ---------- */
+  .topbar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: rgba(5, 5, 7, 0.78);
+    -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+    border-bottom: 1px solid var(--border);
+  }
+  .topbar-inner {
+    display: flex; align-items: center; gap: 22px;
+    max-width: 1240px; margin: 0 auto; padding: 0 24px; height: 58px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 16px; color: var(--text); }
+  .brand:hover { text-decoration: none; }
+  .brand .logo {
+    width: 30px; height: 30px; border-radius: 8px; overflow: hidden; flex: none;
+    background: #000; border: 1px solid var(--border-strong); position: relative;
+  }
+  .brand .logo img { position: absolute; width: 300%; left: -104%; top: -88%; }
+  .brand small { color: var(--dim); font-weight: 500; font-size: 13px; }
+  .topbar-links { margin-left: auto; display: flex; gap: 20px; font-size: 13.5px; }
+  .topbar-links a { color: var(--muted); }
+  .topbar-links a:hover { color: var(--text); text-decoration: none; }
+
+  /* ---------- layout ---------- */
+  .layout { display: grid; grid-template-columns: 236px minmax(0, 1fr); max-width: 1240px; margin: 0 auto; }
+  .sidebar {
+    position: sticky; top: 58px; height: calc(100vh - 58px); overflow-y: auto;
+    padding: 34px 18px 40px 24px; border-right: 1px solid var(--border);
+    font-size: 13.5px;
+  }
+  .sidebar .group { margin-bottom: 22px; }
+  .sidebar .group b {
+    display: block; color: var(--dim); font-size: 11px; font-weight: 650;
+    letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 8px;
+  }
+  .sidebar a {
+    display: block; color: var(--muted); padding: 4.5px 10px; border-radius: 8px;
+    border-left: 2px solid transparent; line-height: 1.5;
+  }
+  .sidebar a:hover { color: var(--text); text-decoration: none; background: var(--card); }
+  .sidebar a.on { color: var(--accent-2); background: rgba(10, 132, 255, 0.08); }
+
+  article { padding: 96px 48px 80px; max-width: 880px; }
+
+  /* ---------- content ---------- */
+  section.doc { margin-bottom: 72px; scroll-margin-top: 76px; }
+  .doc-tag {
+    display: inline-block; font-size: 11.5px; font-weight: 650; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--accent-2); margin-bottom: 10px;
+  }
+  section.doc h2 {
+    font-size: 1.65rem; font-weight: 700; letter-spacing: -0.02em;
+    line-height: 1.3; margin-bottom: 16px;
+  }
+  section.doc h3 {
+    font-size: 1.08rem; font-weight: 650; margin: 30px 0 10px; letter-spacing: -0.01em;
+  }
+  section.doc p { color: #cfcfd6; margin-bottom: 12px; }
+  section.doc p b, section.doc li b { color: var(--text); }
+  section.doc ul, section.doc ol { margin: 0 0 14px 22px; color: #cfcfd6; }
+  section.doc li { margin-bottom: 6px; }
+  code {
+    font-family: var(--mono); font-size: 0.86em; color: #cfe4ff;
+    background: rgba(255, 255, 255, 0.07); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.08em 0.42em; white-space: nowrap;
+  }
+  .note {
+    background: rgba(10, 132, 255, 0.07); border: 1px solid rgba(10, 132, 255, 0.3);
+    border-radius: 12px; padding: 13px 16px; margin: 14px 0; font-size: 14px; color: var(--muted);
+  }
+  .note b { color: var(--accent-2); }
+  .warn {
+    background: rgba(255, 214, 10, 0.055); border: 1px solid rgba(255, 214, 10, 0.3);
+    border-radius: 12px; padding: 13px 16px; margin: 14px 0; font-size: 14px; color: var(--muted);
+  }
+  .warn b { color: var(--amber); }
+
+  /* tables */
+  .tbl-wrap { overflow-x: auto; margin: 14px 0 18px; border: 1px solid var(--border); border-radius: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 9px 13px; border-top: 1px solid var(--border); vertical-align: top; }
+  thead th {
+    background: rgba(255, 255, 255, 0.035); border-top: none;
+    color: var(--muted); font-weight: 600; font-size: 12px; letter-spacing: 0.04em;
+  }
+  tbody td:first-child { white-space: nowrap; }
+  td { color: #cfcfd6; }
+  .hot { color: var(--accent-2); font-size: 11px; font-family: var(--mono); }
+
+  /* code blocks */
+  .codeblock { position: relative; background: rgba(13, 15, 21, 0.9); border: 1px solid var(--border-strong); border-radius: 12px; overflow: hidden; margin: 12px 0 18px; }
+  .codeblock pre { padding: 14px 17px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.8; color: #d9d9e0; }
+  .codeblock .cm { color: var(--dim); }
+  .codeblock .str { color: #7ee0a3; }
+  .codeblock .arg { color: #cfe4ff; }
+  .copy-btn {
+    position: absolute; top: 8px; right: 8px;
+    background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border-strong);
+    color: var(--muted); border-radius: 7px; padding: 3px 10px;
+    font-size: 11px; font-family: var(--sans); cursor: pointer;
+    opacity: 0; transition: opacity 0.2s, background 0.2s;
+  }
+  .codeblock:hover .copy-btn { opacity: 1; }
+  .copy-btn:hover { background: rgba(255, 255, 255, 0.12); color: var(--text); }
+  .copy-btn.done { color: var(--green); }
+
+  /* troubleshoot cards */
+  .qa { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 12px; background: var(--card); overflow: hidden; }
+  .qa summary {
+    cursor: pointer; list-style: none; padding: 13px 16px;
+    font-weight: 600; font-size: 14.5px; color: var(--text);
+    display: flex; align-items: baseline; gap: 10px;
+  }
+  .qa summary::-webkit-details-marker { display: none; }
+  .qa summary::before { content: "?"; flex: none; width: 20px; height: 20px; border-radius: 6px; font-size: 12px; font-family: var(--mono); display: inline-flex; align-items: center; justify-content: center; color: var(--accent-2); background: rgba(10, 132, 255, 0.12); border: 1px solid rgba(10, 132, 255, 0.3); }
+  .qa[open] summary { border-bottom: 1px solid var(--border); }
+  .qa .answer { padding: 12px 16px 14px 46px; color: var(--muted); font-size: 14px; }
+  .qa .answer p { margin-bottom: 8px; }
+  .qa .answer :last-child { margin-bottom: 0; }
+
+  /* screenshots */
+  .shot { display: block; width: 100%; border: 1px solid var(--border-strong); border-radius: 14px; margin: 14px 0 6px; }
+  .shot-cap { color: var(--dim); font-size: 12.5px; margin-bottom: 18px; }
+
+  /* mobile toc */
+  .toc-mobile { display: none; }
+
+  footer.site {
+    border-top: 1px solid var(--border); background: var(--bg-soft);
+    padding: 30px 24px 40px; text-align: center; color: var(--dim); font-size: 12.5px;
+  }
+  footer.site p { margin-bottom: 6px; }
+  footer.site a { color: var(--muted); }
+
+  @media (max-width: 960px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+    .sidebar { display: none; }
+    article { padding: 84px 20px 60px; }
+    .toc-mobile { display: block; margin: 0 0 26px; }
+    .toc-mobile summary {
+      cursor: pointer; list-style: none; padding: 11px 15px;
+      border: 1px solid var(--border-strong); border-radius: 11px;
+      background: var(--card); font-weight: 600; font-size: 14px;
+    }
+    .toc-mobile summary::-webkit-details-marker { display: none; }
+    .toc-mobile summary::after { content: "▾"; float: right; color: var(--dim); }
+    .toc-mobile[open] summary::after { content: "▴"; }
+    .toc-mobile nav { padding: 10px 4px 4px; column-count: 2; font-size: 13.5px; }
+    .toc-mobile nav a { display: block; padding: 4px 8px; color: var(--muted); }
+    .topbar-inner { gap: 12px; }
+    .topbar-links { gap: 14px; }
+  }
+  @media (max-width: 560px) {
+    .toc-mobile nav { column-count: 1; }
+    .topbar-links a.hide-sm { display: none; }
+    section.doc h2 { font-size: 1.4rem; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="../index.html">
+      <span class="logo"><img src="../logo.png" alt="MacAI logo"></span>
+      MacAI <small>使用文档</small>
+    </a>
+    <div class="topbar-links">
+      <a class="hide-sm" href="../index.html">项目主页</a>
+      <a href="https://github.com/GuanXuzeng/MacAI/releases" target="_blank" rel="noopener">下载</a>
+      <a href="https://github.com/GuanXuzeng/MacAI" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</div>
+
+<div class="layout">
+
+  <aside class="sidebar" aria-label="文档目录">
+    <div class="group">
+      <b>入门</b>
+      <a href="#about">开始之前</a>
+      <a href="#requirements">系统要求</a>
+      <a href="#install">安装</a>
+      <a href="#quickstart">五分钟跑通</a>
+    </div>
+    <div class="group">
+      <b>日常使用</b>
+      <a href="#console">控制台导览</a>
+      <a href="#engines">引擎与 Runner</a>
+      <a href="#models">模型获取与注册</a>
+    </div>
+    <div class="group">
+      <b>三大能力</b>
+      <a href="#chat">对话 Chat</a>
+      <a href="#stt">语音识别 STT</a>
+      <a href="#tts">语音合成 TTS</a>
+    </div>
+    <div class="group">
+      <b>参考</b>
+      <a href="#cli">macai 命令行</a>
+      <a href="#api">HTTP API</a>
+      <a href="#data">数据、日志与内存</a>
+    </div>
+    <div class="group">
+      <b>帮助</b>
+      <a href="#troubleshoot">故障排查</a>
+      <a href="#security">安全与已知限制</a>
+    </div>
+  </aside>
+
+  <article>
+
+    <details class="toc-mobile">
+      <summary>本文目录</summary>
+      <nav>
+        <a href="#about">开始之前</a>
+        <a href="#requirements">系统要求</a>
+        <a href="#install">安装</a>
+        <a href="#quickstart">五分钟跑通</a>
+        <a href="#console">控制台导览</a>
+        <a href="#engines">引擎与 Runner</a>
+        <a href="#models">模型获取与注册</a>
+        <a href="#chat">对话 Chat</a>
+        <a href="#stt">语音识别 STT</a>
+        <a href="#tts">语音合成 TTS</a>
+        <a href="#cli">macai 命令行</a>
+        <a href="#api">HTTP API</a>
+        <a href="#data">数据、日志与内存</a>
+        <a href="#troubleshoot">故障排查</a>
+        <a href="#security">安全与已知限制</a>
+      </nav>
+    </details>
+
+    <!-- ==================== 开始之前 ==================== -->
+    <section class="doc" id="about">
+      <span class="doc-tag">入门</span>
+      <h2>开始之前</h2>
+      <p>MacAI 是一个跑在 Apple Silicon Mac 上的本地 AI 运行管理系统。你把 LLM、语音识别（STT）、语音合成（TTS）模型导入进来，它在本机用 Metal / MLX / Core ML 加速完成推理，并按 OpenAI 兼容格式对外提供服务——数据不出这台 Mac，断网也能用。</p>
+      <p>所有功能都经由一个本地守护进程 <code>aiworkd</code>（默认 <code>127.0.0.1:11435</code>）提供。三种客户端连的都是它：</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>客户端</th><th>适合</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><b>MacAIConsole</b>（GUI）</td><td>日常使用</td><td>SwiftUI 原生应用：引擎安装、模型下载注册、任务与日志观测、设置。本文以它为主线。</td></tr>
+          <tr><td><b>macai</b> CLI</td><td>脚本与远程 SSH</td><td>Rust 命令行，覆盖全部模型生命周期操作，见 <a href="#cli">macai 命令行</a>。</td></tr>
+          <tr><td><b>OpenAI SDK / 任意 HTTP 客户端</b></td><td>接入第三方应用</td><td>CherryStudio、Hermes 等，把 base_url 指到本机即可，见 <a href="#api">HTTP API</a>。</td></tr>
+        </tbody>
+      </table></div>
+      <div class="warn"><b>先说清楚边界：</b>项目处于活跃开发阶段，适合本地开发、实验与个人工作流，目前无法承诺 API 稳定性和跨版本兼容。要放在生产环境的话，建议锁定版本并自测。</div>
+    </section>
+
+    <!-- ==================== 系统要求 ==================== -->
+    <section class="doc" id="requirements">
+      <span class="doc-tag">入门</span>
+      <h2>系统要求</h2>
+      <ul>
+        <li>Apple Silicon Mac（M1 及之后）</li>
+        <li>macOS 14 或更高版本</li>
+      </ul>
+      <p>用 DMG 安装包就只有这两条：应用自包含 <code>aiworkd</code>、<code>macai</code>、<code>uv</code> 和全部 Runner 适配器，不需要预装 Rust 或 Python。</p>
+      <p>从源码构建额外需要：</p>
+      <ul>
+        <li>Rust stable toolchain</li>
+        <li>Xcode Command Line Tools</li>
+        <li>CMake（<code>brew install cmake</code>）——只有编译 whisper.cpp 引擎时用到</li>
+        <li>Python 3.12（构建与测试环境使用；Python 系列 Runner 的运行环境由内置 uv 自行管理，不依赖系统 Python）</li>
+      </ul>
+      <p>仓库与安装包都不包含模型权重。所有模型在首次使用时下载，或从你已有的本地文件导入。</p>
+    </section>
+
+    <!-- ==================== 安装 ==================== -->
+    <section class="doc" id="install">
+      <span class="doc-tag">入门</span>
+      <h2>安装</h2>
+
+      <h3>方式一：DMG 安装包（推荐普通用户）</h3>
+      <ol>
+        <li>从 <a href="https://github.com/GuanXuzeng/MacAI/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载 <code>MacAIConsole.dmg</code>，打开后把 <code>MacAIConsole.app</code> 拖入「应用程序」。</li>
+        <li>首次打开可能被 Gatekeeper 拦截（应用未签名）。两种处理任选：
+          <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre><span class="cm"># 终端清除隔离标记</span>
+xattr -cr /Applications/MacAIConsole.app</pre></div>
+          或者到「系统设置 → 隐私与安全性」，滑到最下方「安全性」区域点「仍要打开」。</li>
+        <li>启动应用即可。它内置的 <code>aiworkd</code> 会随之拉起，无需任何命令行操作。</li>
+      </ol>
+
+      <h3>方式二：从源码构建（开发者）</h3>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>git clone https://github.com/GuanXuzeng/MacAI.git
+cd MacAI
+cd apps/MacAIConsole
+scripts/build-app.sh release</pre></div>
+      <p>该脚本会联动编译后端和 GUI、组装应用并直接拉起。开发调试也可以在 <code>apps/MacAIConsole</code> 下直接 <code>swift run</code>；此时需先自行构建并启动 daemon。打 DMG 用 <code>scripts/build-app.sh dmg</code>，产物在 <code>apps/MacAIConsole/build/</code>。</p>
+      <div class="note"><b>daemon 由谁启动？</b>GUI 启动时会自动按顺序探测并拉起：<code>AIWORKD_PATH</code> 环境变量 → 仓库 <code>target/release/aiworkd</code> → <code>target/debug/aiworkd</code>。也可以完全不用 GUI，手动 <code>./target/release/aiworkd</code> 后只用 CLI 和 API。</div>
+    </section>
+
+    <!-- ==================== 五分钟跑通 ==================== -->
+    <section class="doc" id="quickstart">
+      <span class="doc-tag">入门</span>
+      <h2>五分钟跑通</h2>
+      <p>下面用推荐的 MiniCPM5 2B（MLX 4-bit，约 2.5 GB）走通第一条链路。STT / TTS 的流程完全一样，只是换一个引擎和模型。</p>
+      <ol>
+        <li><b>装引擎。</b>打开 MacAIConsole，侧边栏进「管理」页。顶端「引擎」区找到 <code>mlx-lm</code>，点「安装」。Python 依赖由内置 uv 自动部署，不需要你装 Python。</li>
+        <li><b>下模型。</b>在「管理」页推荐模型卡片里找到 <b>MiniCPM5 2B MLX 4-bit</b>，点「下载」。daemon 在后台断点续传，完成后自动注册。网络慢的话，先去「设置 → 模型下载源」切到 <code>hf-mirror.com</code>。</li>
+        <li><b>加载。</b>模型卡片上点「启动」，等状态变为常驻（resident）。「运行状态」页能看到它占用的内存和加速设备。</li>
+        <li><b>验证。</b>用 CLI 或 OpenAI 兼容 API 发起请求；完成后可在 GUI「任务」页查看记录：
+          <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre><span class="cm"># ① CLI</span>
+macai chat MiniCPM5-2B-MLX-4bit <span class="str">"用一句话介绍你自己"</span>
+
+<span class="cm"># ② OpenAI 兼容 API</span>
+curl http://127.0.0.1:11435/v1/chat/completions <span class="arg">\</span>
+  -H <span class="str">'Content-Type: application/json'</span> <span class="arg">\</span>
+  -d <span class="str">'{"model":"MiniCPM5-2B-MLX-4bit","messages":[{"role":"user","content":"Hello"}]}'</span></pre></div>
+        </li>
+      </ol>
+      <p>跑通了就继续看 <a href="#console">控制台导览</a> 和 <a href="#models">模型获取与注册</a>；哪一步卡住了直接翻 <a href="#troubleshoot">故障排查</a>。</p>
+    </section>
+
+    <!-- ==================== 控制台导览 ==================== -->
+    <section class="doc" id="console">
+      <span class="doc-tag">日常使用</span>
+      <h2>控制台导览</h2>
+      <img class="shot" src="../imgs/MacAIConsole.png" alt="MacAIConsole 主界面">
+      <p class="shot-cap">MacAIConsole 主界面。GUI 是无状态客户端，界面上每个数字都实时来自 daemon。</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>页面</th><th>能做什么</th></tr></thead>
+        <tbody>
+          <tr><td><b>运行状态</b></td><td>daemon 版本与 PID、内存预算、系统内存压力折线（5 分钟滑动窗口）、活跃请求、已加载模型的常驻内存与加速设备。模型条目点进去是详细设置。</td></tr>
+          <tr><td><b>任务</b></td><td>当前运行与最近完成的 Chat / STT / TTS 请求，含耗时、输入输出与错误。推理模型的思考过程与最终回答分开显示。</td></tr>
+          <tr><td><b>管理</b></td><td>本文档的核心页面，见下两节：<a href="#engines">引擎与 Runner</a>、<a href="#models">模型获取与注册</a>。</td></tr>
+          <tr><td><b>日志</b></td><td>GUI 与 daemon 双端日志，默认 Info，可开 Debug，按级别着色；「在访达中显示」直接打开日志目录。</td></tr>
+          <tr><td><b>设置</b></td><td>外观（跟随系统 / 明亮 / 暗黑）、自动拉起 daemon、内存预算、网络代理、模型下载源、恢复已忽略的引擎与推荐模型、检查更新（关于）。</td></tr>
+        </tbody>
+      </table></div>
+      <p>菜单栏常驻图标可以快速查看 daemon 状态并启停。任务历史是有界的：终态任务保留最近 100 条。</p>
+    </section>
+
+    <!-- ==================== 引擎与 Runner ==================== -->
+    <section class="doc" id="engines">
+      <span class="doc-tag">日常使用</span>
+      <h2>引擎与 Runner</h2>
+      <p>每个推理引擎都是一个独立的 Runner 进程（以 <code>org.macai.*</code> 命名），由 daemon 统一安装环境、装配与监控。某个引擎崩溃不会拖垮 daemon——客户端拿到的是 <code>backend_crashed</code> 这类结构化错误，其他模型继续服务。</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Runner</th><th>能力</th><th>加速</th><th>安装说明</th></tr></thead>
+        <tbody>
+          <tr><td><code>org.macai.llama.cpp</code></td><td>LLM · GGUF</td><td>Metal / Accelerate</td><td>下载预编译二进制（manifest 固定 tag + sha256 校验）</td></tr>
+          <tr><td><code>org.macai.mlx-lm</code></td><td>LLM · MLX</td><td>MLX / Metal</td><td>uv 自动部署 Python 环境</td></tr>
+          <tr><td><code>org.macai.whisper.cpp</code></td><td>STT · .bin</td><td>Core ML 优先，Metal 回退</td><td><b>需本机编译</b>：要预装 Xcode CLT 与 CMake，安装时下载官方源码构建常驻 server</td></tr>
+          <tr><td><code>org.macai.qwen3-asr</code></td><td>STT</td><td>MLX / Metal GPU</td><td>uv 自动部署</td></tr>
+          <tr><td><code>org.macai.sherpa-onnx</code></td><td>STT · 中文</td><td>CPU</td><td>uv 自动部署</td></tr>
+          <tr><td><code>org.macai.qwen3-tts</code></td><td>TTS</td><td>MLX / Metal GPU</td><td>uv 自动部署</td></tr>
+          <tr><td><code>org.macai.kokoro</code></td><td>TTS</td><td>MLX / Metal GPU</td><td>uv 自动部署</td></tr>
+        </tbody>
+      </table></div>
+      <h3>安装与卸载</h3>
+      <p>在「管理」页顶端按 LLM / STT / TTS 分组点「安装」即可；也可以直接调 API：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>curl -X POST http://127.0.0.1:11435/api/runners/org.macai.mlx-lm/install</pre></div>
+      <p>已就绪的引擎在右键菜单里可以卸载受管环境和引擎文件，之后能重装。正在使用该引擎的模型要先卸载。如果本机已有同版本引擎二进制，可以用环境变量跳过下载：<code>MACAI_LLAMA_SERVER</code>、<code>MACAI_WHISPER_SERVER</code>（绝对路径）。</p>
+      <h3>新建自己的 Runner（Script Runner）</h3>
+      <p>「管理」页的「新建 Runner」可以从 Chat / STT / TTS 模板编辑一个带 PEP 723 元数据的 <code>.macai.py</code> 单文件。内置编辑器带语法高亮和依赖助手：推理库从预设里选，或直接粘贴官方 <code>pip install</code> / <code>uv add</code> 命令；也可以导入本地 <code>.py</code>（覆盖前有确认），或一键复制一段完整的 Prompt 交给外部 AI 帮你生成脚本。保存时 daemon 会静态检查依赖与权限，在临时环境完成 lock、sync 和导入探针，通过后作为标准 Runner 保存到 <code>Plugins/&lt;runner-id&gt;/</code>，重启 <code>aiworkd</code> 后即可像内置 Runner 一样注册模型。</p>
+      <div class="warn"><b>信任边界：</b>Runner 以 <code>aiworkd</code> 的用户权限运行本地代码，digest 校验和环境变量白名单不构成操作系统沙箱。只安装你读过或信得过的脚本。单文件示例可以参考仓库 <code>samples/</code> 下的 Hojo-TTS-Light。</div>
+    </section>
+
+    <!-- ==================== 模型获取与注册 ==================== -->
+    <section class="doc" id="models">
+      <span class="doc-tag">日常使用</span>
+      <h2>模型获取与注册</h2>
+
+      <h3>推荐模型（开箱即用）</h3>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>类型</th><th>模型</th><th>Runner</th><th>预估内存</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>LLM</td><td>MiniCPM5 2B MLX 4-bit <span class="hot">推荐</span></td><td><code>org.macai.mlx-lm</code></td><td>~2.5 GB</td><td>端侧通用对话，长上下文与工具调用优化</td></tr>
+          <tr><td>LLM</td><td>任意 GGUF</td><td><code>org.macai.llama.cpp</code></td><td>视权重</td><td>本地导入任意兼容 GGUF</td></tr>
+          <tr><td>STT</td><td>Whisper Large v3 Turbo Q5 <span class="hot">推荐</span></td><td><code>org.macai.whisper.cpp</code></td><td>~570 MB</td><td>多语言高速转写，可选 Core ML 加速</td></tr>
+          <tr><td>STT</td><td>Qwen3-ASR 0.6B MLX 4-bit <span class="hot">推荐</span></td><td><code>org.macai.qwen3-asr</code></td><td>~800 MB</td><td>中文与混合语言识别精度好</td></tr>
+          <tr><td>STT</td><td>sherpa-onnx Zipformer zh-int8</td><td><code>org.macai.sherpa-onnx</code></td><td>~400 MB</td><td>中文流式识别，长音频内存平稳，CPU 低功耗</td></tr>
+          <tr><td>TTS</td><td>Kokoro 82M zh <span class="hot">推荐</span></td><td><code>org.macai.kokoro</code></td><td>~400 MB</td><td>内置 20+ 中英文音色</td></tr>
+          <tr><td>TTS</td><td>Qwen3-TTS 0.6B CustomVoice 4-bit <span class="hot">推荐</span></td><td><code>org.macai.qwen3-tts</code></td><td>~1.7 GB</td><td>9 款角色音色，支持情感指令</td></tr>
+          <tr><td>TTS</td><td>macOS 内置语音</td><td>系统 Provider <code>macos_say</code></td><td>极小</td><td>零下载，即刻发声，音质一般</td></tr>
+        </tbody>
+      </table></div>
+      <p>推荐模型在「管理」页点「下载」即可，daemon 自动下载（断点续传）并注册。对某条引擎或推荐模型不感兴趣，右键忽略即可，设置页可以恢复。</p>
+
+      <h3>三种获取模型的方式</h3>
+      <ol>
+        <li><b>推荐模型一键下载</b>：如上，最省事。</li>
+        <li><b>「添加模型」远端下载</b>：输入公开 Hugging Face 或 ModelScope 的仓库 ID / URL，预览文件与大小后勾选下载到模型仓库。<b>下载不会自动注册或加载</b>，完成后需手动启动。</li>
+        <li><b>导入本地已有模型</b>：GGUF / whisper <code>.bin</code> 单文件直接在「添加模型 → 本地文件」导入；MLX 等目录型模型放进对应子目录后注册（或用 CLI <code>macai load</code>）。目录约定在 <a href="#data">数据、日志与内存</a>。</li>
+      </ol>
+
+      <h3>注册语义：这些规则先知道，能少踩坑</h3>
+      <ul>
+        <li>目录型模型（MLX、sherpa-onnx、Qwen3 等）<b>模型 ID 必须与目录名一致</b>；GGUF / .bin 单文件没有这个限制。</li>
+        <li>daemon 用目录签名静态探测模型属于哪个 Runner。识别不了的目录会<b>直接拒绝注册</b>，提示检查模型是否下载完整，或安装 / 新建对应 Runner——不会瞎猜。CLI 上可用 <code>macai inspect &lt;目录&gt;</code> 先看诊断。</li>
+        <li>显式 <code>--provider</code> 是硬选择：指定的 Runner 不可用就报错，绝不静默换成别的。注册时的选择结果（requested / selected / 理由 / 有效设备）会被持久化记录，可在 API 返回里审计。</li>
+        <li>LLM 注册默认上下文 4096，可在详情设置调整；默认采样参数 temperature 1.0、top_p 0.95 同样可改。</li>
+      </ul>
+
+      <h3>生命周期：load / start / unload / remove / rename</h3>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>操作</th><th>作用</th><th>磁盘文件</th></tr></thead>
+        <tbody>
+          <tr><td><code>load</code>（注册并加载）</td><td>新模型注册进 SQLite 注册表并立即加载</td><td>不动</td></tr>
+          <tr><td><code>start</code></td><td>把注册表中已有模型加载进内存</td><td>不动</td></tr>
+          <tr><td><code>unload</code></td><td>停 worker、释放内存；注册记录保留</td><td>不动</td></tr>
+          <tr><td><code>remove</code></td><td>只删注册记录</td><td>保留，可重新注册</td></tr>
+          <tr><td><code>rename</code></td><td>改 ID，运行中的模型先安全停止</td><td>不动</td></tr>
+        </tbody>
+      </table></div>
+      <p>卸载请求不会打断进行中的推理——请求期间模型挂着 lease，手动卸载、LRU 逐出和空闲回收都要等它释放。由推荐模型 Profile 绑定创建的模型 ID 是固定的，不支持 rename。</p>
+
+      <h3>驻留与内存</h3>
+      <p>「启动」≠ 永久占内存。每个模型有 keep-alive 空闲驻留策略（<code>0</code> / <code>5m</code> / <code>2h</code> / <code>always</code>），到点无人使用就自动卸载；内存紧张时 daemon 按 LRU 逐出。daemon 的内存预算默认 <code>min(RAM×0.75, RAM−8GB)</code>，设置页可改，也可用 <code>AIWORKD_MEMORY_BUDGET</code>（字节）覆盖。跑大模型前先看看预算还剩多少。</p>
+    </section>
+
+    <!-- ==================== Chat ==================== -->
+    <section class="doc" id="chat">
+      <span class="doc-tag">三大能力</span>
+      <h2>对话 Chat</h2>
+      <h3>GUI</h3>
+      <p>通过 CLI 或 API 发起 Chat 请求后，「任务」页会记录运行状态与结果；推理模型（如 DeepSeek 系）的思考过程单独分区展示，不与最终回答混在一起。模型的默认采样参数在运行状态页的模型详情里调整，右键「使用示例」会带上这三个参数生成现成的 API 代码。</p>
+      <h3>CLI</h3>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre><span class="cm"># 一次性提问（无上下文记忆）</span>
+macai chat local-model <span class="str">"Hello"</span> <span class="arg">--system</span> <span class="str">"Answer concisely"</span> <span class="arg">--temperature</span> 0.2
+
+<span class="cm"># 交互式多轮对话（带上下文记忆），Ctrl-D 退出</span>
+macai run local-model <span class="arg">--max-tokens</span> 256</pre></div>
+      <h3>API</h3>
+      <p>标准 <code>POST /v1/chat/completions</code>。<code>"stream": true</code> 时逐 token SSE 推送，以 <code>data: [DONE]</code> 结束；省略 <code>temperature</code> / <code>top_p</code> 时使用模型注册时保存的默认值。</p>
+      <p>推理模型会通过 <code>reasoning_content</code> 字段返回思考内容，最终回答仍在 <code>content</code>；非推理模型没有该字段。请求带可选 <code>session_id</code>（不透明字符串）可声明多轮延续：两个 LLM Runner 都依托常驻 worker 复用对话前缀的 KV 缓存，长历史下首 token 延迟明显下降。</p>
+      <div class="note"><b>一个诚实的怪癖：</b>Metal 数值精度差异可能使缓存命中后 <code>temperature=0</code> 的输出与全量重算偶发不同。要严格可复现的实验，别依赖 <code>session_id</code> 复用。</div>
+      <p>Python SDK 接入：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>from openai import OpenAI
+
+client = OpenAI(
+    base_url=<span class="str">"http://127.0.0.1:11435/v1"</span>,
+    api_key=<span class="str">"local"</span>,  <span class="cm"># daemon 无鉴权，占位即可</span>
+)
+
+resp = client.chat.completions.create(
+    model=<span class="str">"MiniCPM5-2B-MLX-4bit"</span>,
+    messages=[{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: <span class="str">"你好"</span>}],
+)
+print(resp.choices[0].message.content)</pre></div>
+    </section>
+
+    <!-- ==================== STT ==================== -->
+    <section class="doc" id="stt">
+      <span class="doc-tag">三大能力</span>
+      <h2>语音识别 STT</h2>
+      <p>上传 <code>wav / mp3 / flac / ogg / m4a</code> 都可以，daemon 在入口统一解码为 PCM WAV 再交给 Runner，所以各 Runner 对格式的要求是一致的。注意 HTTP API 上传的是<b>音频字节</b>（multipart 的 <code>file</code> 字段），不是路径字符串——传路径、URL 或空文件会收到 400，错误信息里会写明收到的字节数和正确用法。</p>
+      <h3>选哪个引擎</h3>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Runner</th><th>语言</th><th>特点</th></tr></thead>
+        <tbody>
+          <tr><td>whisper.cpp</td><td>多语言</td><td>ggml .bin 模型；Core ML encoder 可选，缺失时自动走 Metal，不是错误</td></tr>
+          <tr><td>Qwen3-ASR 0.6B</td><td>多语言</td><td>MLX 4-bit，中文与混合语言表现好，可指定语言提示</td></tr>
+          <tr><td>sherpa-onnx Zipformer</td><td>仅中文</td><td>流式分块转写，长录音内存平稳，纯 CPU</td></tr>
+        </tbody>
+      </table></div>
+      <h3>CLI</h3>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>macai transcribe meeting.m4a <span class="arg">--model</span> Whisper-Large-v3-Turbo-Q5 <span class="arg">--language</span> zh</pre></div>
+      <h3>API</h3>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>curl http://127.0.0.1:11435/v1/audio/transcriptions <span class="arg">\</span>
+  -F <span class="str">"file=@/path/to/meeting.wav"</span> <span class="arg">\</span>
+  -F <span class="str">"model=Qwen3-ASR-0.6B-MLX-4bit"</span> <span class="arg">\</span>
+  -F <span class="str">"language=zh"</span></pre></div>
+      <div class="note"><b>whisper.cpp 进阶：</b>把编译好的 Core ML encoder 目录（如 <code>ggml-large-v3-turbo-encoder.mlmodelc/</code>）放在 .bin 模型同级并保持对应命名即可启用 ANE 编码器；不提供则自动 Metal 回退。sherpa-onnx 的模型目录必须完整保留 <code>tokens.txt</code>、<code>encoder.int8.onnx</code>、<code>decoder.onnx</code>、<code>joiner.int8.onnx</code> 四个文件。</div>
+    </section>
+
+    <!-- ==================== TTS ==================== -->
+    <section class="doc" id="tts">
+      <span class="doc-tag">三大能力</span>
+      <h2>语音合成 TTS</h2>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Runner</th><th>音色</th><th>特点</th></tr></thead>
+        <tbody>
+          <tr><td>Kokoro 82M zh</td><td>20+ 中英文音色</td><td>中英混读，长文本自动分段拼接</td></tr>
+          <tr><td>Qwen3-TTS 0.6B</td><td>9 款官方角色音色</td><td>表现力强，文本中可用逗号携带情感指令</td></tr>
+          <tr><td>macos_say</td><td>系统语音</td><td>零下载零加载，适合快速验证链路</td></tr>
+        </tbody>
+      </table></div>
+      <h3>音色选择与试听</h3>
+      <p>运行状态页和模型详情里的音色下拉框支持滚轮快速步进：滚轮停下后自动保存为该模型默认音色并试听（可在设置里关掉自动试听）；试听播放随时会被下一次选择打断。命令行对应：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>macai voice kokoro-82m-zh              <span class="cm"># 列出可用音色</span>
+macai voice kokoro-82m-zh zf_001       <span class="cm"># 设置默认音色</span>
+macai voice Qwen3-TTS-0.6B-CustomVoice-4bit --clear  <span class="cm"># 清除默认音色</span></pre></div>
+      <h3>合成</h3>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre><span class="cm"># CLI：生成 WAV 文件</span>
+macai speak <span class="str">"你好，这是本地合成的语音。"</span> <span class="arg">--model</span> kokoro-82m-zh <span class="arg">--output</span> hello.wav
+
+<span class="cm"># Qwen3-TTS 情感指令：逗号后跟情绪描述</span>
+macai speak <span class="str">"Vivian, very happy 我们明天见！"</span> <span class="arg">--model</span> Qwen3-TTS-0.6B-CustomVoice-4bit
+
+<span class="cm"># API</span>
+curl http://127.0.0.1:11435/v1/audio/speech <span class="arg">\</span>
+  -H <span class="str">'Content-Type: application/json'</span> <span class="arg">\</span>
+  -d <span class="str">'{"model":"kokoro-82m-zh","input":"你好","voice":"zf_001"}'</span> <span class="arg">\</span>
+  --output speech.wav</pre></div>
+      <p>Qwen3-TTS 内置音色：<code>Vivian</code>、<code>Serena</code>、<code>Uncle_Fu</code>、<code>Dylan</code>、<code>Eric</code>、<code>Ryan</code>、<code>Aiden</code>、<code>Ono_Anna</code>、<code>Sohee</code>。</p>
+      <div class="warn"><b>已知限制：</b><code>speed</code> 参数当前会被校验（0.25–4.0）但对 Qwen3-TTS 实际不生效（上游 mlx-audio 尚无对应参数）；Qwen3-TTS 首版不含流式输出与声音克隆。Kokoro 的 CLI 默认音色是 <code>zf_001</code>。</div>
+    </section>
+
+    <!-- ==================== CLI ==================== -->
+    <section class="doc" id="cli">
+      <span class="doc-tag">参考</span>
+      <h2>macai 命令行</h2>
+      <p><code>macai</code> 只跟 daemon 通信，daemon 没跑它就什么也做不了（会提示启动方法）。全局参数 <code>-a, --addr HOST:PORT</code> 指定 daemon 地址，默认 <code>127.0.0.1:11435</code>。每个子命令的完整参数用 <code>macai &lt;命令&gt; --help</code> 查询。</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>命令</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td><code>status</code></td><td>daemon、请求与系统内存概况</td></tr>
+          <tr><td><code>list</code>（<code>models</code>）</td><td>已注册模型及加载状态</td></tr>
+          <tr><td><code>ps</code></td><td>运行中模型、内存占用、设备与驻留策略</td></tr>
+          <tr><td><code>providers</code></td><td>Provider 可用性、设备与不可用原因</td></tr>
+          <tr><td><code>tasks [id] [--limit N]</code></td><td>近期任务列表或单个任务详情</td></tr>
+          <tr><td><code>load &lt;path&gt;</code></td><td>注册并加载本地模型；<code>--id --type llm|stt|tts --provider --context-length --keep-alive --routing-token</code></td></tr>
+          <tr><td><code>inspect &lt;dir&gt;...</code></td><td>目录模型路由诊断，输出 routing token</td></tr>
+          <tr><td><code>start &lt;model&gt;</code></td><td>加载已注册模型</td></tr>
+          <tr><td><code>unload &lt;model&gt;</code>（<code>stop</code>）</td><td>停止 worker 释放内存，注册保留</td></tr>
+          <tr><td><code>remove &lt;model&gt;</code>（<code>rm</code>）</td><td>删除注册记录，文件保留</td></tr>
+          <tr><td><code>rename &lt;model&gt; &lt;new&gt;</code></td><td>改 ID（运行中先安全停止）</td></tr>
+          <tr><td><code>keep-alive &lt;model&gt; &lt;v&gt;</code></td><td>空闲驻留：<code>0 / 5m / 2h / always</code></td></tr>
+          <tr><td><code>pull &lt;repo&gt; &lt;file&gt;</code></td><td>从 HuggingFace 下载单文件到模型仓库并注册加载</td></tr>
+          <tr><td><code>chat &lt;model&gt; &lt;msg|-&gt;</code></td><td>一次性对话（无记忆）</td></tr>
+          <tr><td><code>run &lt;model&gt;</code></td><td>交互式多轮对话（有记忆）</td></tr>
+          <tr><td><code>transcribe &lt;file&gt;</code></td><td>语音转文字，<code>--model --language</code></td></tr>
+          <tr><td><code>speak &lt;text|-&gt;</code></td><td>语音合成，<code>--model --voice --output --speed</code></td></tr>
+          <tr><td><code>voice &lt;model&gt; [v] [--clear]</code></td><td>查看 / 设置 / 清除 TTS 默认音色</td></tr>
+          <tr><td><code>logging [info|debug]</code></td><td>查询或调整 daemon 日志级别</td></tr>
+          <tr><td><code>serve</code></td><td>检查 API server 是否在运行，未运行给出启动提示</td></tr>
+        </tbody>
+      </table></div>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre><span class="cm"># 日常巡检</span>
+macai status &amp;&amp; macai ps &amp;&amp; macai tasks --limit 5
+
+<span class="cm"># 从 HF 拉一个 GGUF 直接开聊</span>
+macai pull Qwen/Qwen2.5-0.5B-Instruct-GGUF qwen2.5-0.5b-instruct-q4_k_m.gguf
+macai chat qwen2.5-0.5b-instruct-q4_k_m <span class="str">"ping"</span></pre></div>
+    </section>
+
+    <!-- ==================== API ==================== -->
+    <section class="doc" id="api">
+      <span class="doc-tag">参考</span>
+      <h2>HTTP API</h2>
+      <p><code>/v1/*</code> 面向推理（OpenAI 兼容），<code>/api/*</code> 面向运行时管理。没有鉴权，api_key 填任意占位值。</p>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>方法</th><th>路径</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td>GET</td><td><code>/health</code></td><td>健康检查</td></tr>
+          <tr><td>GET</td><td><code>/v1/models</code></td><td>模型列表（含 provider 选择审计字段）</td></tr>
+          <tr><td>POST</td><td><code>/v1/chat/completions</code></td><td>对话，支持 SSE 流式与 reasoning_content</td></tr>
+          <tr><td>POST</td><td><code>/v1/audio/transcriptions</code></td><td>语音转文字（multipart 音频字节）</td></tr>
+          <tr><td>POST</td><td><code>/v1/audio/speech</code></td><td>语音合成，返回 WAV</td></tr>
+          <tr><td>GET</td><td><code>/api/runtime</code></td><td>运行状态：内存预算、压力、已加载模型</td></tr>
+          <tr><td>GET</td><td><code>/api/providers</code></td><td>Provider 状态与不可用原因</td></tr>
+          <tr><td>GET / POST</td><td><code>/api/runners</code> · <code>/api/runners/{runner}/install</code></td><td>Runner 列表与安装 / 卸载（DELETE）</td></tr>
+          <tr><td>POST</td><td><code>/api/models/pull</code></td><td>从 HF / ModelScope 下载</td></tr>
+          <tr><td>POST</td><td><code>/api/models/inspect</code> · <code>/api/models/remote/inspect</code></td><td>本地目录探测 / 远端仓库预览</td></tr>
+          <tr><td>POST</td><td><code>/api/models/load</code></td><td>注册模型</td></tr>
+          <tr><td>POST</td><td><code>/api/models/{id}/load · unload · keep-alive · rename · voice</code></td><td>单模型操作</td></tr>
+          <tr><td>GET</td><td><code>/api/models/{id}/voices</code></td><td>TTS 音色清单</td></tr>
+          <tr><td>DELETE</td><td><code>/api/models/{id}</code></td><td>删除注册</td></tr>
+          <tr><td>GET</td><td><code>/api/tasks</code> · <code>/api/tasks/{id}</code></td><td>任务历史与详情</td></tr>
+          <tr><td>GET / POST</td><td><code>/api/logging</code></td><td>查看 / 调整日志级别</td></tr>
+          <tr><td>GET</td><td><code>/api/downloads/{progress_id}</code></td><td>下载进度</td></tr>
+        </tbody>
+      </table></div>
+      <h3>接入第三方应用</h3>
+      <p>任何支持自定义 OpenAI 接口的客户端都能接。以 CherryStudio 为例：添加供应商，API 地址填 <code>http://127.0.0.1:11435</code>，点「获取模型列表」会自动列出所有可用模型 ID。</p>
+      <img class="shot" src="../imgs/cherry_studio_sample.png" alt="CherryStudio 接入 MacAI">
+      <p class="shot-cap">CherryStudio 接入示例。</p>
+      <p>为 Hermes Desktop 提供本地 TTS / STT 的完整案例（含配置脚本，无需改 Hermes 代码）见仓库 <a href="https://github.com/GuanXuzeng/MacAI/blob/main/samples/Hermes_TTS_STT_sample.md" target="_blank" rel="noopener">samples/Hermes_TTS_STT_sample.md</a>。</p>
+    </section>
+
+    <!-- ==================== 数据 ==================== -->
+    <section class="doc" id="data">
+      <span class="doc-tag">参考</span>
+      <h2>数据、日志与内存</h2>
+      <p>所有运行时数据都在一个目录里，删掉它等于完整重置（模型会重新下载）：</p>
+      <div class="codeblock"><button class="copy-btn" data-copy>复制</button>
+<pre>~/Library/Application Support/MacAIConsole/
+├── Models/
+│   ├── llm/            <span class="cm"># MLX 格式 LLM 目录</span>
+│   ├── stt/            <span class="cm"># Qwen3-ASR、sherpa-onnx 等 STT 目录</span>
+│   └── tts/            <span class="cm"># Kokoro、Qwen3-TTS 等 TTS 目录</span>
+├── Engines/            <span class="cm"># llama.cpp / whisper.cpp 受管引擎</span>
+├── Plugins/            <span class="cm"># 用户创建的 Script Runner</span>
+├── model-settings.json
+├── models.db           <span class="cm"># SQLite 模型注册表（重启持久）</span>
+└── logs/
+    ├── aiworkd.log
+    └── gui.log</pre></div>
+      <ul>
+        <li>日志按 5 MB 轮换，保留一份 <code>.1</code>。默认 Info；「日志」页或 <code>macai logging debug</code> 开启后，daemon 用同一 <code>request_id</code> 记录每个 HTTP 请求的方法、路径、状态码与耗时——不记查询参数、请求体和响应体。</li>
+        <li>任务历史有界：终态任务保留最近 100 条。</li>
+        <li>原始音频不写入任务历史；日志会主动过滤 API token 与模型内容。</li>
+      </ul>
+      <h3>常用的环境变量（手动跑 daemon 时）</h3>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>变量</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td><code>AIWORKD_MEMORY_BUDGET</code></td><td>内存预算（字节），覆盖默认公式</td></tr>
+          <tr><td><code>AIWORKD_HF_ENDPOINT</code></td><td>下载源，如 <code>https://hf-mirror.com</code></td></tr>
+          <tr><td><code>AIWORKD_PATH</code></td><td>GUI 探测 daemon 二进制的显式路径</td></tr>
+          <tr><td><code>MACAI_LLAMA_SERVER</code> / <code>MACAI_WHISPER_SERVER</code></td><td>用本机已有引擎二进制，跳过受管下载</td></tr>
+          <tr><td><code>MACAI_UV_PATH</code> / <code>MACAI_RUNNERS_DIR</code></td><td>uv 与 runners 目录显式覆盖（App 内已自动注入）</td></tr>
+          <tr><td><code>MACAI_UV_PYTHON_INSTALL_MIRROR</code></td><td>uv 下载 Python 解释器的镜像</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <!-- ==================== 故障排查 ==================== -->
+    <section class="doc" id="troubleshoot">
+      <span class="doc-tag">帮助</span>
+      <h2>故障排查</h2>
+      <p>先看「日志」页或 <code>logs/aiworkd.log</code>——错误信息都落在那里。下面是按出现频率排的常见问题。</p>
+
+      <details class="qa"><summary>打开应用提示「已损坏，无法打开」或「未知的开发者」</summary>
+        <div class="answer">
+          <p>应用未做签名公证，被 Gatekeeper 拦了，不是真的损坏。终端执行 <code>xattr -cr /Applications/MacAIConsole.app</code>，或在「系统设置 → 隐私与安全性」底部点「仍要打开」。见 <a href="#install">安装</a>。</p>
+        </div>
+      </details>
+
+      <details class="qa"><summary>GUI 打开后一直连不上 daemon</summary>
+        <div class="answer">
+          <p>GUI 按顺序探测 <code>AIWORKD_PATH</code> → <code>target/release/aiworkd</code> → <code>target/debug/aiworkd</code>。DMG 版自带 daemon，一般不会遇到；源码版请先 <code>cargo build --release --workspace</code> 或手动启动 <code>./target/release/aiworkd</code>，再用 <code>curl http://127.0.0.1:11435/health</code> 验证。设置页可以关掉「自动拉起」排查冲突。</p>
+        </div>
+      </details>
+
+      <details class="qa"><summary>引擎安装失败</summary>
+        <div class="answer">
+          <p>分两种：<b>whisper.cpp</b> 要在本机编译，需预装 Xcode Command Line Tools 和 CMake（<code>brew install cmake</code>），编译耗时属正常；<b>Python 系列</b>（mlx-lm、kokoro、qwen3-asr、qwen3-tts、sherpa-onnx）由 uv 装 wheel，首次安装要联网拉取解释器与依赖，网络不通时配代理或设 <code>MACAI_UV_PYTHON_INSTALL_MIRROR</code>。普通用户建议先装预编译完善的 llama.cpp、mlx-lm、qwen3-asr 或 kokoro。</p>
+        </div>
+      </details>
+
+      <details class="qa"><summary>注册模型被拒绝：「未识别的模型目录」</summary>
+        <div class="answer">
+          <p>daemon 靠目录签名识别模型归属的 Runner，识别不了就拒绝，不会乱猜。按提示检查：模型是否下载完整（远端下载中断会缺文件）；对应引擎是否已安装；目录型模型 ID 是否与目录名一致。用 <code>macai inspect &lt;目录&gt;</code> 看具体诊断。确认无误仍不识别的话，说明这类模型还没有对应 Runner，可在「新建 Runner」里自制。</p>
+        </div>
+      </details>
+
+      <details class="qa"><summary>请求返回 <code>backend_crashed</code></summary>
+        <div class="answer">
+          <p>承载该模型的引擎进程崩了（段错误、OOM 都算）。daemon 本身不受影响，其他模型照常服务。在「日志」页看崩溃前后的输出；重试一次通常可恢复。同一模型持续崩溃的话，带上日志提 issue。</p>
+        </div>
+      </details>
+
+      <details class="qa"><summary>模型刚启动，头几个请求报 503</summary>
+        <div class="answer">
+          <p>llama.cpp 常驻 server 在初始化模型，最早几秒的请求可能返回 503，稍后重试即可。大模型首次加载慢是正常的，加载完成状态以「运行状态」页为准。</p>
+        </div>
+      </details>
+
+      <details class="qa"><summary>模型下载很慢或失败</summary>
+        <div class="answer">
+          <p>「设置 → 模型下载源」切到 <code>https://hf-mirror.com</code> 或自定义源（也可启动时设 <code>AIWORKD_HF_ENDPOINT</code>）。下载支持断点续传（<code>.part</code> 文件），中断后重试会接着传，不用从头来。下载进度在管理页和下载窗口可见，daemon 日志每 5% 记一笔。</p>
+        </div>
+      </details>
+
+      <details class="qa"><summary>内存吃紧，模型总被自动卸载</summary>
+        <div class="answer">
+          <p>daemon 的预算默认 <code>min(RAM×0.75, RAM−8GB)</code>，超预算时按 LRU 逐出。可以：调小其他模型的 <code>keep-alive</code>（如 <code>0</code>，用完即卸）；卸掉暂时不用的模型；或在设置页 / <code>AIWORKD_MEMORY_BUDGET</code> 里改预算。正在服务的请求不会被逐出打断（lease 保护）。</p>
+        </div>
+      </details>
+
+      <details class="qa"><summary>temperature 设为 0，两次回答还是不一样</summary>
+        <div class="answer">
+          <p>带 <code>session_id</code> 的多轮对话会复用 KV 缓存，Metal 数值精度差异可能让缓存命中后的输出与全量重算偶发分岔。要严格可复现，去掉 <code>session_id</code> 每轮全量计算。</p>
+        </div>
+      </details>
+
+      <details class="qa"><summary>想升级应用</summary>
+        <div class="answer">
+          <p>DMG 版在「设置 → 关于」点检查更新：发现新版本后自动下载 DMG、按官方 <code>checksums.txt</code> 做 SHA-256 校验，通过后替换应用并重启（安装前会停掉 aiworkd，新实例按原设置拉起）。默认启动时静默检查一次，设置页可关。开发构建（非 .app bundle）没有更新入口，自己 <code>git pull</code> 重建。</p>
+        </div>
+      </details>
+    </section>
+
+    <!-- ==================== 安全 ==================== -->
+    <section class="doc" id="security">
+      <span class="doc-tag">帮助</span>
+      <h2>安全与已知限制</h2>
+      <h3>安全边界</h3>
+      <ul>
+        <li><code>aiworkd</code> 只绑定 <code>127.0.0.1</code>，<b>没有身份认证</b>。别通过端口转发、反向代理把它暴露到局域网或公网——真要远程访问，请在前端加健全的隔离与认证。</li>
+        <li>任务历史包含 Prompt、转写结果与 TTS 输入文本；原始音频不落盘进历史，日志过滤 token 与模型内容。</li>
+        <li>Runner 以你的用户权限运行本地代码，不是沙箱。脚本 Runner 只装信得过的。</li>
+      </ul>
+      <h3>当前限制（截至 2026-09）</h3>
+      <ul>
+        <li>API 稳定性与跨版本兼容尚无承诺，升级可能需要调整调用方。</li>
+        <li>Qwen3-TTS 的 <code>speed</code> 参数校验但不生效；流式合成与声音克隆未支持。</li>
+        <li>sherpa-onnx 仅支持中文。</li>
+        <li>whisper.cpp 引擎需本机编译（CMake），是唯一有编译依赖的引擎。</li>
+        <li>完整第三方 Runner package 的导入、更新与分发还在规划中，当前以本机创建的 Script Runner 为主。</li>
+      </ul>
+      <p>漏洞报告与完整威胁模型见 <a href="https://github.com/GuanXuzeng/MacAI/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>；贡献指引见 <a href="https://github.com/GuanXuzeng/MacAI/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">CONTRIBUTING.md</a>。行为细节与设计理由以仓库 <a href="https://github.com/GuanXuzeng/MacAI/tree/main/docs/decisions" target="_blank" rel="noopener">决策记录</a> 为准。</p>
+    </section>
+
+  </article>
+</div>
+
+<footer class="site">
+  <p>MacAI 使用文档 · 最后更新 2026-09-14 · 行为以 README、代码与决策记录为准</p>
+  <p><a href="../index.html">项目主页</a> · <a href="https://github.com/GuanXuzeng/MacAI" target="_blank" rel="noopener">GitHub</a> · MIT License · © 2026 GuanXuzeng</p>
+</footer>
+
+<script>
+  // copy buttons
+  document.querySelectorAll('[data-copy]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var text = btn.parentElement.querySelector('pre').innerText;
+      var done = function () {
+        btn.textContent = '已复制'; btn.classList.add('done');
+        setTimeout(function () { btn.textContent = '复制'; btn.classList.remove('done'); }, 1600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, done);
+      } else { done(); }
+    });
+  });
+
+  // scrollspy
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.sidebar a, .toc-mobile nav a'));
+    var byId = {};
+    links.forEach(function (a) {
+      var id = a.getAttribute('href').slice(1);
+      (byId[id] = byId[id] || []).push(a);
+    });
+    var sections = Array.prototype.slice.call(document.querySelectorAll('section.doc'));
+    if (!('IntersectionObserver' in window)) return;
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (!e.isIntersecting) return;
+        links.forEach(function (a) { a.classList.remove('on'); });
+        (byId[e.target.id] || []).forEach(function (a) { a.classList.add('on'); });
+      });
+    }, { rootMargin: '-20% 0px -70% 0px' });
+    sections.forEach(function (s) { io.observe(s); });
+  })();
+</script>
+</body>
+</html>

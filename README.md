@@ -19,6 +19,9 @@ MacAI 是面向 Apple Silicon 的开源本地 AI 运行管理系统，你可以�
 ## 快速开始
 ![](docs/imgs/MacAIConsole.png)
 
+> [!TIP]
+> 更系统的网页版使用说明见 **[docs/guide/](docs/guide/index.html)**：安装与 Gatekeeper 处理、控制台导览、引擎与模型管理、Chat / STT / TTS 实操、CLI 与 API 参考、按症状组织的故障排查。
+
 ### 当前支持与推荐模型
 
 MacAI 原生支持大语言模型（LLM）、语音转文字（STT）和文字转语音（TTS）三大能力。在控制台「管理」页中预置了精选**开箱即用推荐模型**（支持一键下载与自动注册），同时也支持直接导入运行本地任意兼容格式的自定义模型：
@@ -672,7 +675,7 @@ apps/
 scripts/           # 模型下载、可选开发构建与真实 Runner smoke
 runners/           # daemon 自动发现的七个 Runner 包（含 llama.cpp 与 whisper.cpp）
 samples/           # 第三方集成示例（含 Hermes TTS/STT 适配器）
-docs/              # 当前工作提案、已落地决策与精确契约
+docs/              # 项目主页（index.html）、网页版用户指南（guide/）、当前工作提案、已落地决策与精确契约
 ```
 
 ## 架构基石与路线图
