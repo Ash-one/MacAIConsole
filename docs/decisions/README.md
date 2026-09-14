@@ -32,6 +32,14 @@
 
 ## 当前决策记录
 
+- [TTS 音色清单覆盖参考音频型 Runner](2026-09-14-tts-voice-list-covers-reference-wav-runners.md)——`implemented`
+  （voices 清单同时枚举 `*.safetensors` 文件名与 `*.wav` 相对路径，default_voice 始终保留；修复克隆型 Runner 在 GUI 无音色可选、default_voice 注册后仍不可见的问题。）
+- [Runner Provider 可用性与模型绑定解耦](2026-09-13-runner-provider-availability-unbound.md)——`implemented`
+  （status 的环境查询改按 manifest runtime.id，不依赖 bindings；修复脚本 Runner 首个模型无法从 GUI 注册的死锁——环境 Ready 的未绑定 provider 报 available=true，"无绑定"作为 reason 呈现。）
+- [Runner 环境 probe 的工作目录对齐 package root](2026-09-13-runner-probe-package-cwd-fix.md)——`implemented`
+  （probe cwd 与 entrypoint `working_directory = "package"` 统一，相对 argv 按 package root 解析；修复单文件 Script Runner 重启后引擎安装 probe 必然找不到 script_host.py 的集成缺口，契约写入 runner-manifest-v1。）
+- [Script Runner 编辑页导入 .py 与复制 AI 生成 Prompt](2026-09-13-script-runner-import-and-ai-prompt.md)——`implemented`
+  （编辑页 fileImporter 导入带覆盖确认与 1 MiB/UTF-8 守卫；AI prompt 由 Swift 脚手架注入 daemon 模板，缺模型网址时先询问；切换能力同受覆盖确认保护。）
 - [Runner 推理被放弃时的实例回收](2026-09-13-runner-infer-abandon-recycle.md)——`implemented`
   （客户端断开使 infer 事件循环在终态帧前 drop，Runner 残留终态帧曾毒化下一次推理为 protocol violation；看门狗把实例标记为不存活并复用 `!alive` 回收路径整体重启进程，`load`/`unload` 同类放弃为已知边界。）
 - [TTS 音色滚轮快速切换与即时试听](2026-09-13-tts-voice-wheel-selection.md)——`implemented`
