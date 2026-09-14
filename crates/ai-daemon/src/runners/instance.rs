@@ -76,7 +76,7 @@ impl RunnerInstance {
 
 /// Runner instance manager：跨模型共享的进程与协议 owner。
 pub struct RunnerInstanceManager {
-    registry: super::RunnerRegistry,
+    registry: std::sync::RwLock<super::RunnerRegistry>,
     environments: EnvironmentManager,
     /// 按环境 ID 单飞安装，避免同 environment 的多个模型并发 sync。
     environment_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
@@ -225,7 +225,7 @@ impl RunnerInstanceManager {
         temp_root: PathBuf,
     ) -> Self {
         Self {
-            registry,
+            registry: std::sync::RwLock::new(registry),
             environments,
             environment_locks: Mutex::new(HashMap::new()),
             instances: Mutex::new(HashMap::new()),
@@ -240,7 +240,21 @@ impl RunnerInstanceManager {
 
     /// discovery 快照（管理面/状态用）。返回克隆，不含任何进行中状态。
     pub fn discovered(&self) -> Vec<super::RunnerDescriptor> {
-        self.registry.entries().iter().cloned().collect()
+        self.registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entries()
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    pub async fn remove_runner(&self, runner_id: &str) {
+        self.instances.lock().await.remove(runner_id);
+        self.registry
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove_entry(runner_id);
     }
 
     /// 返回一个无需等待推理 I/O 的实例快照。若进程锁空闲，会顺便用 try_wait
@@ -281,6 +295,8 @@ impl RunnerInstanceManager {
         requirement: &str,
     ) -> Result<RunnerDescriptor, RunnerInstanceError> {
         self.registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .trusted(runner_id, requirement)
             .cloned()
             .map_err(|_| RunnerInstanceError::NoTrustedRunner {

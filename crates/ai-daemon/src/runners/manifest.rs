@@ -131,6 +131,8 @@ pub struct LocalDetector {
     pub required_absent: Vec<String>,
     #[serde(default)]
     pub json_predicates: Vec<JsonPredicate>,
+    #[serde(default)]
+    pub directory_contains: Vec<String>,
     pub reason: String,
 }
 
@@ -353,6 +355,18 @@ impl RunnerManifest {
                 if !predicate.pointer.starts_with('/') || !is_scalar_json(&predicate.equals) {
                     return Err(ManifestError(
                         "local detector JSON predicate requires a JSON Pointer and scalar value"
+                            .to_string(),
+                    ));
+                }
+            }
+            for pattern in &detector.directory_contains {
+                if pattern.trim().is_empty()
+                    || pattern.contains('/')
+                    || pattern.contains('\\')
+                    || pattern.contains("..")
+                {
+                    return Err(ManifestError(
+                        "local detector directory_contains must be non-empty and must not contain '/', '\\' or '..'"
                             .to_string(),
                     ));
                 }
@@ -726,5 +740,36 @@ inherit_environment = ["HTTPS_PROXY"]
             ]
         );
         let _ = std::fs::remove_dir_all(package);
+    }
+
+    #[test]
+    fn local_detector_validates_directory_contains() {
+        let base_with_detector = format!(
+            "{}\n[[local_detectors]]\nid = \"custom\"\ncapability = \"tts.v1\"\nadapter = \"fake-adapter\"\nreason = \"test\"\ndirectory_contains = [\"Hojo-TTS-Light-40M\"]\n",
+            manifest().replace("probe = [\"{environment.python}\", \"-c\", \"print('probe')\"]", "probe = [\"{environment.python}\", \"-c\", \"print('probe')\"]\ndefault_adapter = \"fake-adapter\"")
+        );
+        let manifest = RunnerManifest::parse(&base_with_detector).unwrap();
+        assert_eq!(
+            manifest.local_detectors[0].directory_contains,
+            vec!["Hojo-TTS-Light-40M"]
+        );
+
+        let empty_pattern = base_with_detector.replace(
+            "directory_contains = [\"Hojo-TTS-Light-40M\"]",
+            "directory_contains = [\"   \"]",
+        );
+        assert!(RunnerManifest::parse(&empty_pattern).is_err());
+
+        let with_slash = base_with_detector.replace(
+            "directory_contains = [\"Hojo-TTS-Light-40M\"]",
+            "directory_contains = [\"dir/sub\"]",
+        );
+        assert!(RunnerManifest::parse(&with_slash).is_err());
+
+        let with_dots = base_with_detector.replace(
+            "directory_contains = [\"Hojo-TTS-Light-40M\"]",
+            "directory_contains = [\"..\"]",
+        );
+        assert!(RunnerManifest::parse(&with_dots).is_err());
     }
 }

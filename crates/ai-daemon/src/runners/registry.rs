@@ -223,6 +223,16 @@ impl RunnerRegistry {
         &self.entries
     }
 
+    pub fn remove_entry(&mut self, runner_id: &str) {
+        self.entries.retain(|entry| {
+            entry
+                .manifest
+                .as_ref()
+                .map(|manifest| manifest.id != runner_id)
+                .unwrap_or(true)
+        });
+    }
+
     /// Select a trusted Runner only when the caller supplies a requirement that identifies one
     /// matching installed version. Discovery order is never a tie-breaker.
     pub fn trusted(

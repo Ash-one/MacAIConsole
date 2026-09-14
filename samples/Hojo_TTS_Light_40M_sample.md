@@ -19,9 +19,9 @@
 
 1. **模型入库**：把 HF 仓库 `HojoAI/Hojo-TTS-Light-40M` 的 7 个文件
    （3 个 `.onnx`、`voice.npz`、`config.json`、`tokenizer.json`、`tokenizer_config.json`）
-   放入一个模型目录——可用 GUI「管理」页的模型下载（按仓库 + 文件清单拉取），
+   放入一个模型目录——可用 GUI「管理」页的模型下载（拉取后目录名通常为 `HojoAI--Hojo-TTS-Light-40M`），
    或手动下载（`hf download HojoAI/Hojo-TTS-Light-40M --local-dir <目录>`）后注册本地目录。
-   脚本内的 `local_detectors` 按文件清单自动识别该目录并路由到此 Runner。
+   脚本内的 `local_detectors` 通过 `directory_contains = ["Hojo-TTS-Light-40M"]` 与文件清单共同约束，无论目录名为 `HojoAI--Hojo-TTS-Light-40M` 还是直接为 `Hojo-TTS-Light-40M` 均可自动识别并路由到此 Runner。
 2. **创建 Runner**：GUI「管理 → 引擎」→「新建 Script Runner」，粘贴
    `samples/hojo_tts_light_40m.macai.py` 全部内容，确认依赖解析后点击
    「信任并添加」，按提示重启 daemon 完成装配。

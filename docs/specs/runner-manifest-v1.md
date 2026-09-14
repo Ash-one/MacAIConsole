@@ -245,6 +245,7 @@ Profile 拥有 artifact 和用户可配默认值；Runner manifest 拥有 adapte
 id = "qwen3-asr-mlx-directory"
 capability = "stt.v1"
 adapter = "qwen3-asr-mlx"
+directory_contains = ["qwen3-asr"]
 required_files = ["config.json"]
 required_globs = [{ pattern = "*.safetensors", min_matches = 1 }]
 reason = "Qwen3-ASR MLX config and safetensors weights"
@@ -258,6 +259,9 @@ equals = "qwen3_asr"
 ID、capability、adapter 和 reason 必填；adapter 必须出现在该 Runner 的 `[[models]]`，
 或等于该 Runner 的 `runtime.default_adapter`（用于没有 bundled Profile 的 ad-hoc
 模型绑定）。
+`directory_contains` 为可选的子串数组，匹配候选目录自身的文件夹名（`root.file_name()`），
+项非空且禁止包含 `/`、`\` 或 `..`；与文件规则为 AND 门禁关系，兼顾通用权重命名隔离与
+`<owner>--<repo>` 下载前缀。
 paths 与 glob 是安全相对路径，glob 只支持 `*`（不跨目录）。JSON predicate 只接受
 以 `/` 开头的 JSON Pointer 与标量等值。未知字段、command、正则与脚本 hook 一律拒绝。
 daemon 对目录执行有界读取并拒绝 symlink；Runner 或模型代码不参与检测。

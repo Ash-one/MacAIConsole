@@ -126,6 +126,8 @@ struct ScriptDetector {
     required_absent: Vec<String>,
     #[serde(default)]
     json_predicates: Vec<ScriptJsonPredicate>,
+    #[serde(default)]
+    directory_contains: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -201,6 +203,8 @@ struct GeneratedDetector<'a> {
     required_globs: &'a [ScriptGlob],
     required_absent: &'a [String],
     json_predicates: &'a [ScriptJsonPredicate],
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    directory_contains: &'a [String],
 }
 
 #[derive(Serialize)]
@@ -536,6 +540,7 @@ fn generated_manifest(metadata: &ScriptMetadata) -> Result<String, String> {
                 required_globs: &detector.required_globs,
                 required_absent: &detector.required_absent,
                 json_predicates: &detector.json_predicates,
+                directory_contains: &detector.directory_contains,
             })
             .collect(),
     };
@@ -560,7 +565,7 @@ const CHAT_TEMPLATE: &str = r#"# MacAI 单文件 Chat Runner 完整示例
 #    如需报告设备或特殊清理，可再实现 describe(model) / unload(model)。
 # 4. 创建一个模型目录，并放入 macai-example-chat.json：
 #      {"prefix": "Echo: "}
-#    管理页会用 local_detectors 识别该目录并路由到此 Runner。
+#    管理页会用 local_detectors 识别该目录并路由到此 Runner（支持配合 directory_contains 关键词过滤）。
 #
 # inspect 只读取这段 metadata，不会导入或执行本文件。用户点击“信任并添加”后，
 # 代码才会在受管 Python worker 中以 aiworkd 当前用户权限运行。
@@ -591,6 +596,8 @@ const CHAT_TEMPLATE: &str = r#"# MacAI 单文件 Chat Runner 完整示例
 # id = "example-echo-directory"
 # reason = "包含 MacAI Chat 示例模型标记"
 # required_files = ["macai-example-chat.json"]
+# # 可选目录名关键词过滤（同时满足关键词与文件清单才匹配；天然兼容 HF 下载的 <owner>--<model_id> 命名）：
+# # directory_contains = ["Echo-Model"]
 # ///
 
 import json
@@ -621,7 +628,7 @@ const STT_TEMPLATE: &str = r#"# MacAI 单文件 STT Runner 完整示例
 #
 # 使用方法：
 # 1. 修改唯一 id，在 GUI 选择推理库预设或粘贴官方 pip install 命令。
-# 2. 创建模型目录，在其中放入 macai-example-stt.json：
+# 2. 创建模型目录（若配置了 directory_contains，目录名需包含对应关键词），在其中放入 macai-example-stt.json：
 #      {"language": "zh"}
 # 3. 示例会读取 daemon 提供的 PCM WAV 并返回音频信息；接入真实模型时只需替换
 #    load()/transcribe() 的函数体。daemon 负责音频格式归一化、worker 与生命周期。
@@ -649,6 +656,8 @@ const STT_TEMPLATE: &str = r#"# MacAI 单文件 STT Runner 完整示例
 # id = "example-stt-directory"
 # reason = "包含 MacAI STT 示例模型标记"
 # required_files = ["macai-example-stt.json"]
+# # 可选目录名关键词过滤（同时满足关键词与文件清单才匹配；天然兼容 HF 下载的 <owner>--<model_id> 命名）：
+# # directory_contains = ["Example-STT"]
 # ///
 
 import json
@@ -679,7 +688,7 @@ const TTS_TEMPLATE: &str = r#"# MacAI 单文件 TTS Runner 完整示例
 #
 # 使用方法：
 # 1. 修改唯一 id，在 GUI 选择推理库预设或粘贴官方 pip install 命令。
-# 2. 创建模型目录，在其中放入 macai-example-tts.json：
+# 2. 创建模型目录（若配置了 directory_contains，目录名需包含对应关键词），在其中放入 macai-example-tts.json：
 #      {"frequency_hz": 440}
 # 3. 示例会生成可播放的 PCM WAV 提示音；接入真实模型时只需替换
 #    load()/synthesize() 的函数体，并继续把 WAV 写到 output_path。
@@ -707,6 +716,8 @@ const TTS_TEMPLATE: &str = r#"# MacAI 单文件 TTS Runner 完整示例
 # id = "example-tts-directory"
 # reason = "包含 MacAI TTS 示例模型标记"
 # required_files = ["macai-example-tts.json"]
+# # 可选目录名关键词过滤（同时满足关键词与文件清单才匹配；天然兼容 HF 下载的 <owner>--<model_id> 命名）：
+# # directory_contains = ["Example-TTS"]
 # ///
 
 import json
@@ -765,6 +776,24 @@ mod tests {
         assert_eq!(
             manifest.runtime.default_adapter.as_deref(),
             Some("echo-chat")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn script_runner_preserves_directory_contains_in_generated_manifest() {
+        let source = CHAT_TEMPLATE.replace(
+            "# # directory_contains = [\"Echo-Model\"]",
+            "# directory_contains = [\"Hojo-TTS-Light-40M\"]",
+        );
+        let root =
+            std::env::temp_dir().join(format!("macai-script-runner-dir-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        materialize_script_runner(&source, &root).unwrap();
+        let manifest = RunnerManifest::load(&root.join("runner.toml")).unwrap();
+        assert_eq!(
+            manifest.local_detectors[0].directory_contains,
+            vec!["Hojo-TTS-Light-40M"]
         );
         let _ = fs::remove_dir_all(root);
     }

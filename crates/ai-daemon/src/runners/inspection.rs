@@ -18,6 +18,8 @@ pub struct DetectorMatch {
     pub detector_id: String,
     pub reason: String,
     pub manifest_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,6 +58,7 @@ pub fn inspect(root: &Path, descriptors: &[RunnerDescriptor]) -> Result<Inspecti
                     detector_id: detector.id.clone(),
                     reason: detector.reason.clone(),
                     manifest_digest: digest.clone(),
+                    routing_token: None,
                 }),
                 Ok(false) => {}
                 Err(error) => diagnostics.push(format!("{}: {error}", detector.id)),
@@ -131,6 +134,19 @@ fn collect(
 }
 
 fn matches_detector(root: &Path, detector: &LocalDetector) -> Result<bool, String> {
+    if !detector.directory_contains.is_empty() {
+        let dir_name = root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if detector
+            .directory_contains
+            .iter()
+            .any(|keyword| !dir_name.contains(keyword.as_str()))
+        {
+            return Ok(false);
+        }
+    }
     if detector
         .required_files
         .iter()
@@ -252,6 +268,7 @@ mod tests {
                 pointer: "/model_type".to_string(),
                 equals: serde_json::json!("qwen3_asr"),
             }],
+            directory_contains: Vec::new(),
             reason: "test".to_string(),
         };
         assert!(matches_detector(&root, &detector).unwrap());
@@ -259,6 +276,51 @@ mod tests {
         std::os::unix::fs::symlink("model.safetensors", root.join("escaped.safetensors")).unwrap();
         #[cfg(unix)]
         assert!(bounded_walk(&root).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn detector_directory_contains_matches_substring_and_rejects_mismatch() {
+        let root =
+            std::env::temp_dir().join(format!("HojoAI--Hojo-TTS-Light-40M-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("model.onnx"), "weights").unwrap();
+
+        let mut detector = LocalDetector {
+            id: "hojo-tts".to_string(),
+            capability: "tts.v1".to_string(),
+            adapter: "hojo".to_string(),
+            required_files: vec!["model.onnx".to_string()],
+            required_directories: Vec::new(),
+            required_globs: Vec::new(),
+            required_absent: Vec::new(),
+            json_predicates: Vec::new(),
+            directory_contains: vec!["Hojo-TTS-Light-40M".to_string()],
+            reason: "test".to_string(),
+        };
+
+        // Matches when keyword is contained in directory name (even with owner-- prefix)
+        assert!(matches_detector(&root, &detector).unwrap());
+
+        // Also matches when multiple keywords are all contained
+        detector.directory_contains = vec!["HojoAI".to_string(), "40M".to_string()];
+        assert!(matches_detector(&root, &detector).unwrap());
+
+        // Rejects when any keyword is missing
+        detector.directory_contains =
+            vec!["Hojo-TTS-Light-40M".to_string(), "CosyVoice".to_string()];
+        assert!(!matches_detector(&root, &detector).unwrap());
+
+        // Rejects when single keyword is not in directory name
+        detector.directory_contains = vec!["ChatTTS".to_string()];
+        assert!(!matches_detector(&root, &detector).unwrap());
+
+        // Still requires required_files (AND logic)
+        detector.directory_contains = vec!["Hojo-TTS-Light-40M".to_string()];
+        detector.required_files = vec!["missing.onnx".to_string()];
+        assert!(!matches_detector(&root, &detector).unwrap());
+
         let _ = fs::remove_dir_all(root);
     }
 }

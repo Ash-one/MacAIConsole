@@ -161,6 +161,24 @@ impl Runtime {
         store.trust_runner_package(runner_id, version, digest, installed_at)
     }
 
+    pub fn untrust_runner_package(&self, runner_id: &str) -> Result<(), String> {
+        let store = self.store.as_ref().ok_or_else(|| {
+            "Runner package trust requires persistent registry storage".to_string()
+        })?;
+        store.untrust_runner_package(runner_id)
+    }
+
+    pub fn remove_runner_provider(&self, runner_id: &str) {
+        self.runner_providers
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(runner_id);
+        self.runner_profiles
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(runner_id);
+    }
+
     fn with_options_and_seed(
         store: Option<RegistryStore>,
         seed: Vec<(ModelSpec, Option<u64>)>,
@@ -454,13 +472,7 @@ impl Runtime {
         }
         let runner_provider = {
             let registry = self.registry.read().await;
-            registry.get(id).and_then(|entry| {
-                entry
-                    .spec
-                    .provider
-                    .starts_with("org.macai.")
-                    .then(|| entry.spec.provider.clone())
-            })
+            registry.get(id).map(|entry| entry.spec.provider.clone())
         };
         if let Some(provider_id) = runner_provider {
             let provider = self
@@ -501,13 +513,12 @@ impl Runtime {
     /// 从注册表中删除一个模型。已加载的模型会先卸载（终止 worker）。
     /// 返回 Err 表示模型不存在或卸载失败。
     pub async fn unregister_model(&self, id: &str) -> Result<(), ProviderError> {
-        let runner_provider = self.registry.read().await.get(id).and_then(|entry| {
-            entry
-                .spec
-                .provider
-                .starts_with("org.macai.")
-                .then(|| entry.spec.provider.clone())
-        });
+        let runner_provider = self
+            .registry
+            .read()
+            .await
+            .get(id)
+            .map(|entry| entry.spec.provider.clone());
         if !self.registry.read().await.contains_key(id) {
             return Err(ProviderError::new(
                 AIError::ModelNotFound,
@@ -1697,6 +1708,90 @@ mod tests {
         assert!(!rename_error.message.contains("not bound"));
 
         runtime.unregister_model("renamed-model").await.unwrap();
+        let removed_error = provider.load(&spec).await.unwrap_err();
+        assert_eq!(removed_error.kind, AIError::ModelNotFound);
+        assert!(removed_error.message.contains("not bound"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn custom_runner_binding_tracks_rename_and_unregister_without_org_macai_prefix() {
+        use ai_daemon::runners::{
+            EnvironmentManager, EnvironmentManagerConfig, RunnerInstanceManager, RunnerProvider,
+            RunnerRegistry,
+        };
+        use std::collections::HashSet;
+
+        let root = std::env::temp_dir().join(format!(
+            "macai-runtime-custom-runner-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let first_path = root.join("first.gguf");
+        let _ = std::fs::create_dir_all(&root);
+        std::fs::write(&first_path, b"model-one").unwrap();
+
+        let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+        let environments = EnvironmentManager::new(EnvironmentManagerConfig {
+            runtime_root: root.join("Runtimes/python"),
+            uv_path: None,
+        });
+        let instances = Arc::new(RunnerInstanceManager::new(
+            registry,
+            environments,
+            root.join("temp"),
+        ));
+        let provider = Arc::new(RunnerProvider::new(
+            "org.hojoai.hojo-tts-light-40m".to_string(),
+            &["tts.v1".to_string()],
+            instances.clone(),
+            root.join("temp"),
+        ));
+        let mut runtime = Runtime::new();
+        runtime.attach_runner(provider.clone(), instances);
+
+        assert!(runtime
+            .bind_adhoc_runner_model(
+                "org.hojoai.hojo-tts-light-40m",
+                "Hojo-TTS-Light-40M",
+                &first_path,
+                "hojo-tts",
+                "directory",
+            )
+            .await
+            .unwrap());
+
+        let mut spec = mock_spec();
+        spec.id = "Hojo-TTS-Light-40M".to_string();
+        spec.provider = "org.hojoai.hojo-tts-light-40m".to_string();
+        spec.requested_provider = Some("org.hojoai.hojo-tts-light-40m".to_string());
+        spec.path = Some(first_path.display().to_string());
+        runtime.register(spec.clone()).await;
+
+        // 重命名模型为 Hojo-TTS-Light（非 org.macai.* 的自定义 Runner）
+        runtime
+            .rename_model("Hojo-TTS-Light-40M", "Hojo-TTS-Light")
+            .await
+            .unwrap();
+
+        spec.id = "Hojo-TTS-Light".to_string();
+        // 验证已正确重命名绑定，不会报 "model 'Hojo-TTS-Light' is not bound to this Runner"
+        let rename_error = provider.load(&spec).await.unwrap_err();
+        assert!(
+            !rename_error.message.contains("not bound"),
+            "unexpected error: {}",
+            rename_error.message
+        );
+
+        // 验证旧 ID 已经解绑
+        let mut old_spec = spec.clone();
+        old_spec.id = "Hojo-TTS-Light-40M".to_string();
+        let old_error = provider.load(&old_spec).await.unwrap_err();
+        assert_eq!(old_error.kind, AIError::ModelNotFound);
+        assert!(old_error.message.contains("not bound"));
+
+        // 验证注销后新 ID 也能正确解绑
+        runtime.unregister_model("Hojo-TTS-Light").await.unwrap();
         let removed_error = provider.load(&spec).await.unwrap_err();
         assert_eq!(removed_error.kind, AIError::ModelNotFound);
         assert!(removed_error.message.contains("not bound"));

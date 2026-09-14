@@ -170,6 +170,18 @@ impl RegistryStore {
             .map_err(|error| format!("cannot persist Runner package trust: {error}"))
     }
 
+    pub fn untrust_runner_package(&self, runner_id: &str) -> Result<(), String> {
+        self.conn
+            .lock()
+            .expect("registry lock")
+            .execute(
+                "DELETE FROM runner_packages WHERE runner_id = ?1",
+                [runner_id],
+            )
+            .map(|_| ())
+            .map_err(|error| format!("cannot delete Runner package trust: {error}"))
+    }
+
     /// 启动时全量加载。状态一律重置为 unloaded：daemon 重启后没有任何
     /// worker 进程存活，持久化的 ready 状态只是陈旧记录。
     pub fn load_all(&self) -> Vec<(ModelSpec, Option<u64>)> {
@@ -645,6 +657,8 @@ mod tests {
                 installed_at: 123,
             }]
         );
+        store.untrust_runner_package("org.example.echo").unwrap();
+        assert!(store.runner_packages().is_empty());
         drop(store);
         cleanup(&path);
     }

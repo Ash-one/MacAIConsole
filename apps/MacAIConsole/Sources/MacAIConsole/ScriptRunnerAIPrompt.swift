@@ -33,8 +33,10 @@ enum ScriptRunnerAIPrompt {
              只有推理确实需要联网才填 true（安装依赖联网与此无关）
            - 可选 [tool.macai.timeouts]：boot_seconds(默认 30) / load_seconds(默认 300) /
              inference_seconds(默认 300) / shutdown_seconds(默认 10)
-           - 可选 [[tool.macai.local_detectors]]（推荐提供）：id、reason、required_files（文件名数组）。
-             目录中存在全部 required_files 列出的文件时，MacAI 才把该模型目录路由到此 Runner
+           - 可选 [[tool.macai.local_detectors]]（推荐提供）：id、reason、required_files（文件名数组），
+             以及可选的 directory_contains（目录名包含的关键词/模型ID数组，如 ["My-Model-ID"]）。
+             目录名包含全部关键词且存在全部 required_files 列出的文件时，MacAI 才把该模型目录路由到此 Runner。
+             （directory_contains 能天然兼容从 Hugging Face 下载时的 <owner>-- 前缀，并区分通用 safetensors 权重）。
         3. requires-python 固定为 ">=3.12,<3.13"；dependencies 用 PEP 508 写法声明代码实际 import 的
            直接推理库。每个依赖都必须有 macOS Apple Silicon (arm64) 预编译 wheel；
            除非必要不要引入 PyTorch。

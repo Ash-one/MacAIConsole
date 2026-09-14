@@ -46,6 +46,9 @@ struct ModelDetailSheet: View {
     @State private var actionError: String?
     @State private var copiedPath = false
 
+    // 歧义匹配时的选中项
+    @State private var selectedMatch: LocalDetectorMatch? = nil
+
     // MARK: - 计算属性与数据映射
 
     private var modelID: String {
@@ -111,6 +114,9 @@ struct ModelDetailSheet: View {
             return entry.ownedBy.split(separator: "/").last.map(String.init) ?? entry.ownedBy
         case .repo(let model):
             if model.isDirectory {
+                if let selectedMatch {
+                    return selectedMatch.runner
+                }
                 if let inspection, inspection.status == "recognized" {
                     return inspection.matches.first?.runner
                 }
@@ -165,8 +171,15 @@ struct ModelDetailSheet: View {
                         }
                         return ("本地目录探测器", "已识别匹配的 Runner 签名", true)
                     case "ambiguous":
+                        if let selectedMatch {
+                            return (
+                                "已选定承载 Runner",
+                                "已选定 \(selectedMatch.runner)（探测器: \(selectedMatch.detectorID)），匹配依据：\(selectedMatch.reason)",
+                                true
+                            )
+                        }
                         let runners = inspection.matches.map(\.runner).joined(separator: ", ")
-                        return ("多重匹配歧义（Ambiguous）", "匹配到多个 Runner（\(runners)），需显式指定 provider 才能加载", false)
+                        return ("多重匹配歧义（Ambiguous）", "匹配到多个候选 Runner（\(runners)），请在下方选择一个 Runner 进行注册加载", false)
                     case "unsupported":
                         let diag = inspection.diagnostics.first ?? "暂未识别到可承载的 Runner：请检查模型是否下载完整，或新建/安装对应 Runner"
                         return ("未受支持的目录（Unsupported）", diag, false)
@@ -363,20 +376,80 @@ struct ModelDetailSheet: View {
                 if case .repo(let model) = target, model.isDirectory, let inspection {
                     if !inspection.matches.isEmpty {
                         HairlineDivider()
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("本地探测签名匹配详情:")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            ForEach(inspection.matches, id: \.detectorID) { match in
-                                HStack(alignment: .top, spacing: 6) {
-                                    Text("•")
-                                        .foregroundStyle(.tertiary)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("\(match.runner) (detector: \(match.detectorID))")
-                                            .font(.caption.weight(.medium).monospaced())
-                                        Text(match.reason)
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
+                        if inspection.matches.count > 1 || inspection.status == "ambiguous" {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("候选承载 Runner（匹配到 \(inspection.matches.count) 个）：")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                    if selectedMatch == nil {
+                                        Text("请选择一个承载引擎")
+                                            .font(.caption)
+                                            .foregroundStyle(Theme.warning)
+                                    }
+                                }
+
+                                ForEach(inspection.matches) { match in
+                                    let isSelected = selectedMatch?.id == match.id
+                                    HStack(alignment: .center, spacing: 10) {
+                                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                            .font(.body)
+                                            .foregroundStyle(isSelected ? Theme.accent : Color.secondary.opacity(0.6))
+
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            HStack(spacing: 6) {
+                                                Text(match.runner)
+                                                    .font(.subheadline.weight(.semibold).monospaced())
+                                                Chip(text: match.capability.uppercased())
+                                                Text("(\(match.detectorID))")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.tertiary)
+                                            }
+                                            Text(match.reason)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+
+                                        Spacer()
+
+                                        Button(isSelected ? "已选定" : "选择") {
+                                            selectedMatch = match
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                        .tint(isSelected ? Theme.accent : nil)
+                                    }
+                                    .padding(10)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .fill(isSelected ? Theme.accent.opacity(0.08) : Color.primary.opacity(0.03))
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .stroke(isSelected ? Theme.accent.opacity(0.4) : Color.primary.opacity(0.08), lineWidth: 1)
+                                    )
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        selectedMatch = match
+                                    }
+                                }
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("本地探测签名匹配详情:")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                ForEach(inspection.matches) { match in
+                                    HStack(alignment: .top, spacing: 6) {
+                                        Text("•")
+                                            .foregroundStyle(.tertiary)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("\(match.runner) (detector: \(match.detectorID))")
+                                                .font(.caption.weight(.medium).monospaced())
+                                            Text(match.reason)
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
                                     }
                                 }
                             }
@@ -770,19 +843,29 @@ struct ModelDetailSheet: View {
         return false
     }
 
-    /// 与列表行 RepoModelRow 的同名守卫一致：目录型模型必须被探测器唯一识别且 Runner 可用才能注册。
+    /// 目录型模型若被唯一识别且可用，或用户在候选列表中已明确选择且该 Runner 可用，即可注册。
     private var canRouteDirectory: Bool {
         guard case .repo(let model) = target else { return true }
-        return !model.isDirectory
-            || (inspection?.status == "recognized" && inspection?.runnerAvailable == true)
+        if !model.isDirectory { return true }
+        if let selectedMatch {
+            let entry = controller.providers.first { $0.descriptor.id == selectedMatch.runner }
+            return entry?.status.available ?? false
+        }
+        return inspection?.status == "recognized" && inspection?.runnerAvailable == true
     }
 
     private var repoRegisterHelp: String {
-        if case .repo(let model) = target, model.isDirectory,
-           let inspection, inspection.status != "recognized" {
-            return inspection.status == "ambiguous"
-                ? "多个 Runner 匹配；请使用 CLI 显式指定 provider"
-                : "暂未识别到可承载的 Runner：请检查模型是否下载完整，或新建/安装对应 Runner"
+        if case .repo(let model) = target, model.isDirectory {
+            if let selectedMatch {
+                let entry = controller.providers.first { $0.descriptor.id == selectedMatch.runner }
+                let avail = entry?.status.available ?? false
+                return avail ? "使用所选 Runner（\(selectedMatch.runner)）注册并加载" : "所选 Runner 引擎环境尚未就绪"
+            }
+            if let inspection, inspection.status != "recognized" {
+                return inspection.status == "ambiguous"
+                    ? "匹配到多个候选 Runner，请在下方选择一个 Runner 进行注册加载"
+                    : "暂未识别到可承载的 Runner：请检查模型是否下载完整，或新建/安装对应 Runner"
+            }
         }
         return "注册到运行时并立即加载"
     }
@@ -798,7 +881,7 @@ struct ModelDetailSheet: View {
             if let path = filePath {
                 do {
                     let isReg = controller.registeredModels.contains { $0.id == modelID }
-                    let token = (!isReg && targetIsRepoDirectory) ? inspection?.routingToken : nil
+                    let token = (!isReg && targetIsRepoDirectory) ? (selectedMatch?.routingToken ?? inspection?.routingToken) : nil
                     let prov = token == nil ? runnerID : nil
                     try await controller.registerAndLoad(
                         path: path,
@@ -871,14 +954,16 @@ struct ModelDetailSheet: View {
         Task {
             defer { isPerformingAction = false }
             do {
+                let token = selectedMatch?.routingToken ?? inspection?.routingToken
+                let prov = selectedMatch?.runner
                 try await controller.registerAndLoad(
                     path: model.path,
                     id: model.modelID,
                     contextLength: ModelRepository.contextLength(for: model.modelID),
                     keepAlive: nil,
                     modelType: model.isDirectory ? nil : (model.modelType == "llm" ? nil : model.modelType),
-                    provider: nil,
-                    routingToken: inspection?.routingToken
+                    provider: token != nil ? nil : prov,
+                    routingToken: token
                 )
                 await onUpdate()
             } catch {

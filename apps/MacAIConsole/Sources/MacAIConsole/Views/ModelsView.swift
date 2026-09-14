@@ -201,7 +201,8 @@ struct ModelsView: View {
                                 AppSettings.ignoreRunner(runner.id)
                                 ignoredRunnerIDs.insert(runner.id)
                             },
-                            onUninstall: { Task { await controller.uninstallRunner(runner.id) } }
+                            onUninstall: { Task { await controller.uninstallRunner(runner.id) } },
+                            onDelete: { Task { await controller.deleteRunner(runner.id) } }
                         ) {
                             Task { await controller.installRunner(runner.id) }
                         }
@@ -771,7 +772,7 @@ struct RepoModelRow: View {
             return "GGUF 检测失败：\(detectionError)"
         }
         if model.isDirectory, let inspection, inspection.status != "recognized" {
-            return inspection.status == "ambiguous" ? "多个 Runner 匹配；请使用 CLI 显式指定 provider" : (inspection.diagnostics.first ?? "暂未识别到可承载的 Runner：请检查模型是否下载完整，或新建/安装对应 Runner")
+            return inspection.status == "ambiguous" ? "多个 Runner 匹配；点击进入详细设置选择承载 Runner" : (inspection.diagnostics.first ?? "暂未识别到可承载的 Runner：请检查模型是否下载完整，或新建/安装对应 Runner")
         }
         if model.isDirectory, inspection?.runnerAvailable == false {
             return "匹配的 Runner 环境尚未就绪；请先在设置 → 引擎中安装"
@@ -806,8 +807,10 @@ struct EngineRow: View {
     let uninstalling: Bool
     let onIgnore: () -> Void
     let onUninstall: () -> Void
+    let onDelete: () -> Void
     let onInstall: () -> Void
     @State private var confirmingUninstall = false
+    @State private var confirmingDelete = false
 
     private var shortName: String {
         let raw = runner.id.components(separatedBy: ".").last ?? runner.id
@@ -896,6 +899,13 @@ struct EngineRow: View {
                 .disabled(busy)
                 Divider()
             }
+            if runner.isPlugin {
+                Button("删除引擎", systemImage: "trash.fill", role: .destructive) {
+                    confirmingDelete = true
+                }
+                .disabled(busy)
+                Divider()
+            }
             Button("忽略引擎", systemImage: "eye.slash", action: onIgnore)
         }
         .confirmationDialog("卸载 \(shortName)？", isPresented: $confirmingUninstall) {
@@ -903,6 +913,12 @@ struct EngineRow: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("将删除受管运行环境和引擎文件；之后可以重新安装。")
+        }
+        .confirmationDialog("删除引擎 \(shortName)？", isPresented: $confirmingDelete) {
+            Button("删除引擎", role: .destructive, action: onDelete)
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将彻底删除该 Runner 脚本与受管运行环境，且无法撤销。")
         }
     }
 }

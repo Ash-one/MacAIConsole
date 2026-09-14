@@ -157,6 +157,10 @@ struct RunnerEntry: Decodable, Identifiable, Hashable {
     var models: [RunnerModel]
     var capabilities: [String]?
 
+    var isPlugin: Bool {
+        root.contains("/Plugins/") || root.hasSuffix("/Plugins")
+    }
+
     enum CodingKeys: String, CodingKey {
         case id, root, state, models, capabilities
         case environmentId = "environment_id"
@@ -191,13 +195,21 @@ struct DownloadProgress: Decodable, Equatable {
     }
 }
 
-struct LocalDetectorMatch: Decodable, Hashable {
+struct LocalDetectorMatch: Decodable, Hashable, Identifiable {
     var runner: String
     var adapter: String
     var capability: String
     var detectorID: String
     var reason: String
-    enum CodingKeys: String, CodingKey { case runner, adapter, capability, reason; case detectorID = "detector_id" }
+    var routingToken: String?
+
+    var id: String { "\(runner):\(detectorID)" }
+
+    enum CodingKeys: String, CodingKey {
+        case runner, adapter, capability, reason
+        case detectorID = "detector_id"
+        case routingToken = "routing_token"
+    }
 }
 
 struct LocalInspection: Decodable, Hashable {
@@ -562,6 +574,13 @@ struct DaemonAPI {
             RunnerInstallResponse.self,
             from: try await delete("api/runners/\(id)/install", timeout: 30)
         )
+    }
+
+    /// DELETE /api/runners/{id} —— 彻底删除用户扩展/脚本 Runner 及其受管运行环境。
+    @discardableResult
+    func deleteRunner(_ id: String) async throws -> Bool {
+        _ = try await delete("api/runners/\(id)", timeout: 60)
+        return true
     }
 
     func runnerScriptTemplate(kind: String) async throws -> String {

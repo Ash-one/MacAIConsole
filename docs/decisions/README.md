@@ -32,6 +32,10 @@
 
 ## 当前决策记录
 
+- [Runner 引擎删除与歧义候选显式选择机制](2026-09-14-runner-deletion-and-ambiguity-selection.md)——`implemented`
+  （支持彻底删除用户扩展/Script Runner 及其受管运行环境，二次弹窗确认与 busy guard 保护；本地目录模型探测歧义时，下发独立 routing_token 并在模型详细设置中提供候选卡片选择，实现 GUI 闭环确定性绑定与注册加载。）
+- [本地模型目录检测器支持目录名关键词匹配](2026-09-14-local-detector-directory-matching.md)——`implemented`
+  （`[[local_detectors]]` 扩展可选 `directory_contains`，作为与文件签名并列的复合 AND 门禁；天然兼容远端下载的 `<owner>--<model_id>` 前缀与通用权重命名，避免误识别与 `ambiguous` 拒绝。）
 - [死代码清理与测试专用 Provider 收敛进 cfg(test)](2026-09-14-dead-code-cleanup-and-test-only-internalization.md)——`implemented`
   （删除 HealthResponse、ai-cli serde/tokio、ai-daemon clap、kokoro 多余 json 导入；providers 测试 fixture 与 Runtime::new 显式 cfg(test)，release 二进制不再包含，bin 死代码告警清零；文档化保留项与复核方法。）
 - [使用者与开发者统一文档体系](2026-09-14-unified-guide-site.md)——`implemented`

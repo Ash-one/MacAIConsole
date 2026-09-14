@@ -1,767 +1,1536 @@
-# MacAI 单文件 Script Runner 示例：Hojo-TTS-Light-40M（ONNX 中英双语 TTS）
-#
-# 模型：https://huggingface.co/HojoAI/Hojo-TTS-Light-40M（Apache-2.0）
-# 推理代码内联自 https://github.com/HojoAI/Hojo-TTS-Light 仓库
-# Hojo-TTS-Light-40M/onnx_model.py（Apache-2.0），按 CPU-only 裁剪。
-#
-# 使用步骤：
-# 1. 模型入库：把 HF 仓库 HojoAI/Hojo-TTS-Light-40M 的 7 个文件
-#    （3 个 .onnx、voice.npz、config.json、tokenizer.json、tokenizer_config.json）
-#    放入一个模型目录（GUI「管理」页下载，或手动下载后注册本地目录）；
-#    下面的 local_detectors 按文件清单自动识别该目录并路由到此 Runner。
-# 2. GUI「管理 → 引擎」→「新建 Script Runner」，粘贴本文件全部内容，
-#    确认依赖解析后点击「信任并添加」，按提示重启 daemon 完成装配。
-# 3. 通过 /v1/audio/speech 或 GUI 试听；model 用模型目录名，voice 从
-#    voice.npz 的 15 个内置音色中任选（如 hojo_zh_f_01、hojo_en_m_02）。
-#
-# 已知限制：
-# - 模型不支持语速调节，tts.v1 请求的 speed 字段被忽略；
-# - 单段合成长度上限约 40 秒音频（2048 speech token / 50Hz），长文本自动
-#   按句切分、逐段合成并拼接；
-# - language 参数被忽略：模型原生支持中英混说；
-# - 采样率固定 24 kHz；随机种子固定，同文本同音色输出可复现。
 # /// script
 # requires-python = ">=3.12,<3.13"
 # dependencies = [
-#   "onnx>=1.16,<2",
-#   "onnxruntime>=1.17,<2",
-#   "numpy>=1.24,<3",
-#   "soundfile>=0.12,<1",
-#   "tokenizers>=0.15,<1",
+#   "numpy>=1.26.4,<3",
+#   "onnx>=1.18,<2",
+#   "onnxruntime>=1.23,<2",
+#   "scipy>=1.14,<2",
+#   "soundfile>=0.13,<1",
+#   "tokenizers>=0.22,<1",
 # ]
 #
 # [tool.macai]
 # schema = "macai.script-runner.v1"
-# id = "org.example.hojo-tts-light-40m"
-# version = "0.1.0"
+# id = "org.hojoai.hojo-tts-light"
+# version = "0.2.0"
 # capability = "tts.v1"
-# adapter = "hojo-tts-light-40m"
+# adapter = "hojo-tts-light-onnx"
 # model_format = "directory"
-# # 模型文件由 daemon 模型管理提供；推理过程不联网。
 # network_during_runtime = false
 #
 # [tool.macai.timeouts]
-# # 长文本分段合成可能超过默认 300s。
+# boot_seconds = 30
+# load_seconds = 300
 # inference_seconds = 600
+# shutdown_seconds = 10
 #
 # [[tool.macai.local_detectors]]
-# id = "hojo-tts-light-40m-onnx"
-# reason = "包含 Hojo-TTS-Light-40M ONNX 模型与 tokenizer 文件"
-# required_files = [
-#   "Hojo-TTS-Light-40M-llm.onnx",
-#   "Hojo-TTS-Light-40M-fine_local.onnx",
-#   "Hojo-TTS-Light-40M-decoder.onnx",
-#   "Hojo-TTS-Light-40M-voice.npz",
-#   "config.json",
-#   "tokenizer.json",
-#   "tokenizer_config.json",
-# ]
+# id = "hojo-tts-light-40m-v2"
+# reason = "Hojo-TTS-Light-40M v2 ONNX 模型目录"
+# directory_contains = ["Hojo-TTS-Light"]
+# required_files = ["Hojo-TTS-Light-40M-llm.onnx", "Hojo-TTS-Light-40M-fine_local.onnx", "Hojo-TTS-Light-40M-decoder.onnx", "Hojo-TTS-Light-40M-voice.npz", "config.json", "tokenizer.json", "tokenizer_config.json"]
+#
+# [[tool.macai.local_detectors]]
+# id = "hojo-tts-light-80m-v2"
+# reason = "Hojo-TTS-Light-80M v2 ONNX 模型目录"
+# directory_contains = ["Hojo-TTS-Light"]
+# required_files = ["Hojo-TTS-Light-llm.onnx", "Hojo-TTS-Light-encoder.onnx", "Hojo-TTS-Light-decoder.onnx", "Hojo-TTS-Light-speaker.onnx", "Hojo-TTS-Light-voice.npz", "config.json", "tokenizer.json", "tokenizer_config.json"]
 # ///
 
 from __future__ import annotations
 
 import json
-import os
+import math
 import re
+from pathlib import Path
 
 import numpy as np
+import onnx
 import onnxruntime as ort
 import soundfile as sf
-
-LM_ONNX_NAME = "Hojo-TTS-Light-40M-llm.onnx"
-FINE_LOCAL_ONNX_NAME = "Hojo-TTS-Light-40M-fine_local.onnx"
-CODEC_ONNX_NAME = "Hojo-TTS-Light-40M-decoder.onnx"
-VOICES_NPZ_NAME = "Hojo-TTS-Light-40M-voice.npz"
-OUTPUT_SAMPLE_RATE = 24000
-
-TARGET_TEXT_START_TOKEN = "[target_text_start]"
-TARGET_TEXT_END_TOKEN = "[target_text_end]"
-SPK_START_TOKEN = "[spk_start]"
-SPK_END_TOKEN = "[spk_end]"
-TARGET_SPEECH_START_TOKEN = "[target_speech_start]"
-TARGET_SPEECH_END_TOKEN = "[target_speech_end]"
-NUM_SPEAKER_INJECTION_SLOTS = 16
-SPEAKER_PLACEHOLDER_TOKENS = tuple(
-    f"[spk_emb_{i}]" for i in range(NUM_SPEAKER_INJECTION_SLOTS)
-)
-_AUDIO_TOKEN_REGEX = re.compile(r"^\[(\d+)\]$")
-DEFAULT_TEMPERATURE = 0.8
+from onnx import AttributeProto, TensorProto, numpy_helper
+from scipy.signal import resample_poly
+from tokenizers import Tokenizer
 
 
-class _PromptTokenizer:
-    """Thin wrapper around ``tokenizers`` (no transformers dependency)."""
+SR = 24_000
+CODEC_SR = 16_000
+AUDIO_RE = re.compile(r"^\[(\d+)\]$")
 
-    def __init__(self, resources_dir: str) -> None:
-        from tokenizers import Tokenizer
+F40 = {
+    "lm": "Hojo-TTS-Light-40M-llm.onnx",
+    "fine": "Hojo-TTS-Light-40M-fine_local.onnx",
+    "decoder": "Hojo-TTS-Light-40M-decoder.onnx",
+    "voice": "Hojo-TTS-Light-40M-voice.npz",
+}
 
-        with open(
-            os.path.join(resources_dir, "tokenizer_config.json"), encoding="utf-8"
-        ) as f:
-            tokenizer_config = json.load(f)
-
-        self._tok = Tokenizer.from_file(os.path.join(resources_dir, "tokenizer.json"))
-        unk = tokenizer_config.get("unk_token", "<unk>")
-        self.unk_token_id = self._tok.token_to_id(unk)
-        if self.unk_token_id is None:
-            self.unk_token_id = 0
-
-    def __len__(self) -> int:
-        return self._tok.get_vocab_size()
-
-    def convert_tokens_to_ids(self, token: str) -> int:
-        token_id = self._tok.token_to_id(token)
-        return self.unk_token_id if token_id is None else token_id
-
-    def decode(self, ids: list[int], *, skip_special_tokens: bool = False) -> str:
-        return self._tok.decode(ids, skip_special_tokens=skip_special_tokens)
-
-    def __call__(
-        self, text: str, *, add_special_tokens: bool = True, return_tensors: str = "np"
-    ) -> dict[str, np.ndarray]:
-        if return_tensors != "np":
-            raise ValueError("Only return_tensors='np' is supported.")
-        encoded = self._tok.encode(text, add_special_tokens=add_special_tokens)
-        return {"input_ids": np.array([encoded.ids], dtype=np.int64)}
+F80 = {
+    "lm": "Hojo-TTS-Light-llm.onnx",
+    "encoder": "Hojo-TTS-Light-encoder.onnx",
+    "decoder": "Hojo-TTS-Light-decoder.onnx",
+    "speaker": "Hojo-TTS-Light-speaker.onnx",
+    "voice": "Hojo-TTS-Light-voice.npz",
+}
 
 
-def _onnx_contains_bfloat16(model) -> bool:
-    """True if any initializer / tensor type / Cast target / Constant uses BFLOAT16."""
-    from onnx import TensorProto, AttributeProto
-
-    bf16 = TensorProto.BFLOAT16
-    for init in model.graph.initializer:
-        if init.data_type == bf16:
-            return True
-    for vi in list(model.graph.input) + list(model.graph.output) + list(
-        model.graph.value_info
-    ):
-        if vi.type.tensor_type.elem_type == bf16:
-            return True
-    for node in model.graph.node:
-        if node.op_type == "Cast":
-            for attr in node.attribute:
-                if attr.name == "to" and attr.i == bf16:
-                    return True
-        for attr in node.attribute:
-            if attr.type == AttributeProto.TENSOR and attr.t.data_type == bf16:
-                return True
-            if attr.type == AttributeProto.TENSORS:
-                if any(t.data_type == bf16 for t in attr.tensors):
-                    return True
-    return False
-
-
-def _tensor_proto_bf16_to_fp32(tensor) -> bool:
-    """In-place promote a TensorProto from BFLOAT16 to FLOAT. Returns True if changed."""
-    from onnx import TensorProto, numpy_helper
-
-    if tensor.data_type != TensorProto.BFLOAT16:
-        return False
-    arr = numpy_helper.to_array(tensor)
-    name = tensor.name
-    tensor.CopyFrom(
-        numpy_helper.from_array(np.asarray(arr, dtype=np.float32), name=name)
-    )
-    return True
-
-
-def _promote_bf16_onnx_to_fp32(model):
-    """Rewrite BF16 weights/types to FP32 so ORT CPU can run the graph.
-
-    BF16→FP32 is a lossless bit-width expand; runtime memory matches FP32.
-    """
-    from onnx import TensorProto, AttributeProto
-
+def _promote_bf16(model):
     bf16 = TensorProto.BFLOAT16
     fp32 = TensorProto.FLOAT
 
-    for init in model.graph.initializer:
-        _tensor_proto_bf16_to_fp32(init)
+    def convert_tensor(tensor):
+        if tensor.data_type == bf16:
+            tensor.CopyFrom(
+                numpy_helper.from_array(
+                    np.asarray(
+                        numpy_helper.to_array(tensor),
+                        dtype=np.float32,
+                    ),
+                    name=tensor.name,
+                )
+            )
 
-    def _fix_type(type_proto) -> None:
-        if type_proto.HasField("tensor_type") and type_proto.tensor_type.elem_type == bf16:
-            type_proto.tensor_type.elem_type = fp32
+    def convert_graph(graph):
+        for tensor in graph.initializer:
+            convert_tensor(tensor)
 
-    for vi in list(model.graph.input) + list(model.graph.output) + list(
-        model.graph.value_info
-    ):
-        _fix_type(vi.type)
+        for value_info in [
+            *graph.input,
+            *graph.output,
+            *graph.value_info,
+        ]:
+            if (
+                value_info.type.HasField("tensor_type")
+                and value_info.type.tensor_type.elem_type == bf16
+            ):
+                value_info.type.tensor_type.elem_type = fp32
 
-    for node in model.graph.node:
-        if node.op_type == "Cast":
+        for node in graph.node:
             for attr in node.attribute:
-                if attr.name == "to" and attr.i == bf16:
+                if (
+                    node.op_type == "Cast"
+                    and attr.name == "to"
+                    and attr.i == bf16
+                ):
                     attr.i = fp32
-        for attr in node.attribute:
-            if attr.type == AttributeProto.TENSOR:
-                _tensor_proto_bf16_to_fp32(attr.t)
-            elif attr.type == AttributeProto.TENSORS:
-                for t in attr.tensors:
-                    _tensor_proto_bf16_to_fp32(t)
 
-    # Drop stale dtype annotations so ORT re-infers from promoted tensors.
-    del model.graph.value_info[:]
+                if attr.type == AttributeProto.TENSOR:
+                    convert_tensor(attr.t)
+                elif attr.type == AttributeProto.TENSORS:
+                    for tensor in attr.tensors:
+                        convert_tensor(tensor)
+                elif attr.type == AttributeProto.GRAPH:
+                    convert_graph(attr.g)
+                elif attr.type == AttributeProto.GRAPHS:
+                    for subgraph in attr.graphs:
+                        convert_graph(subgraph)
+
+        del graph.value_info[:]
+
+    convert_graph(model.graph)
     return model
 
 
-def _ort_model_source(model_path: str):
-    """Return a path or in-memory proto for ORT.
+def _has_bf16(model):
+    bf16 = TensorProto.BFLOAT16
 
-    Disk may store BF16 LM / FineLocal weights; ORT CPU lacks many BF16 kernels,
-    so promote those graphs to FP32 at load time.
-    """
-    try:
-        import onnx
-    except ImportError:
-        return model_path
+    def graph_has_bf16(graph):
+        if any(t.data_type == bf16 for t in graph.initializer):
+            return True
 
-    model = onnx.load(model_path, load_external_data=True)
-    if not _onnx_contains_bfloat16(model):
-        return model_path
-    _promote_bf16_onnx_to_fp32(model)
-    return model.SerializeToString()
+        for value_info in [
+            *graph.input,
+            *graph.output,
+            *graph.value_info,
+        ]:
+            if (
+                value_info.type.HasField("tensor_type")
+                and value_info.type.tensor_type.elem_type == bf16
+            ):
+                return True
+
+        for node in graph.node:
+            for attr in node.attribute:
+                if (
+                    node.op_type == "Cast"
+                    and attr.name == "to"
+                    and attr.i == bf16
+                ):
+                    return True
+
+                if (
+                    attr.type == AttributeProto.TENSOR
+                    and attr.t.data_type == bf16
+                ):
+                    return True
+
+                if (
+                    attr.type == AttributeProto.TENSORS
+                    and any(t.data_type == bf16 for t in attr.tensors)
+                ):
+                    return True
+
+                if (
+                    attr.type == AttributeProto.GRAPH
+                    and graph_has_bf16(attr.g)
+                ):
+                    return True
+
+                if (
+                    attr.type == AttributeProto.GRAPHS
+                    and any(graph_has_bf16(g) for g in attr.graphs)
+                ):
+                    return True
+
+        return False
+
+    return graph_has_bf16(model.graph)
 
 
-def _build_ort_session(model_path: str, num_threads: int = 0) -> ort.InferenceSession:
-    so = ort.SessionOptions()
-    so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    if num_threads > 0:
-        so.intra_op_num_threads = num_threads
-        so.inter_op_num_threads = num_threads
+def _session(path: Path):
+    model = onnx.load(str(path), load_external_data=True)
+
+    if _has_bf16(model):
+        source = _promote_bf16(model).SerializeToString()
+    else:
+        source = str(path)
+
+    options = ort.SessionOptions()
+    options.graph_optimization_level = (
+        ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    )
+
     return ort.InferenceSession(
-        _ort_model_source(model_path), sess_options=so, providers=["CPUExecutionProvider"]
+        source,
+        sess_options=options,
+        providers=["CPUExecutionProvider"],
     )
 
 
-def build_speaker_prompt(text: str) -> str:
-    placeholders = "".join(SPEAKER_PLACEHOLDER_TOKENS)
-    return (
-        f"{TARGET_TEXT_START_TOKEN}{text}{TARGET_TEXT_END_TOKEN}"
-        f"{SPK_START_TOKEN}{placeholders}{SPK_END_TOKEN}"
-        f"{TARGET_SPEECH_START_TOKEN}"
+def _resample(wav, src_sr, dst_sr):
+    wav = np.asarray(wav, dtype=np.float32)
+
+    if wav.ndim == 2:
+        wav = wav.mean(axis=1)
+
+    if wav.ndim != 1:
+        raise ValueError("audio must be mono or multichannel PCM")
+
+    if src_sr == dst_sr:
+        return wav
+
+    divisor = math.gcd(int(src_sr), int(dst_sr))
+
+    return resample_poly(
+        wav,
+        dst_sr // divisor,
+        src_sr // divisor,
+    ).astype(np.float32)
+
+
+def _read_audio(path: Path, sample_rate: int):
+    wav, source_rate = sf.read(
+        str(path),
+        dtype="float32",
+        always_2d=False,
+    )
+
+    return _resample(
+        wav,
+        int(source_rate),
+        sample_rate,
     )
 
 
-class VoiceBank:
-    """Voice bank + shared token embedding from Hojo-TTS-Light-40M-voice.npz.
+def _mel_filter(
+    sample_rate=SR,
+    n_fft=1024,
+    n_mels=128,
+    fmin=0.0,
+    fmax=12_000.0,
+):
+    def hz_to_mel(freq):
+        freq = np.asarray(freq, dtype=np.float64)
+        mel = freq / (200.0 / 3.0)
 
-    Required keys: ``voice_ids``, ``speaker_embeds``, ``speaker_vecs``,
-    ``token_embedding`` (shared LM / FineLocal table, shape ``[V, H]``).
-    """
+        mask = freq >= 1000.0
+        mel[mask] = (
+            15.0
+            + np.log(freq[mask] / 1000.0)
+            / (np.log(6.4) / 27.0)
+        )
 
-    def __init__(self, voices_npz: str) -> None:
-        voices_npz = os.path.abspath(str(voices_npz))
-        if not os.path.isfile(voices_npz):
-            raise FileNotFoundError(f"Missing voices file: {voices_npz}")
-        data = np.load(voices_npz, allow_pickle=True)
-        if "voice_ids" not in data:
-            raise ValueError(
-                f"{voices_npz} must contain voice_ids; regenerate with export_speaker_onnx."
+        return mel
+
+    def mel_to_hz(mel):
+        mel = np.asarray(mel, dtype=np.float64)
+        freq = (200.0 / 3.0) * mel
+
+        mask = mel >= 15.0
+        freq[mask] = (
+            1000.0
+            * np.exp(
+                (np.log(6.4) / 27.0)
+                * (mel[mask] - 15.0)
             )
-        if "token_embedding" not in data:
-            raise ValueError(
-                f"{voices_npz} must contain token_embedding "
-                f"(shared LM/FineLocal table); re-export or pack token_embedding.npy."
+        )
+
+        return freq
+
+    fft_hz = np.linspace(
+        0.0,
+        sample_rate / 2.0,
+        n_fft // 2 + 1,
+    )
+
+    mel_hz = mel_to_hz(
+        np.linspace(
+            hz_to_mel([fmin])[0],
+            hz_to_mel([fmax])[0],
+            n_mels + 2,
+        )
+    )
+
+    fdiff = np.diff(mel_hz)
+    ramps = mel_hz[:, None] - fft_hz[None, :]
+
+    weights = np.zeros(
+        (n_mels, len(fft_hz)),
+        dtype=np.float64,
+    )
+
+    for index in range(n_mels):
+        weights[index] = np.maximum(
+            0.0,
+            np.minimum(
+                -ramps[index] / fdiff[index],
+                ramps[index + 2] / fdiff[index + 1],
+            ),
+        )
+
+    weights *= (
+        2.0 / (mel_hz[2:] - mel_hz[:-2])
+    )[:, None]
+
+    return weights.astype(np.float32)
+
+
+_MEL = _mel_filter()
+
+
+def _speaker_mel(wav):
+    n_fft = 1024
+    hop = 256
+    win = 1024
+    target = 6 * SR
+
+    wav = np.asarray(wav, dtype=np.float32)[:target]
+
+    if len(wav) < target:
+        wav = np.pad(
+            wav,
+            (0, target - len(wav)),
+        )
+
+    pad = (n_fft - hop) // 2
+
+    wav = np.pad(
+        wav,
+        (pad, pad),
+        mode="reflect",
+    )
+
+    frames = np.lib.stride_tricks.sliding_window_view(
+        wav,
+        win,
+    )[::hop]
+
+    window = np.hanning(win + 1)[:-1].astype(
+        np.float32
+    )
+
+    spectrum = np.fft.rfft(
+        frames * window[None, :],
+        n=n_fft,
+        axis=1,
+    )
+
+    magnitude = np.sqrt(
+        spectrum.real * spectrum.real
+        + spectrum.imag * spectrum.imag
+        + 1e-9
+    ).astype(np.float32)
+
+    mel = np.log(
+        np.maximum(
+            _MEL @ magnitude.T,
+            1e-5,
+        )
+    )
+
+    return mel.T[None].astype(np.float32)
+
+
+def _istft(magnitude, phase, n_fft=1920, hop=480):
+    magnitude = np.asarray(
+        magnitude,
+        dtype=np.float32,
+    )
+
+    phase = np.asarray(
+        phase,
+        dtype=np.float32,
+    )
+
+    if magnitude.ndim == 3 and magnitude.shape[0] == 1:
+        magnitude = magnitude[0]
+
+    if phase.ndim == 3 and phase.shape[0] == 1:
+        phase = phase[0]
+
+    if magnitude.ndim != 2 or phase.ndim != 2:
+        raise RuntimeError(
+            "decoder returned invalid spectrum dimensions"
+        )
+
+    if magnitude.shape != phase.shape:
+        raise RuntimeError(
+            "decoder magnitude and phase shapes differ"
+        )
+
+    spectrum = (
+        np.maximum(magnitude, 1e-12).clip(max=1e2)
+        * np.exp(1j * phase)
+    )
+
+    window = np.hanning(n_fft + 1)[:-1].astype(
+        np.float32
+    )
+
+    frames = (
+        np.fft.irfft(
+            spectrum,
+            n=n_fft,
+            axis=0,
+        )
+        * window[:, None]
+    )
+
+    length = (
+        (frames.shape[1] - 1) * hop
+        + n_fft
+    )
+
+    wav = np.zeros(length, dtype=np.float32)
+    envelope = np.zeros(length, dtype=np.float32)
+    window_squared = window * window
+
+    for index in range(frames.shape[1]):
+        start = index * hop
+
+        wav[start : start + n_fft] += frames[:, index]
+        envelope[start : start + n_fft] += window_squared
+
+    pad = (n_fft - hop) // 2
+
+    wav = (
+        wav[pad:-pad]
+        / np.maximum(
+            envelope[pad:-pad],
+            1e-11,
+        )
+    )
+
+    return wav.astype(np.float32)
+
+
+def _sample(
+    logits,
+    generated,
+    temperature,
+    top_p,
+    repetition_penalty,
+    rng,
+):
+    row = np.asarray(
+        logits,
+        dtype=np.float32,
+    ).copy()
+
+    for token in set(generated):
+        value = row[token]
+
+        row[token] = (
+            value / repetition_penalty
+            if value > 0
+            else value * repetition_penalty
+        )
+
+    if temperature <= 0:
+        return int(row.argmax())
+
+    row = row / temperature
+    row -= row.max()
+
+    probabilities = np.exp(row)
+    probabilities /= probabilities.sum()
+
+    if top_p < 1.0:
+        order = np.argsort(probabilities)[::-1]
+        cumulative = np.cumsum(
+            probabilities[order]
+        )
+
+        keep_count = (
+            np.searchsorted(
+                cumulative,
+                top_p,
+                side="right",
             )
-        self.voice_ids = [str(v) for v in data["voice_ids"]]
-        self.speaker_embeds = np.asarray(data["speaker_embeds"], dtype=np.float32)
-        if "speaker_vecs" not in data:
-            raise ValueError(
-                f"{voices_npz} must contain speaker_vecs for FineLocal."
+            + 1
+        )
+
+        keep = order[:keep_count]
+
+        mask = np.zeros_like(
+            probabilities,
+            dtype=bool,
+        )
+        mask[keep] = True
+
+        probabilities = np.where(
+            mask,
+            probabilities,
+            0.0,
+        )
+
+        probabilities /= probabilities.sum()
+
+    return int(
+        rng.choice(
+            len(probabilities),
+            p=probabilities,
+        )
+    )
+
+
+def _audio_table(tokenizer: Tokenizer):
+    table = np.full(
+        tokenizer.get_vocab_size(),
+        -1,
+        dtype=np.int64,
+    )
+
+    for token_id in range(len(table)):
+        decoded = tokenizer.decode(
+            [token_id],
+            skip_special_tokens=False,
+        ).strip()
+
+        match = AUDIO_RE.match(decoded)
+
+        if match:
+            table[token_id] = int(
+                match.group(1)
             )
-        self.speaker_vecs = np.asarray(data["speaker_vecs"], dtype=np.float32)
-        self.token_embedding = np.asarray(data["token_embedding"], dtype=np.float32)
-        self._id_to_idx = {voice_id: idx for idx, voice_id in enumerate(self.voice_ids)}
 
-    def list_voices(self) -> list[str]:
-        return sorted(self.voice_ids)
-
-    def get_speaker_embeds(self, voice: str) -> np.ndarray:
-        voice_id = str(voice)
-        if voice_id not in self._id_to_idx:
-            raise KeyError(f"Unknown voice {voice_id!r}")
-        idx = self._id_to_idx[voice_id]
-        return self.speaker_embeds[idx : idx + 1].astype(np.float32, copy=False)
-
-    def get_speaker_vec(self, voice: str) -> np.ndarray:
-        voice_id = str(voice)
-        if voice_id not in self._id_to_idx:
-            raise KeyError(f"Unknown voice {voice_id!r}")
-        idx = self._id_to_idx[voice_id]
-        return self.speaker_vecs[idx : idx + 1].astype(np.float32, copy=False)
-
-
-def _build_audio_token_id_to_code_table(tokenizer) -> np.ndarray:
-    table = np.full((len(tokenizer),), -1, dtype=np.int64)
-    for tid in range(len(tokenizer)):
-        token_str = tokenizer.decode([tid], skip_special_tokens=False).strip()
-        match = _AUDIO_TOKEN_REGEX.match(token_str)
-        if match is not None:
-            table[tid] = int(match.group(1))
     return table
 
 
-def extract_audio_token_positions(
-    generated_ids: np.ndarray,
-    prompt_len: int,
-    speech_end_id: int,
-    id_to_code: np.ndarray,
-) -> np.ndarray:
-    ends = np.where(generated_ids == speech_end_id)[0]
-    seq = generated_ids[: int(ends[0])] if ends.size else generated_ids
-    valid = id_to_code[seq] >= 0
-    rel = np.flatnonzero(valid)
-    return (prompt_len + rel).astype(np.int64)
+def _audio_positions(
+    generated,
+    prompt_length,
+    speech_end,
+    table,
+):
+    generated = np.asarray(
+        generated,
+        dtype=np.int64,
+    )
+
+    endings = np.flatnonzero(
+        generated == speech_end
+    )
+
+    sequence = (
+        generated[: int(endings[0])]
+        if endings.size
+        else generated
+    )
+
+    if sequence.size == 0:
+        return np.empty(
+            (0,),
+            dtype=np.int64,
+        )
+
+    return (
+        prompt_length
+        + np.flatnonzero(
+            table[sequence] >= 0
+        )
+    )
 
 
-def sample_next_token(
-    logits: np.ndarray,
-    *,
-    temperature: float,
-    top_p: float,
-    generated_ids: list[int],
-    repetition_penalty: float,
-) -> int:
-    row = logits.astype(np.float32).copy()
-    if repetition_penalty != 1.0 and generated_ids:
-        for token_id in set(generated_ids):
-            value = row[token_id]
-            row[token_id] = value / repetition_penalty if value > 0 else value * repetition_penalty
-    if temperature <= 0.0:
-        return int(row.argmax())
-    row = row / temperature
-    row = row - row.max()
-    probs = np.exp(row)
-    probs = probs / probs.sum()
-    if top_p < 1.0:
-        order = np.argsort(probs)[::-1]
-        cumulative = np.cumsum(probs[order])
-        cutoff = cumulative > top_p
-        if cutoff.any():
-            cutoff_idx = int(np.argmax(cutoff))
-            keep = order[: cutoff_idx + 1]
-            mask = np.zeros_like(probs, dtype=bool)
-            mask[keep] = True
-            probs = np.where(mask, probs, 0.0)
-            probs = probs / probs.sum()
-    return int(np.random.choice(len(probs), p=probs))
+class HojoModel:
+    def __init__(
+        self,
+        root: Path,
+        variant: str,
+        profile,
+    ):
+        self.root = root.resolve()
+        self.variant = variant
+        self.profile = dict(profile or {})
 
+        files = (
+            F40
+            if variant == "40M"
+            else F80
+        )
 
-def _hann_window(win_length: int) -> np.ndarray:
-    return np.hanning(win_length + 1)[:-1].astype(np.float32)
+        self.tok = Tokenizer.from_file(
+            str(self.root / "tokenizer.json")
+        )
 
-
-def _overlap_add(frames: np.ndarray, hop_length: int) -> np.ndarray:
-    win_length, num_frames = frames.shape
-    output_size = (num_frames - 1) * hop_length + win_length
-    out = np.zeros(output_size, dtype=frames.dtype)
-    for i in range(num_frames):
-        start = i * hop_length
-        out[start : start + win_length] += frames[:, i]
-    return out
-
-
-class ISTFT:
-    """Minimal ISTFT for codec mag/phase -> waveform (NumPy only)."""
-
-    def __init__(self, n_fft: int, hop_length: int, win_length: int, padding: str = "same"):
-        if padding not in ("center", "same"):
-            raise ValueError("Padding must be 'center' or 'same'.")
-        self.padding = padding
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-        self.win_length = win_length
-        self.window = _hann_window(win_length)
-
-    def __call__(self, spec: np.ndarray) -> np.ndarray:
-        return self.forward(spec)
-
-    def forward(self, spec: np.ndarray) -> np.ndarray:
-        if self.padding != "same":
-            raise NotImplementedError("Only padding='same' is supported.")
-
-        spec = np.asarray(spec)
-        if spec.ndim != 3:
-            raise ValueError("Expected a 3D spectrogram array (batch, freq, time).")
-
-        batch, _freq_bins, t = spec.shape
-        pad = (self.win_length - self.hop_length) // 2
-        outputs: list[np.ndarray] = []
-
-        for b in range(batch):
-            ifft = np.fft.irfft(spec[b], n=self.n_fft, axis=0, norm="backward")
-            ifft = ifft * self.window[:, None]
-
-            y = _overlap_add(ifft, self.hop_length)[pad:-pad]
-
-            window_sq_frames = np.broadcast_to(self.window[:, None] ** 2, (self.win_length, t))
-            window_envelope = _overlap_add(window_sq_frames, self.hop_length)[pad:-pad]
-
-            if not np.all(window_envelope > 1e-11):
-                raise AssertionError("window envelope has near-zero values")
-            outputs.append((y / window_envelope).astype(np.float32, copy=False))
-
-        return np.stack(outputs, axis=0)
-
-
-def wav_from_mag_phase(mag: np.ndarray, phase: np.ndarray, istft_module) -> np.ndarray:
-    mag = np.asarray(mag, dtype=np.float32)
-    phase = np.asarray(phase, dtype=np.float32)
-    log_mag = np.log(np.maximum(mag, 1e-12))
-    x_pred = np.concatenate([log_mag, phase], axis=0)
-    mag_exp, phase_use = np.split(x_pred, 2, axis=0)
-    mag_exp = np.exp(mag_exp).clip(max=1e2)
-    spec = mag_exp * np.cos(phase_use) + 1j * mag_exp * np.sin(phase_use)
-    wav = istft_module(spec[np.newaxis, ...])[0]
-    return wav.astype(np.float32, copy=False)
-
-
-def empty_lm_past(
-    num_layers: int, *, batch: int = 1, dtype=np.float32
-) -> dict[str, np.ndarray]:
-    past: dict[str, np.ndarray] = {}
-    for layer in range(num_layers):
-        past[f"past_key_values.{layer}.key"] = np.zeros((batch, 1, 0, 128), dtype=dtype)
-        past[f"past_key_values.{layer}.value"] = np.zeros((batch, 1, 0, 128), dtype=dtype)
-    return past
-
-
-def inject_speaker_embeds(
-    input_ids: np.ndarray,
-    token_embeds: np.ndarray,
-    speaker_embeds: np.ndarray,
-    *,
-    spk_start_id: int,
-    num_slots: int = NUM_SPEAKER_INJECTION_SLOTS,
-) -> np.ndarray:
-    out = np.array(token_embeds, copy=True)
-    batch, seq_len, _ = out.shape
-    for b in range(batch):
-        matches = np.where(input_ids[b] == spk_start_id)[0]
-        if matches.size == 0:
-            continue
-        start = int(matches[0]) + 1
-        for slot in range(num_slots):
-            pos = start + slot
-            if pos >= seq_len:
-                break
-            out[b, pos, :] = speaker_embeds[b, slot, :]
-    return out
-
-
-def _quantize_bits(binary_logits: np.ndarray) -> np.ndarray:
-    """Match training hard quantization: logits > 0 → +1 else -1."""
-    return np.where(binary_logits > 0.0, 1.0, -1.0).astype(np.float32)
-
-
-class HojoTTSLightOnnx:
-    """Low-level ONNX TTS runtime (unified LM + FineLocal + decoder + voices).
-
-    Shared ``token_embedding`` inside ``Hojo-TTS-Light-40M-voice.npz`` is used for:
-      - LM ``inputs_embeds`` (lookup + speaker inject in Python)
-      - FineLocal ``coarse_embeddings``
-    """
-
-    def __init__(self, models_dir: str, *, num_threads: int = 0) -> None:
-        self.models_dir = os.path.abspath(str(models_dir))
-        voices_path = os.path.join(self.models_dir, VOICES_NPZ_NAME)
-
-        lm_path = os.path.join(self.models_dir, LM_ONNX_NAME)
-        if not os.path.isfile(lm_path):
-            raise FileNotFoundError(f"Missing [{lm_path}].")
-        self.lm = _build_ort_session(lm_path, num_threads)
-        lm_inputs = {inp.name for inp in self.lm.get_inputs()}
-        if "inputs_embeds" not in lm_inputs:
-            raise ValueError(f"{LM_ONNX_NAME} must expose inputs_embeds.")
-        self._lm_output_names = [out.name for out in self.lm.get_outputs()]
-        if "logits" not in self._lm_output_names:
-            raise ValueError(f"{LM_ONNX_NAME} missing logits output.")
-        if "last_hidden_state" not in self._lm_output_names:
-            raise ValueError(f"{LM_ONNX_NAME} missing last_hidden_state output.")
-        self._lm_logits_index = self._lm_output_names.index("logits")
-        self._lm_hidden_index = self._lm_output_names.index("last_hidden_state")
-        # Outputs are logits, last_hidden_state, then present.* KV tensors.
-        self._lm_past_start = max(self._lm_logits_index, self._lm_hidden_index) + 1
-
-        fine_local_path = os.path.join(self.models_dir, FINE_LOCAL_ONNX_NAME)
-        if not os.path.isfile(fine_local_path):
-            raise FileNotFoundError(f"Missing [{fine_local_path}].")
-        self.fine_local = _build_ort_session(fine_local_path, num_threads)
-        fine_inputs = {inp.name for inp in self.fine_local.get_inputs()}
-        if "coarse_embeddings" not in fine_inputs:
-            raise ValueError(
-                f"{FINE_LOCAL_ONNX_NAME} must expose coarse_embeddings "
-                f"(shared token_embedding lookup from {VOICES_NPZ_NAME})."
+        with open(
+            self.root / "config.json",
+            encoding="utf-8",
+        ) as file:
+            self.layers = int(
+                json.load(file)[
+                    "num_hidden_layers"
+                ]
             )
 
-        self.voices = VoiceBank(voices_path)
-        self.token_embedding = self.voices.token_embedding
+        self.lm = _session(
+            self.root / files["lm"]
+        )
 
-        codec_path = os.path.join(self.models_dir, CODEC_ONNX_NAME)
-        if not os.path.isfile(codec_path):
-            raise FileNotFoundError(f"Missing [{codec_path}].")
-        self.codec_decode = _build_ort_session(codec_path, num_threads)
+        output_names = [
+            item.name
+            for item in self.lm.get_outputs()
+        ]
 
-        self.tokenizer = _PromptTokenizer(self.models_dir)
-        self.id_to_code = _build_audio_token_id_to_code_table(self.tokenizer)
+        self.logits_i = output_names.index(
+            "logits"
+        )
 
-        hop_length = 480
-        codec_meta_path = os.path.join(self.models_dir, "codec_meta.json")
-        if os.path.isfile(codec_meta_path):
-            with open(codec_meta_path, encoding="utf-8") as f:
-                codec_meta = json.load(f)
-            hop_length = int(codec_meta.get("hop_length", hop_length))
-            n_fft = int(codec_meta.get("n_fft", hop_length * 4))
+        self.hidden_i = output_names.index(
+            "last_hidden_state"
+        )
+
+        self.past_i = (
+            max(
+                self.logits_i,
+                self.hidden_i,
+            )
+            + 1
+        )
+
+        self.decoder = _session(
+            self.root / files["decoder"]
+        )
+
+        self.speech_end = self._token_id(
+            "[target_speech_end]"
+        )
+
+        self.audio_table = _audio_table(
+            self.tok
+        )
+
+        with np.load(
+            self.root / files["voice"],
+            allow_pickle=True,
+        ) as data:
+            self.embedding = np.asarray(
+                data["token_embedding"],
+                dtype=np.float32,
+            )
+
+            if variant == "40M":
+                self.voice_ids = [
+                    str(item)
+                    for item in data["voice_ids"]
+                ]
+
+                self.speaker_embeds = np.asarray(
+                    data["speaker_embeds"],
+                    dtype=np.float32,
+                )
+
+                self.speaker_vecs = np.asarray(
+                    data["speaker_vecs"],
+                    dtype=np.float32,
+                )
+
+        if variant == "40M":
+            self.fine = _session(
+                self.root / files["fine"]
+            )
+
+            self.spk_start = self._token_id(
+                "[spk_start]"
+            )
+
         else:
-            n_fft = hop_length * 4
-        self.istft = ISTFT(
-            n_fft=n_fft,
-            hop_length=hop_length,
-            win_length=n_fft,
-            padding="same",
+            self.encoder = _session(
+                self.root / files["encoder"]
+            )
+
+            self.speaker = _session(
+                self.root / files["speaker"]
+            )
+
+            encoder_input = (
+                self.encoder.get_inputs()[0]
+            )
+
+            self.enc_name = encoder_input.name
+
+            self.enc_dtype = (
+                np.float16
+                if "float16"
+                in encoder_input.type
+                else np.float32
+            )
+
+    def _token_id(self, token):
+        value = self.tok.token_to_id(token)
+
+        if value is None:
+            raise ValueError(
+                f"tokenizer missing {token}"
+            )
+
+        return int(value)
+
+    def _prompt40(
+        self,
+        text,
+        voice_index,
+    ):
+        placeholders = "".join(
+            f"[spk_emb_{index}]"
+            for index in range(16)
         )
 
-        with open(os.path.join(self.models_dir, "config.json"), encoding="utf-8") as f:
-            self.config = json.load(f)
-        self.num_layers = int(self.config["num_hidden_layers"])
+        prompt = (
+            f"[target_text_start]"
+            f"{text}"
+            f"[target_text_end]"
+            f"[spk_start]"
+            f"{placeholders}"
+            f"[spk_end]"
+            f"[target_speech_start]"
+        )
 
-        self.speech_end_id = self.tokenizer.convert_tokens_to_ids(TARGET_SPEECH_END_TOKEN)
-        if self.speech_end_id == self.tokenizer.unk_token_id:
-            raise ValueError(f"Tokenizer missing {TARGET_SPEECH_END_TOKEN!r}")
-        self.spk_start_id = self.tokenizer.convert_tokens_to_ids(SPK_START_TOKEN)
-        if self.spk_start_id == self.tokenizer.unk_token_id:
-            raise ValueError(f"Tokenizer missing {SPK_START_TOKEN!r}")
+        ids = np.asarray(
+            [
+                self.tok.encode(
+                    prompt,
+                    add_special_tokens=True,
+                ).ids
+            ],
+            dtype=np.int64,
+        )
 
-    def _prepare_inputs_embeds(
-        self,
-        input_ids: np.ndarray,
-        *,
-        speaker_embeds: np.ndarray | None = None,
-        inject_speaker: bool = False,
-    ) -> np.ndarray:
-        embeds = self.token_embedding[input_ids].astype(np.float32, copy=False)
-        if inject_speaker:
-            if speaker_embeds is None:
-                raise ValueError("speaker_embeds required when inject_speaker=True")
-            embeds = inject_speaker_embeds(
-                input_ids,
-                embeds,
-                speaker_embeds.astype(np.float32, copy=False),
-                spk_start_id=self.spk_start_id,
+        embeddings = self.embedding[
+            ids
+        ].copy()
+
+        starts = np.flatnonzero(
+            ids[0] == self.spk_start
+        )
+
+        if starts.size != 1:
+            raise RuntimeError(
+                "invalid 40M speaker prompt"
             )
-        return embeds
 
-    def _split_lm_outputs(
-        self, outputs: list[np.ndarray]
-    ) -> tuple[np.ndarray, np.ndarray, list[np.ndarray]]:
-        """Return (logits, last_hidden_state, past_kv_flat) from a unified LM run."""
-        logits = outputs[self._lm_logits_index]
-        hidden = outputs[self._lm_hidden_index]
-        past = outputs[self._lm_past_start :]
-        return logits, hidden, past
+        start = int(starts[0]) + 1
 
-    @property
-    def sample_rate(self) -> int:
-        return OUTPUT_SAMPLE_RATE
+        embeddings[
+            0,
+            start : start + 16,
+        ] = self.speaker_embeds[
+            voice_index
+        ]
 
-    @property
-    def available_voices(self) -> list[str]:
-        return self.voices.list_voices()
+        return ids, embeddings
 
-    def _generate_coarse_tokens(
+    def _prompt80(
         self,
-        input_ids: np.ndarray,
-        speaker_embeds: np.ndarray,
-        *,
-        max_new_tokens: int,
-        min_new_tokens: int,
-        temperature: float,
-        top_p: float,
-        repetition_penalty: float,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        seq_len = int(input_ids.shape[1])
-        position_ids = np.arange(seq_len, dtype=np.int64)[None, :]
+        text,
+        reference_text,
+        reference_codes,
+    ):
+        ref_start = "[ref_speech_start]"
+        ref_end = "[ref_speech_end]"
+        target_start = "[target_speech_start]"
 
-        prefill_out = self.lm.run(
+        if self.tok.token_to_id(
+            target_start
+        ) is None:
+            ref_start = "[speech_start]"
+            ref_end = "[speech_end]"
+            target_start = "[speech_start]"
+
+        codes = "".join(
+            f"[{int(code)}]"
+            for code in np.asarray(
+                reference_codes
+            ).reshape(-1)
+        )
+
+        prompt = (
+            f"[ref_text_start]"
+            f"{reference_text}"
+            f"[ref_text_end] "
+            f"[target_text_start]"
+            f"{text}"
+            f"[target_text_end]"
+            f"{ref_start}"
+            f"{codes}"
+            f"{ref_end}"
+            f"{target_start}"
+        )
+
+        ids = np.asarray(
+            [
+                self.tok.encode(
+                    prompt,
+                    add_special_tokens=True,
+                ).ids
+            ],
+            dtype=np.int64,
+        )
+
+        return (
+            ids,
+            self.embedding[
+                ids
+            ].astype(np.float32),
+        )
+
+    def _generate(
+        self,
+        ids,
+        initial_embeddings,
+        max_new,
+        min_new,
+        temperature,
+        top_p,
+        repetition_penalty,
+        seed,
+    ):
+        empty_cache = {}
+
+        for layer in range(self.layers):
+            shape = (1, 1, 0, 128)
+
+            empty_cache[
+                f"past_key_values.{layer}.key"
+            ] = np.zeros(
+                shape,
+                dtype=np.float32,
+            )
+
+            empty_cache[
+                f"past_key_values.{layer}.value"
+            ] = np.zeros(
+                shape,
+                dtype=np.float32,
+            )
+
+        outputs = self.lm.run(
             None,
             {
-                "inputs_embeds": self._prepare_inputs_embeds(
-                    input_ids, speaker_embeds=speaker_embeds, inject_speaker=True
-                ),
-                "position_ids": position_ids,
-                **empty_lm_past(self.num_layers),
+                "inputs_embeds": initial_embeddings,
+                "position_ids": np.arange(
+                    ids.shape[1],
+                    dtype=np.int64,
+                )[None],
+                **empty_cache,
             },
         )
-        logits, hidden, past = self._split_lm_outputs(prefill_out)
-        hidden_chunks: list[np.ndarray] = [hidden]
 
-        generated_ids: list[int] = []
-        next_token = sample_next_token(
+        logits = outputs[
+            self.logits_i
+        ]
+
+        hidden = outputs[
+            self.hidden_i
+        ]
+
+        past = outputs[
+            self.past_i :
+        ]
+
+        hidden_parts = [hidden]
+        generated = []
+
+        rng = np.random.default_rng(seed)
+
+        token = _sample(
             logits[0, -1],
-            temperature=temperature,
-            top_p=top_p,
-            generated_ids=generated_ids,
-            repetition_penalty=repetition_penalty,
+            generated,
+            temperature,
+            top_p,
+            repetition_penalty,
+            rng,
         )
-        generated_ids.append(next_token)
 
-        cur_len = seq_len
-        for _ in range(max_new_tokens - 1):
-            if len(generated_ids) >= min_new_tokens and next_token == self.speech_end_id:
+        generated.append(token)
+
+        position = ids.shape[1]
+
+        for _ in range(max_new - 1):
+            if (
+                len(generated) >= min_new
+                and token == self.speech_end
+            ):
                 break
 
-            step_ids = np.array([[next_token]], dtype=np.int64)
             feed = {
-                "inputs_embeds": self._prepare_inputs_embeds(step_ids),
-                "position_ids": np.array([[cur_len]], dtype=np.int64),
+                "inputs_embeds": (
+                    self.embedding[
+                        np.asarray(
+                            [[token]],
+                            dtype=np.int64,
+                        )
+                    ].astype(np.float32)
+                ),
+                "position_ids": np.asarray(
+                    [[position]],
+                    dtype=np.int64,
+                ),
             }
-            for layer in range(self.num_layers):
-                feed[f"past_key_values.{layer}.key"] = past[layer * 2]
-                feed[f"past_key_values.{layer}.value"] = past[layer * 2 + 1]
 
-            decode_out = self.lm.run(None, feed)
-            logits, hidden, past = self._split_lm_outputs(decode_out)
-            hidden_chunks.append(hidden)
-            next_token = sample_next_token(
+            for layer in range(
+                self.layers
+            ):
+                feed[
+                    f"past_key_values.{layer}.key"
+                ] = past[
+                    2 * layer
+                ]
+
+                feed[
+                    f"past_key_values.{layer}.value"
+                ] = past[
+                    2 * layer + 1
+                ]
+
+            outputs = self.lm.run(
+                None,
+                feed,
+            )
+
+            logits = outputs[
+                self.logits_i
+            ]
+
+            hidden = outputs[
+                self.hidden_i
+            ]
+
+            past = outputs[
+                self.past_i :
+            ]
+
+            hidden_parts.append(hidden)
+
+            token = _sample(
                 logits[0, -1],
-                temperature=temperature,
-                top_p=top_p,
-                generated_ids=generated_ids,
-                repetition_penalty=repetition_penalty,
-            )
-            generated_ids.append(next_token)
-            cur_len += 1
-
-        last_hidden = np.concatenate(hidden_chunks, axis=1)
-        return np.array(generated_ids, dtype=np.int64), last_hidden
-
-    def _bits_from_coarse(
-        self,
-        prompt_ids: np.ndarray,
-        generated: np.ndarray,
-        last_hidden: np.ndarray,
-        speaker_vec: np.ndarray,
-    ) -> np.ndarray:
-        prompt_len = int(prompt_ids.shape[1])
-        full_ids = np.concatenate([prompt_ids[0], generated], axis=0)[None, :].astype(
-            np.int64
-        )
-        audio_positions = extract_audio_token_positions(
-            generated, prompt_len, self.speech_end_id, self.id_to_code
-        )
-        if audio_positions.size == 0:
-            raise RuntimeError("LM did not generate valid audio tokens like [123].")
-        if np.any(audio_positions < 1):
-            raise RuntimeError("Audio token has no previous hidden state.")
-        needed = int(audio_positions.max()) - 1
-        if needed >= last_hidden.shape[1]:
-            raise RuntimeError(
-                f"Cached LM hidden length {last_hidden.shape[1]} is shorter than "
-                f"required index {needed}."
+                generated,
+                temperature,
+                top_p,
+                repetition_penalty,
+                rng,
             )
 
-        hidden_states = last_hidden[:, audio_positions - 1, :].astype(np.float32)
-        coarse_token_ids = full_ids[:, audio_positions].astype(np.int64)
-        valid_mask = np.ones((1, int(audio_positions.size)), dtype=bool)
+            generated.append(token)
+            position += 1
 
-        logits = self.fine_local.run(
-            None,
-            {
-                "hidden_states": hidden_states,
-                "coarse_embeddings": self.token_embedding[coarse_token_ids],
-                "speaker_embedding": speaker_vec.astype(np.float32),
-                "valid_mask": valid_mask,
-            },
-        )[0]
-        return _quantize_bits(logits[0])
+        return (
+            np.asarray(
+                generated,
+                dtype=np.int64,
+            ),
+            np.concatenate(
+                hidden_parts,
+                axis=1,
+            ),
+        )
 
     def generate(
         self,
-        text: str,
-        *,
-        voice: str,
-        max_new_tokens: int = 2048,
-        min_new_tokens: int = 10,
-        temperature: float = DEFAULT_TEMPERATURE,
-        top_p: float = 0.95,
-        repetition_penalty: float = 1.1,
-        seed: int = 42,
-    ) -> np.ndarray:
-        """Synthesize speech and return a 1-D float32 waveform @ 24 kHz."""
-        np.random.seed(seed)
+        text,
+        voice,
+        prompt_text,
+        max_new,
+        min_new,
+        temperature,
+        top_p,
+        repetition_penalty,
+        seed,
+    ):
+        if self.variant == "40M":
+            if voice not in self.voice_ids:
+                raise ValueError(
+                    f"unknown voice {voice!r}; "
+                    f"available voices: "
+                    f"{', '.join(self.voice_ids)}"
+                )
 
-        prompt = build_speaker_prompt(text)
-        input_ids = self.tokenizer(prompt, add_special_tokens=True, return_tensors="np")[
-            "input_ids"
-        ].astype(np.int64)
+            voice_index = (
+                self.voice_ids.index(
+                    voice
+                )
+            )
 
-        speaker_embeds = self.voices.get_speaker_embeds(voice)
-        speaker_vec = self.voices.get_speaker_vec(voice)
+            ids, embeddings = (
+                self._prompt40(
+                    text,
+                    voice_index,
+                )
+            )
 
-        generated, last_hidden = self._generate_coarse_tokens(
-            input_ids,
-            speaker_embeds,
-            max_new_tokens=max_new_tokens,
-            min_new_tokens=min_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            repetition_penalty=repetition_penalty,
+            generated, hidden = (
+                self._generate(
+                    ids,
+                    embeddings,
+                    max_new,
+                    min_new,
+                    temperature,
+                    top_p,
+                    repetition_penalty,
+                    seed,
+                )
+            )
+
+            positions = _audio_positions(
+                generated,
+                ids.shape[1],
+                self.speech_end,
+                self.audio_table,
+            )
+
+            if not positions.size:
+                raise RuntimeError(
+                    "LM generated no audio tokens"
+                )
+
+            full_ids = np.concatenate(
+                [
+                    ids[0],
+                    generated,
+                ]
+            )[None]
+
+            binary_logits = self.fine.run(
+                None,
+                {
+                    "hidden_states": hidden[
+                        :,
+                        positions - 1,
+                    ].astype(np.float32),
+                    "coarse_embeddings": (
+                        self.embedding[
+                            full_ids[
+                                :,
+                                positions,
+                            ]
+                        ].astype(np.float32)
+                    ),
+                    "speaker_embedding": (
+                        self.speaker_vecs[
+                            voice_index
+                            : voice_index + 1
+                        ].astype(np.float32)
+                    ),
+                    "valid_mask": np.ones(
+                        (
+                            1,
+                            len(positions),
+                        ),
+                        dtype=bool,
+                    ),
+                },
+            )[0]
+
+            bits = np.where(
+                binary_logits[0] > 0.0,
+                1.0,
+                -1.0,
+            ).astype(np.float32)
+
+            magnitude, phase = (
+                self.decoder.run(
+                    None,
+                    {
+                        "bits": bits,
+                    },
+                )
+            )
+
+            return _istft(
+                magnitude,
+                phase,
+            )
+
+        reference_wav = (
+            _safe_relative_wav(
+                self.root,
+                voice,
+            )
         )
-        bits = self._bits_from_coarse(input_ids, generated, last_hidden, speaker_vec)
-        mag, phase = self.codec_decode.run(None, {"bits": bits})
-        return wav_from_mag_phase(mag, phase, self.istft)
+
+        reference_16k = _read_audio(
+            reference_wav,
+            CODEC_SR,
+        ).reshape(
+            1,
+            1,
+            -1,
+        ).astype(
+            self.enc_dtype
+        )
+
+        reference_codes = (
+            self.encoder.run(
+                None,
+                {
+                    self.enc_name: reference_16k,
+                },
+            )[0]
+            .reshape(-1)
+            .astype(np.int64)
+        )
+
+        ids, embeddings = (
+            self._prompt80(
+                text,
+                prompt_text,
+                reference_codes,
+            )
+        )
+
+        reference_24k = _read_audio(
+            reference_wav,
+            SR,
+        )
+
+        speaker_input = (
+            self.speaker
+            .get_inputs()[0]
+            .name
+        )
+
+        speaker_vector = (
+            self.speaker.run(
+                None,
+                {
+                    speaker_input: (
+                        _speaker_mel(
+                            reference_24k
+                        )
+                    )
+                },
+            )[0]
+            .astype(np.float32)
+        )
+
+        generated, hidden = (
+            self._generate(
+                ids,
+                embeddings,
+                max_new,
+                min_new,
+                temperature,
+                top_p,
+                repetition_penalty,
+                seed,
+            )
+        )
+
+        positions = _audio_positions(
+            generated,
+            ids.shape[1],
+            self.speech_end,
+            self.audio_table,
+        )
+
+        if not positions.size:
+            raise RuntimeError(
+                "LM generated no audio tokens"
+            )
+
+        full_ids = np.concatenate(
+            [
+                ids[0],
+                generated,
+            ]
+        )[None]
+
+        magnitude, phase = (
+            self.decoder.run(
+                None,
+                {
+                    "hidden_states": hidden[
+                        :,
+                        positions - 1,
+                    ].astype(np.float32),
+                    "coarse_embeddings": (
+                        self.embedding[
+                            full_ids[
+                                :,
+                                positions,
+                            ]
+                        ].astype(np.float32)
+                    ),
+                    "speaker_embedding": (
+                        speaker_vector
+                        .reshape(1, -1)
+                        .astype(np.float32)
+                    ),
+                    "valid_mask": np.ones(
+                        (
+                            1,
+                            len(positions),
+                        ),
+                        dtype=bool,
+                    ),
+                },
+            )
+        )
+
+        return _istft(
+            magnitude,
+            phase,
+        )
 
 
-# ---------------------------------------------------------------------------
-# MacAI Script Runner hooks（daemon 生成的 script_host.py 会调用以下两个函数）
-# ---------------------------------------------------------------------------
+def _safe_relative_wav(
+    root: Path,
+    voice,
+):
+    if (
+        not isinstance(voice, str)
+        or not voice.strip()
+    ):
+        raise ValueError(
+            "80M requires voice to be a relative "
+            "reference WAV path inside the model directory"
+        )
 
-DEFAULT_VOICE = "hojo_zh_f_01"
-# 单段合成上限（字符）。2048 speech token @ 50Hz ≈ 40s 音频，160 字中文约
-# 30s，留出余量；单句超限时按字符硬切。
-MAX_CHUNK_CHARS = 160
-CHUNK_PAUSE_SECONDS = 0.12
-_CHUNK_PAUSE = np.zeros(int(CHUNK_PAUSE_SECONDS * OUTPUT_SAMPLE_RATE), dtype=np.float32)
-_SENTENCE_SPLIT = re.compile(r"([。！？!?；;\n]+)")
+    relative = Path(
+        voice.strip()
+    )
 
+    if (
+        relative.is_absolute()
+        or relative.suffix.lower() != ".wav"
+    ):
+        raise ValueError(
+            "80M voice must be a relative .wav path "
+            "inside the model directory"
+        )
 
-def _split_text(text: str) -> list[str]:
-    parts = [part for part in _SENTENCE_SPLIT.split(text) if part.strip()]
-    if not parts:
-        return []
-    chunks: list[str] = []
-    current = ""
-    for part in parts:
-        if current and len(current) + len(part) > MAX_CHUNK_CHARS:
-            chunks.append(current)
-            current = ""
-        current += part
-        while len(current) > MAX_CHUNK_CHARS:
-            chunks.append(current[:MAX_CHUNK_CHARS])
-            current = current[MAX_CHUNK_CHARS:]
-    if current:
-        chunks.append(current)
-    return chunks
+    path = (
+        root / relative
+    ).resolve()
+
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(
+            "voice path escapes model directory"
+        ) from exc
+
+    if not path.is_file():
+        raise ValueError(
+            f"reference WAV not found: {voice}"
+        )
+
+    return path
 
 
 def load(model_path, profile):
-    """加载一次并返回模型对象；host 会持有它直到 unload。"""
-    return HojoTTSLightOnnx(model_path)
+    root = Path(model_path)
+
+    if not root.is_dir():
+        raise FileNotFoundError(
+            f"model directory does not exist: "
+            f"{model_path}"
+        )
+
+    is_40m = all(
+        (root / filename).is_file()
+        for filename in F40.values()
+    )
+
+    is_80m = all(
+        (root / filename).is_file()
+        for filename in F80.values()
+    )
+
+    if is_40m == is_80m:
+        raise ValueError(
+            "model directory must contain exactly one "
+            "supported Hojo-TTS-Light variant (40M or 80M)"
+        )
+
+    return HojoModel(
+        root,
+        "40M" if is_40m else "80M",
+        profile,
+    )
 
 
-def synthesize(model, text, output_path, options):
-    """把 WAV 写入 daemon 管理的 output_path；返回该路径。
+def synthesize(
+    model,
+    text,
+    output_path,
+    options,
+):
+    if not isinstance(
+        model,
+        HojoModel,
+    ):
+        raise TypeError(
+            "invalid Hojo-TTS-Light model"
+        )
 
-    options 即 tts.v1 请求体：voice 选择音色；speed / language 被忽略
-    （模型不支持语速调节，语言由模型自动区分中英）。
-    """
-    text = (text or "").strip()
-    if not text:
-        raise ValueError("speech input must not be empty")
-    voice = options.get("voice") or DEFAULT_VOICE
-    chunks = _split_text(text)
-    wav = model.generate(chunks[0], voice=voice)
-    for chunk in chunks[1:]:
-        wav = np.concatenate([wav, _CHUNK_PAUSE, model.generate(chunk, voice=voice)])
-    sf.write(output_path, wav, model.sample_rate, format="WAV")
+    if (
+        not isinstance(text, str)
+        or not text.strip()
+    ):
+        raise ValueError(
+            "text must be non-empty"
+        )
+
+    if not isinstance(options, dict):
+        raise ValueError(
+            "options must be a dictionary"
+        )
+
+    output_format = str(
+        options.get("format") or "wav"
+    ).lower()
+
+    if output_format not in {
+        "wav",
+        "wave",
+        "audio/wav",
+        "audio/wave",
+        "audio/x-wav",
+    }:
+        raise ValueError(
+            "only WAV output is supported"
+        )
+
+    speed = float(
+        options.get("speed") or 1.0
+    )
+
+    if abs(speed - 1.0) > 1e-6:
+        raise ValueError(
+            "Hojo-TTS-Light ONNX runner "
+            "currently requires speed=1.0"
+        )
+
+    language = str(
+        options.get("language") or "auto"
+    ).lower()
+
+    if language not in {
+        "auto",
+        "zh",
+        "zh-cn",
+        "zh-hans",
+        "en",
+        "en-us",
+        "en-gb",
+    }:
+        raise ValueError(
+            "language must be Chinese, English, or auto"
+        )
+
+    voice = options.get("voice")
+
+    if (
+        model.variant == "40M"
+        and (
+            not isinstance(voice, str)
+            or not voice
+        )
+    ):
+        raise ValueError(
+            "40M requires one of its built-in voice IDs"
+        )
+
+    prompt_text = (
+        options.get("prompt_text")
+        or ""
+    )
+
+    if not isinstance(
+        prompt_text,
+        str,
+    ):
+        raise ValueError(
+            "prompt_text must be a string"
+        )
+
+    max_new = int(
+        options.get(
+            "max_new_tokens"
+        )
+        or 2048
+    )
+
+    min_new = int(
+        options.get(
+            "min_new_tokens"
+        )
+        if options.get(
+            "min_new_tokens"
+        ) is not None
+        else 10
+    )
+
+    temperature = float(
+        options.get(
+            "temperature"
+        )
+        if options.get(
+            "temperature"
+        ) is not None
+        else 0.8
+    )
+
+    top_p = float(
+        options.get(
+            "top_p"
+        )
+        if options.get(
+            "top_p"
+        ) is not None
+        else 0.95
+    )
+
+    repetition_penalty = float(
+        options.get(
+            "repetition_penalty"
+        )
+        if options.get(
+            "repetition_penalty"
+        ) is not None
+        else 1.1
+    )
+
+    seed = int(
+        options.get("seed")
+        if options.get("seed")
+        is not None
+        else 42
+    )
+
+    if (
+        not 1 <= max_new <= 4096
+        or not 0 <= min_new <= max_new
+    ):
+        raise ValueError(
+            "invalid min_new_tokens/max_new_tokens"
+        )
+
+    if (
+        temperature < 0
+        or not 0 < top_p <= 1
+        or repetition_penalty <= 0
+    ):
+        raise ValueError(
+            "invalid sampling options"
+        )
+
+    wav = model.generate(
+        text.strip(),
+        voice,
+        prompt_text,
+        max_new,
+        min_new,
+        temperature,
+        top_p,
+        repetition_penalty,
+        seed,
+    )
+
+    sf.write(
+        str(output_path),
+        np.clip(
+            wav,
+            -1.0,
+            1.0,
+        ),
+        SR,
+        format="WAV",
+        subtype="PCM_16",
+    )
+
     return output_path
+
+
+def describe(model):
+    if not isinstance(
+        model,
+        HojoModel,
+    ):
+        raise TypeError(
+            "invalid Hojo-TTS-Light model"
+        )
+
+    info = {
+        "adapter": "hojo-tts-light-onnx",
+        "variant": model.variant,
+        "device": "cpu",
+        "sample_rate": SR,
+        "languages": [
+            "zh",
+            "en",
+        ],
+    }
+
+    if model.variant == "40M":
+        info["voices"] = (
+            model.voice_ids
+        )
+    else:
+        info["voice_mode"] = (
+            "reference_wav"
+        )
+
+    return info
+
+
+def unload(model):
+    if not isinstance(
+        model,
+        HojoModel,
+    ):
+        return
+
+    for name in (
+        "lm",
+        "fine",
+        "decoder",
+        "encoder",
+        "speaker",
+    ):
+        if hasattr(model, name):
+            setattr(
+                model,
+                name,
+                None,
+            )

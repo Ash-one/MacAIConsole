@@ -211,6 +211,55 @@ final class DaemonAPIRequestTests: XCTestCase {
         XCTAssertEqual(RecordingURLProtocol.recorded.first?.httpMethod, "DELETE")
     }
 
+    func testDeleteRunnerSendsDeleteToRunnerEndpoint() async throws {
+        let api = try makeAPI(status: 200, body: #"{"status":"deleted","runner":"org.example.custom"}"#)
+        let res = try await api.deleteRunner("org.example.custom")
+        XCTAssertTrue(res)
+        XCTAssertEqual(RecordingURLProtocol.recorded.first?.url?.path, "/api/runners/org.example.custom")
+        XCTAssertEqual(RecordingURLProtocol.recorded.first?.httpMethod, "DELETE")
+    }
+
+    func testInspectModelsDecodesMatchesWithRoutingToken() async throws {
+        let api = try makeAPI(
+            status: 200,
+            body: """
+            {
+              "data": [
+                {
+                  "path": "/models/ambiguous-model",
+                  "status": "ambiguous",
+                  "matches": [
+                    {
+                      "runner": "org.example.runner-a",
+                      "adapter": "chat",
+                      "capability": "chat.v1",
+                      "detector_id": "rule-a",
+                      "reason": "matched keyword a",
+                      "routing_token": "token-a"
+                    },
+                    {
+                      "runner": "org.example.runner-b",
+                      "adapter": "chat",
+                      "capability": "chat.v1",
+                      "detector_id": "rule-b",
+                      "reason": "matched keyword b",
+                      "routing_token": "token-b"
+                    }
+                  ],
+                  "diagnostics": []
+                }
+              ]
+            }
+            """
+        )
+        let res = try await api.inspectModels(paths: ["/models/ambiguous-model"])
+        XCTAssertEqual(res.count, 1)
+        XCTAssertEqual(res.first?.status, "ambiguous")
+        XCTAssertEqual(res.first?.matches.count, 2)
+        XCTAssertEqual(res.first?.matches[0].routingToken, "token-a")
+        XCTAssertEqual(res.first?.matches[1].routingToken, "token-b")
+    }
+
     func testScriptRunnerInspectionAndCreationKeepSourceBoundToDigest() async throws {
         let api = try makeAPI(
             status: 200,

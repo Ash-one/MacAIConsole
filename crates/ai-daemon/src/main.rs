@@ -225,6 +225,7 @@ async fn main() {
             "/api/runners/{runner}/install",
             post(install_runner_environment).delete(uninstall_runner_environment),
         )
+        .route("/api/runners/{runner}", delete(delete_runner))
         .route("/api/models/load", post(register_and_load_model))
         .route("/api/models/pull", post(pull_model))
         .route("/api/models/{id}/load", post(load_registered_model))
@@ -1133,6 +1134,69 @@ async fn uninstall_runner_environment(
     Json(json!({ "environment_id": manifest.runtime.id, "phase": "missing" })).into_response()
 }
 
+/// 彻底删除用户扩展/Script Runner 插件。内置 Runner 无法删除。
+async fn delete_runner(
+    State(state): State<AppState>,
+    AxumPath(runner): AxumPath<String>,
+) -> Response {
+    let Some(manager) = state.runtime.runner_instances() else {
+        return api_error(AIError::ModelNotFound, "no Runner assembly");
+    };
+    let Some(entry) = manager.discovered().into_iter().find(|entry| {
+        entry
+            .manifest
+            .as_ref()
+            .is_some_and(|manifest| manifest.id == runner)
+    }) else {
+        return api_error(
+            AIError::ModelNotFound,
+            format!("runner '{runner}' not discovered"),
+        );
+    };
+    let plugins_root = state.app_support.join("Plugins");
+    if !entry.root.starts_with(&plugins_root) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": { "code": "builtin_runner_cannot_be_deleted", "message": "内置 Runner 无法删除，只能卸载其运行环境" } })),
+        )
+            .into_response();
+    }
+    let manifest = entry.manifest.expect("filtered runner has manifest");
+    if let Some(instance) = manager.instance_snapshot(&runner).await {
+        if instance.loaded_model.is_some() || instance.active_requests > 0 {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": { "code": "runner_busy", "message": "请先卸载该引擎正在使用的模型" } })),
+            )
+                .into_response();
+        }
+    }
+    if let Err(error) = manager.shutdown_instance(&runner).await {
+        return api_error(AIError::Internal, format!("cannot stop runner: {error}"));
+    }
+    if let Err(error) = manager.environments().uninstall(&manifest.runtime.id).await {
+        tracing::warn!(runner = %runner, error = %error, "cannot uninstall runner environment during delete");
+    }
+    let engine_dir = ai_daemon::runners::engine_dir(&state.app_support, &runner);
+    let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(engine_dir)).await;
+
+    let root = entry.root.clone();
+    let removal = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(root)).await;
+    if let Err(error) = removal {
+        return api_error(
+            AIError::Internal,
+            format!("cannot remove plugin directory: {error}"),
+        );
+    }
+
+    let _ = state.runtime.untrust_runner_package(&runner);
+    state.runtime.remove_runner_provider(&runner);
+    manager.remove_runner(&runner).await;
+
+    tracing::info!(runner = %runner, "deleted Runner plugin");
+    Json(json!({ "deleted": true, "id": runner })).into_response()
+}
+
 /// POST /api/models/pull —— 下载 HF 单文件或目录清单到模型仓库，可选择立即注册加载。
 async fn pull_model(
     State(state): State<AppState>,
@@ -1259,20 +1323,49 @@ async fn inspect_models(
     let mut data = Vec::new();
     for path in request.paths {
         match ai_daemon::runners::inspect_local_directory(FilePath::new(&path), &descriptors) {
-            Ok(inspection) => {
-                let status = match inspection.matches.len() { 0 => "unsupported", 1 => "recognized", _ => "ambiguous" };
-                let token = if inspection.matches.len() == 1 {
-                    let matched = inspection.matches[0].clone();
-                    let raw = format!("{}:{}:{}:{:?}", inspection.canonical_path, inspection.fingerprint, matched.manifest_digest, std::time::SystemTime::now());
-                    let token = format!("{:x}", sha2::Sha256::digest(raw.as_bytes()));
-                    state.routing_tokens.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).retain(|_, token| token.expires_at > std::time::Instant::now());
-                    state.routing_tokens.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(token.clone(), RoutingToken { path: inspection.canonical_path.clone(), fingerprint: inspection.fingerprint.clone(), matched, expires_at: std::time::Instant::now() + Duration::from_secs(300) });
-                    Some(token)
-                } else { None };
+            Ok(mut inspection) => {
+                let matches_count = inspection.matches.len();
+                let status = match matches_count {
+                    0 => "unsupported",
+                    1 => "recognized",
+                    _ => "ambiguous",
+                };
+                let mut root_token = None;
+                {
+                    let mut tokens_guard = state
+                        .routing_tokens
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    tokens_guard.retain(|_, token| token.expires_at > std::time::Instant::now());
+                    for matched in &mut inspection.matches {
+                        let raw = format!(
+                            "{}:{}:{}:{}:{:?}",
+                            inspection.canonical_path,
+                            inspection.fingerprint,
+                            matched.manifest_digest,
+                            matched.detector_id,
+                            std::time::SystemTime::now(),
+                        );
+                        let token = format!("{:x}", sha2::Sha256::digest(raw.as_bytes()));
+                        tokens_guard.insert(
+                            token.clone(),
+                            RoutingToken {
+                                path: inspection.canonical_path.clone(),
+                                fingerprint: inspection.fingerprint.clone(),
+                                matched: matched.clone(),
+                                expires_at: std::time::Instant::now() + Duration::from_secs(300),
+                            },
+                        );
+                        matched.routing_token = Some(token.clone());
+                        if matches_count == 1 {
+                            root_token = Some(token);
+                        }
+                    }
+                }
                 data.push(json!({
                     "path": path, "canonical_path": inspection.canonical_path, "size_bytes": inspection.size_bytes,
                     "status": status, "matches": inspection.matches, "diagnostics": inspection.diagnostics,
-                    "routing_token": token,
+                    "routing_token": root_token,
                     "runner_available": inspection.matches.first().and_then(|matched| statuses.get(&matched.runner)).copied().unwrap_or(false),
                 }));
             }
@@ -1395,6 +1488,27 @@ async fn register_and_load_model(
         }
         None => None,
     };
+    let requested_provider = request.provider.as_deref().map(str::trim);
+    let mut inspected = inspected;
+    if inspected.is_none() && path.is_dir() {
+        if let Some(requested) = requested_provider {
+            let descriptors = state
+                .runtime
+                .runner_instances()
+                .map(|instances| instances.discovered())
+                .unwrap_or_default();
+            if let Ok(inspection) = ai_daemon::runners::inspect_local_directory(&path, &descriptors)
+            {
+                if let Some(matched) = inspection
+                    .matches
+                    .into_iter()
+                    .find(|m| m.runner == requested)
+                {
+                    inspected = Some(matched);
+                }
+            }
+        }
+    }
     let model_type = match inspected
         .as_ref()
         .and_then(|matched| capability_model_type(&matched.capability))
@@ -1411,14 +1525,13 @@ async fn register_and_load_model(
             );
         }
     };
-    let requested_provider = request.provider.as_deref().map(str::trim);
     let (provider, provider_selection_reason, requested_provider_audit) = if let Some(matched) =
         &inspected
     {
         (
             matched.runner.clone(),
             format!("local detector {}: {}", matched.detector_id, matched.reason),
-            "auto".to_string(),
+            requested_provider.unwrap_or("auto").to_string(),
         )
     } else if let Some(requested) = requested_provider {
         match select_provider(model_type, Some(requested), |provider, capability| {
@@ -1558,7 +1671,7 @@ async fn register_and_load_model(
 
     // ad-hoc 绑定：无 catalog Profile 的 Runner（如 llama.cpp）在注册路径上
     // 建立内存绑定。adapter 名来自 manifest 的 default_adapter；重复注册幂等。
-    if inspected.is_none() && provider.starts_with("org.macai.") {
+    if inspected.is_none() {
         let manifest = state.runtime.runner_instances().and_then(|manager| {
             manager
                 .discovered()
@@ -3447,5 +3560,68 @@ runner = ">=0.1,<0.2"
         assert_eq!(updated.context_length, Some(16384));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn delete_runner_rejects_builtin_runner() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runners");
+        let app_support =
+            std::env::temp_dir().join(format!("delete-runner-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&app_support);
+        let mut runtime = Runtime::new();
+        bootstrap_runners_from_root(&mut runtime, root, app_support.clone()).await;
+        let state = app_state(Arc::new(runtime));
+        let response =
+            delete_runner(State(state), AxumPath("org.macai.llama.cpp".to_string())).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let _ = std::fs::remove_dir_all(&app_support);
+    }
+
+    #[tokio::test]
+    async fn inspect_issues_routing_token_for_each_match() {
+        let mut matches = vec![
+            ai_daemon::runners::DetectorMatch {
+                runner: "runner-a".to_string(),
+                adapter: "ad1".to_string(),
+                capability: "chat.v1".to_string(),
+                detector_id: "det-1".to_string(),
+                reason: "det 1".to_string(),
+                manifest_digest: "digest-a".to_string(),
+                routing_token: None,
+            },
+            ai_daemon::runners::DetectorMatch {
+                runner: "runner-b".to_string(),
+                adapter: "ad2".to_string(),
+                capability: "chat.v1".to_string(),
+                detector_id: "det-2".to_string(),
+                reason: "det 2".to_string(),
+                manifest_digest: "digest-b".to_string(),
+                routing_token: None,
+            },
+        ];
+
+        let state = app_state(Arc::new(Runtime::new()));
+        let mut tokens_guard = state.routing_tokens.lock().unwrap();
+        for matched in &mut matches {
+            let raw = format!(
+                "path:fp:{}:{}",
+                matched.manifest_digest, matched.detector_id
+            );
+            let token = format!("{:x}", sha2::Sha256::digest(raw.as_bytes()));
+            tokens_guard.insert(
+                token.clone(),
+                RoutingToken {
+                    path: "path".to_string(),
+                    fingerprint: "fp".to_string(),
+                    matched: matched.clone(),
+                    expires_at: std::time::Instant::now() + Duration::from_secs(300),
+                },
+            );
+            matched.routing_token = Some(token);
+        }
+        assert_eq!(tokens_guard.len(), 2);
+        assert!(matches[0].routing_token.is_some());
+        assert!(matches[1].routing_token.is_some());
+        assert_ne!(matches[0].routing_token, matches[1].routing_token);
     }
 }

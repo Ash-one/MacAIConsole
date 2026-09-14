@@ -266,6 +266,24 @@ final class DaemonController {
         }
     }
 
+    /// 彻底删除 Runner 引擎包（仅限用户插件/脚本 Runner）及其受管环境与目录。
+    func deleteRunner(_ id: String) async {
+        guard !busyRunnerIDs.contains(id) else { return }
+        busyRunnerIDs.insert(id)
+        uninstallingRunnerIDs.insert(id)
+        defer {
+            busyRunnerIDs.remove(id)
+            uninstallingRunnerIDs.remove(id)
+        }
+        do {
+            _ = try await api.deleteRunner(id)
+            logInfo("已删除 Runner 引擎：\(id)")
+            await refreshAfterSuccessfulMutation()
+        } catch {
+            lastError = "\(id) 删除失败：\(Self.message(for: error))"
+        }
+    }
+
     /// 从注册表删除模型（已加载时 daemon 会先卸载 worker），并同步本地上下文设置。
     func unregister(_ id: String) async {
         guard !busyModelIDs.contains(id) else { return }
