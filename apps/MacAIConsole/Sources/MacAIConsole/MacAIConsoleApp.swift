@@ -13,7 +13,7 @@ struct MacAIConsoleApp: App {
     }
 
     var body: some Scene {
-        WindowGroup(id: "main") {
+        Window("MacAI", id: "main") {
             RootView()
                 .environment(controller)
                 .environment(router)
@@ -48,6 +48,7 @@ struct MacAIConsoleApp: App {
         MenuBarExtra {
             MenuBarContentView()
                 .environment(controller)
+                .environment(router)
                 .tint(Theme.accent)
                 .preferredColorScheme(preferredColorScheme)
         } label: {
@@ -58,9 +59,12 @@ struct MacAIConsoleApp: App {
 
     private var menuBarIcon: String {
         switch controller.phase {
-        case .online: "antenna.radiowaves.left.and.right"
-        case .starting, .stopping: "hourglass"
-        case .offline: "antenna.radiowaves.left.and.right.slash"
+        case .online:
+            return (controller.info?.activeRequests ?? 0) > 0 ? "cpu.fill" : "cpu"
+        case .starting, .stopping:
+            return "hourglass"
+        case .offline:
+            return "poweroff"
         }
     }
 
