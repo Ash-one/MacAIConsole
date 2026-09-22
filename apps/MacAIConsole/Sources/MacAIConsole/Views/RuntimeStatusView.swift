@@ -4,7 +4,8 @@ import SwiftUI
 struct RuntimeStatusView: View {
     @Environment(DaemonController.self) private var controller
     @Environment(AppRouter.self) private var router
-    @State private var selectedModel: LoadedModel?
+    @State private var selectedTarget: ModelDetailTarget?
+    @State private var inspections: [String: LocalInspection] = [:]
 
     var body: some View {
         ScrollView {
@@ -24,9 +25,16 @@ struct RuntimeStatusView: View {
             .padding(Theme.Space.page)
         }
         .navigationTitle("运行状态")
-        .sheet(item: $selectedModel) { model in
-            RunningModelSettingsView(model: model)
-                .environment(controller)
+        .sheet(item: $selectedTarget) { target in
+            ModelDetailSheet(
+                target: target,
+                inspection: inspection(for: target),
+                onUpdate: {
+                    try? await controller.refresh()
+                }
+            )
+            .environment(controller)
+            .environment(router)
         }
     }
 
@@ -76,7 +84,7 @@ struct RuntimeStatusView: View {
                 VStack(spacing: 0) {
                     ForEach(models) { model in
                         ModelRow(model: model) {
-                            selectedModel = model
+                            openDetail(for: model)
                         }
                         if model.id != models.last?.id { HairlineDivider() }
                     }
@@ -86,6 +94,48 @@ struct RuntimeStatusView: View {
                     text: controller.phase == .online ? "当前没有加载中的模型" : "守护进程离线，暂无数据",
                     systemImage: "cpu"
                 )
+            }
+        }
+    }
+
+    private func inspection(for target: ModelDetailTarget) -> LocalInspection? {
+        switch target {
+        case .registered(let entry):
+            guard let path = entry.path else { return nil }
+            return inspections[path]
+        case .repo(let model):
+            return inspections[model.path]
+        case .profile:
+            return nil
+        }
+    }
+
+    private func target(for model: LoadedModel) -> ModelDetailTarget {
+        if let entry = controller.registeredModels.first(where: { $0.id == model.id }) {
+            return .registered(entry)
+        }
+        let fallback = ModelEntry(
+            id: model.id,
+            ownedBy: model.provider,
+            requestedProvider: nil,
+            providerSelectionReason: nil,
+            modelType: model.modelType ?? "llm",
+            path: nil,
+            temperature: model.temperature,
+            topP: model.topP,
+            maxTokens: model.maxTokens
+        )
+        return .registered(fallback)
+    }
+
+    private func openDetail(for model: LoadedModel) {
+        let t = target(for: model)
+        selectedTarget = t
+        if case .registered(let entry) = t, let path = entry.path, inspections[path] == nil {
+            Task {
+                if let result = try? await controller.api.inspectModels(paths: [path]), let first = result.first {
+                    inspections[path] = first
+                }
             }
         }
     }
@@ -343,240 +393,3 @@ struct ModelRow: View {
     }
 }
 
-struct RunningModelSettingsView: View {
-    @Environment(DaemonController.self) private var controller
-    @Environment(\.dismiss) private var dismiss
-    let model: LoadedModel
-
-    @State private var keepAlive: String
-    @State private var contextLengthDraft: String
-    @State private var repoModel: RepoModel?
-    @State private var isReloading = false
-
-    private struct KeepAliveChoice: Identifiable {
-        let label: String
-        let value: String
-        var id: String { value }
-    }
-
-    private let keepAliveChoices = [
-        KeepAliveChoice(label: "1min", value: "1m"),
-        KeepAliveChoice(label: "5min", value: "5m"),
-        KeepAliveChoice(label: "10min", value: "10m"),
-        KeepAliveChoice(label: "30min", value: "30m"),
-        KeepAliveChoice(label: "60min", value: "60m"),
-        KeepAliveChoice(label: "120min", value: "120m"),
-        KeepAliveChoice(label: "始终", value: "always"),
-    ]
-
-    init(model: LoadedModel) {
-        self.model = model
-        let contextLength = model.contextLength ?? ModelRepository.contextLength(for: model.id)
-        _keepAlive = State(initialValue: model.keepAlive?.isEmpty == false ? model.keepAlive! : "always")
-        _contextLengthDraft = State(initialValue: Self.displayContextLength(contextLength))
-    }
-
-    private var modelType: String {
-        if let type = model.modelType, !type.isEmpty { type } else { "unknown" }
-    }
-
-    private var typeLabel: String {
-        switch modelType {
-        case "llm": "LLM"
-        case "stt": "STT"
-        case "tts": "TTS"
-        default: modelType.uppercased()
-        }
-    }
-
-    private static func displayContextLength(_ value: Int) -> String {
-        let kilo = Double(value) / 1024.0
-        if kilo.rounded() == kilo { return String(Int(kilo)) }
-        return String(format: "%.2f", kilo)
-    }
-
-    private static func parseContextLength(_ text: String) -> Int? {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        guard let kilo = Double(trimmed), kilo > 0, kilo <= 1024 else { return nil }
-        return Int(kilo * 1024.0)
-    }
-
-    private var parsedContextLength: Int? {
-        Self.parseContextLength(contextLengthDraft)
-    }
-
-    private var currentContextLength: Int {
-        model.contextLength ?? ModelRepository.contextLength(for: model.id)
-    }
-
-    private var contextLengthChanged: Bool {
-        parsedContextLength != nil && parsedContextLength != currentContextLength
-    }
-
-    private var contextLengthValid: Bool {
-        guard let value = parsedContextLength else { return false }
-        let detectedLimit = repoModel?.ggufMetadata?.contextLength ?? 1024 * 1024
-        return value >= 256 && value <= min(detectedLimit, 1024 * 1024)
-    }
-
-    private var contextDescription: String {
-        guard let repoModel else {
-            return "该模型不在模型仓库中，无法从这里重载上下文"
-        }
-        if let detectionError = repoModel.detectionError {
-            return "GGUF 检测失败：\(detectionError)"
-        }
-        if let contextLength = repoModel.ggufMetadata?.contextLength {
-            return "模型原生上限 \(GGUFMetadata.formatTokenCount(contextLength))；修改后会同步注册设置并重载 LLM"
-        }
-        return "修改后会同步模型注册设置并重载 LLM"
-    }
-
-    private var canApply: Bool {
-        guard controller.phase == .online, !isReloading else { return false }
-        guard modelType == "llm" else { return true }
-        guard contextLengthChanged else { return true }
-        return contextLengthValid && repoModel?.detectionError == nil
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider()
-            Form {
-                Section("运行策略") {
-                    Picker("保持时间", selection: $keepAlive) {
-                        ForEach(keepAliveChoices) { choice in
-                            Text(choice.label).tag(choice.value)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .onChange(of: keepAlive) { _, value in
-                        Task { await controller.setKeepAlive(model.id, keepAlive: value) }
-                    }
-                }
-
-                if modelType == "llm" {
-                    Section("推理") {
-                        HStack {
-                            Text("上下文长度")
-                            Spacer()
-                            HStack(spacing: 4) {
-                                TextField(
-                                    "上下文长度",
-                                    text: $contextLengthDraft,
-                                    prompt: Text("4")
-                                )
-                                    .labelsHidden()
-                                    .font(.body.monospacedDigit())
-                                    .textFieldStyle(.plain)
-                                    .frame(width: 72)
-                                    .multilineTextAlignment(.trailing)
-                                    .onChange(of: contextLengthDraft) { _, value in
-                                        let filtered = value.filter { $0.isNumber || $0 == "." }
-                                        if filtered != value { contextLengthDraft = filtered }
-                                    }
-                                Text("K")
-                                    .font(.body.weight(.medium).monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 6)
-                            .background(
-                                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                                    .fill(Theme.inset)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                                    .strokeBorder(Theme.hairlineStrong)
-                            )
-                        }
-                        Text(contextDescription)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if modelType == "tts" {
-                    Section("语音") {
-                        VoiceSelectionControl(modelID: model.id)
-                    }
-                }
-            }
-            .formStyle(.grouped)
-        }
-        .frame(minWidth: 420, minHeight: modelType == "tts" ? 300 : 250)
-        .navigationTitle("模型设置")
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button(isReloading ? "重载中…" : "应用") {
-                    applySettings()
-                }
-                .disabled(!canApply)
-            }
-        }
-        .task(id: model.id) {
-            repoModel = await ModelRepository.scanInBackground().first { $0.modelID == model.id }
-        }
-    }
-
-    private func applySettings() {
-        guard modelType == "llm", contextLengthChanged else {
-            dismiss()
-            return
-        }
-        applyContextLength()
-    }
-
-    private func applyContextLength() {
-        guard modelType == "llm",
-              let value = parsedContextLength,
-              contextLengthValid,
-              let repoModel,
-              repoModel.detectionError == nil,
-              !isReloading else { return }
-
-        ModelRepository.setContextLength(value, for: model.id)
-        isReloading = true
-        Task {
-            do {
-                try await controller.registerAndLoad(
-                    path: repoModel.path,
-                    id: model.id,
-                    contextLength: value,
-                    keepAlive: keepAlive,
-                    modelType: nil,
-                    provider: model.provider
-                )
-            } catch {
-                controller.lastError = "上下文重载失败：\(DaemonController.message(for: error))"
-            }
-            isReloading = false
-            dismiss()
-        }
-    }
-
-    private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            ModelTypeIcon(type: modelType)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(model.id)
-                    .font(.title2.weight(.semibold))
-                Text("\(typeLabel) · \(model.provider)")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 6) {
-                    StatusDot(
-                        color: model.state == "ready" ? Theme.success : Theme.warning,
-                        glow: model.state == "ready"
-                    )
-                    Text(model.state == "ready" ? "运行中" : model.state)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(model.state == "ready" ? Theme.success : Theme.warning)
-                }
-            }
-            Spacer()
-        }
-        .padding(20)
-    }
-}
