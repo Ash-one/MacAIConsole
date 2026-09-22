@@ -95,7 +95,7 @@ fn write_package(package: &std::path::Path, command: &str, boot_seconds: u64) {
     std::fs::write(package.join("profiles/fake.toml"), PROFILE).unwrap();
 }
 
-fn trusted_runner<'a>(registry: &'a RunnerRegistry) -> &'a ai_daemon::runners::RunnerDescriptor {
+fn trusted_runner(registry: &RunnerRegistry) -> &ai_daemon::runners::RunnerDescriptor {
     registry
         .trusted("org.example.fake", "=0.1.0")
         .expect("built-in Runner is trusted")
@@ -114,7 +114,7 @@ async fn startup_failure(mode: &str) -> (std::path::PathBuf, SupervisorError) {
         package.join("fake-runner-startup-failure"),
     )
     .unwrap();
-    let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+    let registry = RunnerRegistry::discover(std::slice::from_ref(&root), &[], &HashSet::new());
     let error =
         match RunnerProcess::spawn(trusted_runner(&registry), &package.join("unused"), &root).await
         {
@@ -174,7 +174,7 @@ async fn trusted_fake_runner_completes_discover_handshake_load_infer_and_unload(
     )
     .unwrap();
 
-    let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+    let registry = RunnerRegistry::discover(std::slice::from_ref(&root), &[], &HashSet::new());
     let runner = trusted_runner(&registry);
     assert_eq!(runner.state, RunnerState::Trusted);
     let resolved = registry.resolve_bundled_profile("fake-tts").unwrap();
@@ -267,7 +267,7 @@ async fn dropping_exited_runner_kills_its_descendant_process_group() {
         package.join("fake-runner-startup-failure"),
     )
     .unwrap();
-    let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+    let registry = RunnerRegistry::discover(std::slice::from_ref(&root), &[], &HashSet::new());
     let mut process =
         RunnerProcess::spawn(trusted_runner(&registry), &package.join("unused"), &root)
             .await
@@ -300,7 +300,7 @@ async fn modified_package_cannot_execute_after_discovery() {
         package.join("fake-runner"),
     )
     .unwrap();
-    let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+    let registry = RunnerRegistry::discover(std::slice::from_ref(&root), &[], &HashSet::new());
     std::fs::write(package.join("fake-runner"), "changed after discovery").unwrap();
     let error =
         match RunnerProcess::spawn(trusted_runner(&registry), &package.join("unused"), &root).await

@@ -12,4 +12,3 @@ path = "src/main.rs"
 ai-core = { path = "../ai-core" }
 serde_json = { workspace = true }
 clap = { workspace = true }
-url = { workspace = true }

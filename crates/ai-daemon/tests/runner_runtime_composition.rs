@@ -137,7 +137,7 @@ async fn setup(
     )
     .unwrap();
 
-    let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+    let registry = RunnerRegistry::discover(std::slice::from_ref(&root), &[], &HashSet::new());
     let temp_root = root.join("temp");
     std::fs::create_dir_all(&temp_root).unwrap();
     let environments = EnvironmentManager::new(EnvironmentManagerConfig {

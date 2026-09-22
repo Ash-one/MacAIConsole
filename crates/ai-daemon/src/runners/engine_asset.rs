@@ -97,7 +97,7 @@ pub async fn ensure_engine_asset(
 
     let parent = dir.parent().ok_or_else(|| EngineInstallError::Io {
         context: "engine dir has no parent".to_string(),
-        source: std::io::Error::new(std::io::ErrorKind::Other, "no parent"),
+        source: std::io::Error::other("no parent"),
     })?;
     std::fs::create_dir_all(parent).map_err(|error| EngineInstallError::Io {
         context: format!("cannot create {}", parent.display()),

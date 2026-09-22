@@ -1580,7 +1580,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+        let registry = RunnerRegistry::discover(std::slice::from_ref(&root), &[], &HashSet::new());
         let environments = EnvironmentManager::new(EnvironmentManagerConfig {
             runtime_root: root.join("Runtimes/python"),
             uv_path: None,
@@ -1648,7 +1648,7 @@ mod tests {
         std::fs::write(&first_path, b"first").unwrap();
         std::fs::write(&second_path, b"second").unwrap();
 
-        let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+        let registry = RunnerRegistry::discover(std::slice::from_ref(&root), &[], &HashSet::new());
         let environments = EnvironmentManager::new(EnvironmentManagerConfig {
             runtime_root: root.join("Runtimes/python"),
             uv_path: None,
@@ -1731,7 +1731,7 @@ mod tests {
         let _ = std::fs::create_dir_all(&root);
         std::fs::write(&first_path, b"model-one").unwrap();
 
-        let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+        let registry = RunnerRegistry::discover(std::slice::from_ref(&root), &[], &HashSet::new());
         let environments = EnvironmentManager::new(EnvironmentManagerConfig {
             runtime_root: root.join("Runtimes/python"),
             uv_path: None,

@@ -18,7 +18,6 @@ dependencies = [
  "ai-core",
  "clap",
  "serde_json",
- "url",
 ]
 
 [[package]]

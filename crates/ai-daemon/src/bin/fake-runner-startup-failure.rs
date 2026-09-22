@@ -26,6 +26,8 @@ async fn main() {
     )
     .expect("write test pid");
 
+    #[allow(clippy::zombie_processes)]
+    // 专门模拟孤儿/遗留子孙进程，供 Supervisor 测试进程组回收能力。
     std::process::Command::new(std::env::current_exe().expect("current executable"))
         .arg(&runtime_root)
         .arg("descendant")

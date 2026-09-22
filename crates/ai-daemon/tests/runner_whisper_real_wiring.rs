@@ -86,7 +86,7 @@ async fn whisper_runner_real_composition_load_infer_unload() {
     )
     .unwrap();
 
-    let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+    let registry = RunnerRegistry::discover(std::slice::from_ref(&root), &[], &HashSet::new());
     let descriptor = registry
         .entries()
         .iter()

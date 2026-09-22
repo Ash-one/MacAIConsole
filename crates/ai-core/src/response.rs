@@ -214,7 +214,7 @@ fn task_input_preview(kind: &str, request: &TaskRequestDetail) -> String {
         _ => request
             .input_text
             .as_deref()
-            .or_else(|| request.file_name.as_deref())
+            .or(request.file_name.as_deref())
             .unwrap_or(""),
     };
     let mut preview: String = text.chars().take(117).collect();

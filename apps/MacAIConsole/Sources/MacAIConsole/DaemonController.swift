@@ -767,10 +767,6 @@ final class DaemonController {
         return (process, handle)
     }
 
-    static var logDirectory: URL {
-        LogFiles.directory
-    }
-
     private func logInfo(_ message: String) {
         guard logsEnabled else { return }
         AppLogger.info(message)

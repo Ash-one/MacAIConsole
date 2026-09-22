@@ -244,9 +244,7 @@ impl RunnerInstanceManager {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .entries()
-            .iter()
-            .cloned()
-            .collect()
+            .to_vec()
     }
 
     pub async fn remove_runner(&self, runner_id: &str) {

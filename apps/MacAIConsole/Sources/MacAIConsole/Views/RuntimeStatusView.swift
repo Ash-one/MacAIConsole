@@ -72,7 +72,7 @@ struct RuntimeStatusView: View {
             if let budget = info?.memoryBudget, budget > 0 {
             MemoryBudgetCard(
                 value: Format.bytes(budget),
-                onEdit: { router.page = .settings }
+                onEdit: { router.goToSettings() }
             )
             }
         }

@@ -30,7 +30,6 @@ final class FormatTests: XCTestCase {
     // 只有 nil 哨兵值是确定性契约。
     func testNilSentinelsRenderAsEmDash() {
         XCTAssertEqual(Format.bytes(nil), "—")
-        XCTAssertEqual(Format.relativeTime(nil), "—")
         XCTAssertEqual(Format.relativeTime(milliseconds: nil), "—")
         XCTAssertEqual(Format.absoluteTime(milliseconds: nil), "—")
         XCTAssertFalse(Format.bytes(1024).isEmpty)

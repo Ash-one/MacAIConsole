@@ -2659,7 +2659,7 @@ async fn bootstrap_runners_from_root(
         .collect();
     let plugin_root = app_support.join("Plugins");
     let registry = RunnerRegistry::discover(
-        &[runner_root.clone()],
+        std::slice::from_ref(&runner_root),
         &[plugin_root],
         &trusted_package_digests,
     );
@@ -2688,7 +2688,6 @@ async fn bootstrap_runners_from_root(
     let entries: Vec<_> = registry
         .entries()
         .iter()
-        .cloned()
         .filter(|entry| {
             entry.manifest.is_some()
                 && matches!(entry.state, RunnerState::Trusted)
@@ -2697,6 +2696,7 @@ async fn bootstrap_runners_from_root(
                     .as_ref()
                     .is_some_and(|manifest| manifest.runtime.runtime_type == "python-uv")
         })
+        .cloned()
         .collect();
     if entries.is_empty() {
         tracing::info!(path = %runner_root.display(), "no trusted python-uv Runner discovered");
@@ -3785,7 +3785,7 @@ runner = ">=0.1,<0.2"
     fn repo_builtin_runner_stays_trusted_with_dev_venv_present() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runners");
         let registry = ai_daemon::runners::RunnerRegistry::discover(
-            &[root.clone()],
+            std::slice::from_ref(&root),
             &[],
             &std::collections::HashSet::new(),
         );
@@ -3867,7 +3867,7 @@ runner = ">=0.1,<0.2"
     fn builtin_runner_bundled_profiles_are_valid_and_construct_pull_targets() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runners");
         let registry = ai_daemon::runners::RunnerRegistry::discover(
-            &[root.clone()],
+            std::slice::from_ref(&root),
             &[],
             &std::collections::HashSet::new(),
         );

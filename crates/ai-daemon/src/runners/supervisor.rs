@@ -244,11 +244,7 @@ impl RunnerProcess {
             let buffer = startup.stderr_buffer.clone();
             startup.stderr_task = Some(tokio::spawn(async move {
                 let mut chunk = [0_u8; 4096];
-                loop {
-                    let read = match stderr.read(&mut chunk).await {
-                        Ok(read) => read,
-                        Err(_) => break,
-                    };
+                while let Ok(read) = stderr.read(&mut chunk).await {
                     if read == 0 {
                         break;
                     }

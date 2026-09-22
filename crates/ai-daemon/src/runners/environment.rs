@@ -331,7 +331,7 @@ impl EnvironmentManager {
             .await
             .map_err(|error| EnvironmentError::Io {
                 context: "environment uninstall worker panicked".to_string(),
-                source: std::io::Error::new(std::io::ErrorKind::Other, error.to_string()),
+                source: std::io::Error::other(error.to_string()),
             })?
             .or_else(|error| {
                 (error.kind() == std::io::ErrorKind::NotFound)
@@ -612,7 +612,7 @@ impl EnvironmentManager {
             Ok(joined) => joined.unwrap_or_else(|error| {
                 Err(EnvironmentError::Io {
                     context: "uv sync worker panicked".to_string(),
-                    source: std::io::Error::new(std::io::ErrorKind::Other, error.to_string()),
+                    source: std::io::Error::other(error.to_string()),
                 })
             }),
             Err(_) => Err(EnvironmentError::UvOperationFailed {

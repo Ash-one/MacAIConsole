@@ -30,12 +30,6 @@ enum Format {
         return "\(secs) 秒"
     }
 
-    static func relativeTime(_ unixSeconds: UInt64?) -> String {
-        guard let unixSeconds, unixSeconds > 0 else { return "—" }
-        let date = Date(timeIntervalSince1970: TimeInterval(unixSeconds))
-        return relativeFormatter.localizedString(for: date, relativeTo: Date())
-    }
-
     static func relativeTime(milliseconds: UInt64?) -> String {
         guard let milliseconds, milliseconds > 0 else { return "—" }
         let date = Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1_000.0)

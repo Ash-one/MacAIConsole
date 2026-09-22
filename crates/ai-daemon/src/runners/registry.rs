@@ -679,7 +679,7 @@ adapter = "fake"
         write_package(&good, "0.1.0", PROFILE);
         std::fs::create_dir_all(&bad).unwrap();
         std::fs::write(bad.join("runner.toml"), "schema = 'wrong'\n").unwrap();
-        let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+        let registry = RunnerRegistry::discover(std::slice::from_ref(&root), &[], &HashSet::new());
         assert!(registry.trusted("org.example.fake", "=0.1.0").is_ok());
         assert!(registry
             .entries()
@@ -689,7 +689,7 @@ adapter = "fake"
             registry.resolve_bundled_profile("fake").unwrap().profile.id,
             "fake"
         );
-        let untrusted = RunnerRegistry::discover(&[], &[good.clone()], &HashSet::new());
+        let untrusted = RunnerRegistry::discover(&[], std::slice::from_ref(&good), &HashSet::new());
         let digest = untrusted.entries()[0].package_digest.clone().unwrap();
         assert_eq!(untrusted.entries()[0].state, RunnerState::Untrusted);
         let trusted = RunnerRegistry::discover(&[], &[good], &HashSet::from([digest]));
@@ -706,7 +706,7 @@ adapter = "fake"
         let _ = std::fs::remove_dir_all(&root);
         write_package(&root.join("v010"), "0.1.0", PROFILE);
         write_package(&root.join("v020"), "0.2.0", PROFILE);
-        let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+        let registry = RunnerRegistry::discover(std::slice::from_ref(&root), &[], &HashSet::new());
         assert!(matches!(
             registry.trusted("org.example.fake", ">=0.1,<0.3"),
             Err(RunnerRegistryError::AmbiguousTrustedRunner { .. })
@@ -736,7 +736,7 @@ adapter = "fake"
             "0.1.0",
             &PROFILE.replace(">=0.1,<0.2", ">=99.0"),
         );
-        let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+        let registry = RunnerRegistry::discover(std::slice::from_ref(&root), &[], &HashSet::new());
         assert!(matches!(
             registry.resolve_bundled_profile("fake"),
             Err(RunnerRegistryError::NoTrustedRunner { .. })
@@ -753,7 +753,7 @@ adapter = "fake"
         let _ = std::fs::remove_dir_all(&root);
         let package = root.join("runner");
         write_package(&package, "0.1.0", PROFILE);
-        let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+        let registry = RunnerRegistry::discover(std::slice::from_ref(&root), &[], &HashSet::new());
         std::fs::write(
             package.join("profiles/fake.toml"),
             PROFILE.replace("id='fake'", "id='changed-after-discovery'"),

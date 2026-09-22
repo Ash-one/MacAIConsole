@@ -81,7 +81,7 @@ async fn kokoro_runner_real_composition_load_infer_unload() {
     let root = temp_root("pkg");
     copy_package(&repo_root.join("runners/kokoro"), &root.join("kokoro")).unwrap();
 
-    let registry = RunnerRegistry::discover(&[root.clone()], &[], &HashSet::new());
+    let registry = RunnerRegistry::discover(std::slice::from_ref(&root), &[], &HashSet::new());
     let descriptor = registry
         .entries()
         .iter()

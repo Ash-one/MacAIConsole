@@ -18,8 +18,6 @@ from macai_sherpa_onnx_runner.engine import (  # noqa: E402
 
 
 def write_wav(path, channels=1, rate=16000, frames=1600):
-    import struct
-
     with wave.open(str(path), "wb") as wav:
         wav.setnchannels(channels)
         wav.setsampwidth(2)
