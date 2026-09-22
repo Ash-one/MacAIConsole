@@ -19,6 +19,17 @@ final class AppSettingsTests: XCTestCase {
         super.tearDown()
     }
 
+    func testAutoStartAndAutoStopOnExitDefaultsToTrueAndLoadsSavedState() {
+        XCTAssertTrue(AppSettings.autoStartDaemon(in: defaults))
+        XCTAssertTrue(AppSettings.autoStopDaemonOnExit(in: defaults))
+
+        defaults.set(false, forKey: AppSettings.autoStartKey)
+        defaults.set(false, forKey: AppSettings.autoStopOnExitKey)
+
+        XCTAssertFalse(AppSettings.autoStartDaemon(in: defaults))
+        XCTAssertFalse(AppSettings.autoStopDaemonOnExit(in: defaults))
+    }
+
     func testProxyDefaultsToSystemAndLoadsSavedMode() {
         XCTAssertEqual(AppSettings.proxyMode(in: defaults), .system)
         defaults.set(ProxyMode.manual.rawValue, forKey: AppSettings.proxyModeKey)

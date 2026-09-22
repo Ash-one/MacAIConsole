@@ -50,6 +50,7 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
 
 enum AppSettings {
     static let autoStartKey = "autoStartDaemon"
+    static let autoStopOnExitKey = "autoStopDaemonOnExit"
     static let memoryBudgetKey = "memoryBudget"
     static let logLevelKey = "logLevel"
     static let appearanceKey = "appearance"
@@ -66,7 +67,19 @@ enum AppSettings {
     static let hfMirrorDownloadEndpoint = "https://hf-mirror.com"
 
     static var autoStartDaemon: Bool {
-        UserDefaults.standard.object(forKey: autoStartKey) as? Bool ?? true
+        autoStartDaemon(in: .standard)
+    }
+
+    static func autoStartDaemon(in defaults: UserDefaults) -> Bool {
+        defaults.object(forKey: autoStartKey) as? Bool ?? true
+    }
+
+    static var autoStopDaemonOnExit: Bool {
+        autoStopDaemonOnExit(in: .standard)
+    }
+
+    static func autoStopDaemonOnExit(in defaults: UserDefaults) -> Bool {
+        defaults.object(forKey: autoStopOnExitKey) as? Bool ?? true
     }
 
     /// 用户覆盖值。空字符串表示使用 daemon 的自动预算策略。

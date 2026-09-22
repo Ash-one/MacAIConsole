@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage(AppSettings.autoStartKey) private var autoStart = true
+    @AppStorage(AppSettings.autoStopOnExitKey) private var autoStopOnExit = true
     @AppStorage(AppSettings.memoryBudgetKey) private var memoryBudget = ""
     @AppStorage(AppSettings.appearanceKey) private var appearance = AppearanceMode.system.rawValue
     @AppStorage(AppSettings.proxyModeKey) private var proxyMode = ProxyMode.system.rawValue
@@ -34,6 +35,7 @@ struct SettingsView: View {
 
             Section("守护进程") {
                 Toggle("启动应用时自动拉起守护进程", isOn: $autoStart)
+                Toggle("退出应用时自动退出守护进程", isOn: $autoStopOnExit)
                 LabeledContent("aiworkd 路径（自动探测）", value: resolvedText)
             }
 

@@ -135,6 +135,30 @@ final class DaemonController {
         }
     }
 
+    /// 应用退出时的守护进程停止逻辑。
+    /// - Parameter forceStop: 若为 true 强制停止；若为 false 强制保留；若为 nil 则依照 AppSettings.autoStopDaemonOnExit。
+    func stopDaemonForExit(forceStop: Bool? = nil, defaults: UserDefaults = .standard) {
+        let shouldStop = forceStop ?? AppSettings.autoStopDaemonOnExit(in: defaults)
+        guard shouldStop else {
+            logInfo("退出 MacAIConsole，保持后台守护进程运行")
+            return
+        }
+
+        logInfo("退出 MacAIConsole，自动停止守护进程")
+        var stoppedPID: pid_t?
+        if let pid = info?.pid, pid > 0 {
+            logInfo("向 aiworkd 发送 SIGTERM，PID \(pid)")
+            kill(pid_t(pid), SIGTERM)
+            stoppedPID = pid_t(pid)
+        }
+        if let child = childProcess, child.isRunning {
+            if stoppedPID != child.processIdentifier {
+                logInfo("向 GUI 拉起的 aiworkd 子进程发送 terminate，PID \(child.processIdentifier)")
+                child.terminate()
+            }
+        }
+    }
+
     func restartDaemon() {
         logInfo("已请求重启 aiworkd")
         restartAfterStop = true

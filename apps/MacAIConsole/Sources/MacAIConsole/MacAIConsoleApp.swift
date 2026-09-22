@@ -2,10 +2,15 @@ import SwiftUI
 
 @main
 struct MacAIConsoleApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var router = AppRouter()
     @State private var updateState = AppUpdateState()
     @AppStorage(AppSettings.appearanceKey) private var appearance = AppearanceMode.system.rawValue
     private let controller = DaemonController()
+
+    init() {
+        appDelegate.controller = controller
+    }
 
     var body: some Scene {
         WindowGroup(id: "main") {
@@ -17,6 +22,7 @@ struct MacAIConsoleApp: App {
                 .tint(Theme.accent)
                 .preferredColorScheme(preferredColorScheme)
                 .task {
+                    appDelegate.controller = controller
                     updateState.setInstallHandlers {
                         controller.stopDaemon()
                         // stopDaemon 异步发送 SIGTERM；等待其退出完成，避免新实例与
