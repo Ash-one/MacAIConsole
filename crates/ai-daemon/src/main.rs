@@ -238,7 +238,10 @@ async fn main() {
             "/api/models/{id}/generation",
             post(set_model_generation_settings),
         )
-        .route("/api/models/{id}/voices", get(list_model_voices))
+        .route(
+            "/api/models/{id}/voices",
+            get(list_model_voices).post(upload_model_voice),
+        )
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .layer(axum::middleware::from_fn(debug_http_request))
         .with_state(state);
@@ -1939,7 +1942,230 @@ async fn list_model_voices(
             spec.default_voice.clone(),
         )
     };
-    Json(json!({"id": id, "voices": voices, "default_voice": default_voice})).into_response()
+    let supports_custom_reference = spec.model_type == "tts"
+        && (voices
+            .iter()
+            .any(|v| v.to_ascii_lowercase().ends_with(".wav"))
+            || (spec.provider != "org.macai.qwen3-tts"
+                && spec.provider != "org.macai.kokoro"
+                && spec.provider != "org.macai.macos_say"
+                && spec
+                    .path
+                    .as_deref()
+                    .map(|p| FilePath::new(p).is_dir())
+                    .unwrap_or(false)));
+    Json(json!({
+        "id": id,
+        "voices": voices,
+        "default_voice": default_voice,
+        "supports_custom_reference": supports_custom_reference,
+    }))
+    .into_response()
+}
+
+/// 清洗音色名称：去除 .wav 后缀，仅保留字母数字、下划线、短横线与中文字符，防止路径穿越。
+fn sanitize_voice_name(name: &str) -> String {
+    let mut stem = name.trim();
+    if let Some(stripped) = stem.strip_suffix(".wav") {
+        stem = stripped.trim();
+    } else if let Some(stripped) = stem.strip_suffix(".WAV") {
+        stem = stripped.trim();
+    }
+    let sanitized: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let parts: Vec<&str> = sanitized.split('_').filter(|s| !s.is_empty()).collect();
+    parts.join("_")
+}
+
+/// POST /api/models/{id}/voices —— 上传自定义参考音频并转码为规范 16-bit PCM WAV 保存为模型音色。
+async fn upload_model_voice(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    mut multipart: Multipart,
+) -> Response {
+    let Some(spec) = state.runtime.get_model(&id).await else {
+        return api_error(AIError::ModelNotFound, format!("model '{id}' not found"));
+    };
+    if spec.model_type != "tts" {
+        return api_error(
+            AIError::InvalidRequest,
+            format!(
+                "custom voices are only supported for TTS models (got '{}')",
+                spec.model_type
+            ),
+        );
+    }
+    let Some(model_path) = spec.path.as_deref() else {
+        return api_error(
+            AIError::InvalidRequest,
+            format!("model '{id}' has no local directory"),
+        );
+    };
+    let model_dir = PathBuf::from(model_path);
+    if !model_dir.is_dir() {
+        return api_error(
+            AIError::InvalidRequest,
+            format!("model directory '{}' does not exist", model_dir.display()),
+        );
+    }
+
+    let mut audio_bytes: Option<(Vec<u8>, Option<String>)> = None;
+    let mut voice_name: Option<String> = None;
+    let mut set_as_default = true;
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(error) => {
+                return api_error(
+                    AIError::InvalidRequest,
+                    format!("invalid multipart request: {error}"),
+                )
+            }
+        };
+        let field_name = field.name().unwrap_or_default().to_string();
+        match field_name.as_str() {
+            "file" => {
+                let file_name = field.file_name().unwrap_or("audio.wav").to_string();
+                let extension = FilePath::new(&file_name)
+                    .extension()
+                    .and_then(|val| val.to_str())
+                    .map(|val| val.to_ascii_lowercase());
+                let bytes = match field.bytes().await {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        return api_error(
+                            AIError::InvalidRequest,
+                            format!("cannot read uploaded audio: {error}"),
+                        )
+                    }
+                };
+                if bytes.is_empty() {
+                    return api_error(AIError::InvalidRequest, "uploaded audio is empty (0 bytes)");
+                }
+                const MAX_AUDIO_BYTES: usize = 20 * 1024 * 1024; // 20 MB
+                if bytes.len() > MAX_AUDIO_BYTES {
+                    return api_error(
+                        AIError::InvalidRequest,
+                        format!(
+                            "uploaded audio exceeds limit of 20MB (got {} bytes)",
+                            bytes.len()
+                        ),
+                    );
+                }
+                audio_bytes = Some((bytes.to_vec(), extension));
+            }
+            "name" => match field.text().await {
+                Ok(value) if !value.trim().is_empty() => {
+                    voice_name = Some(value.trim().to_string())
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    return api_error(
+                        AIError::InvalidRequest,
+                        format!("cannot read name field: {error}"),
+                    )
+                }
+            },
+            "set_as_default" => match field.text().await {
+                Ok(value) => {
+                    let val = value.trim();
+                    set_as_default = val != "false" && val != "0";
+                }
+                Err(error) => {
+                    return api_error(
+                        AIError::InvalidRequest,
+                        format!("cannot read set_as_default field: {error}"),
+                    )
+                }
+            },
+            _ => {}
+        }
+    }
+
+    let Some((bytes, extension)) = audio_bytes else {
+        return api_error(
+            AIError::InvalidRequest,
+            "multipart field 'file' is required",
+        );
+    };
+
+    let raw_name = voice_name.unwrap_or_else(|| "custom_voice".to_string());
+    let clean_stem = sanitize_voice_name(&raw_name);
+    if clean_stem.is_empty() {
+        return api_error(
+            AIError::InvalidRequest,
+            "voice name is invalid (must contain valid alphanumeric, Chinese characters, '_' or '-')",
+        );
+    }
+
+    let normalized = match tokio::task::spawn_blocking(move || {
+        audio::normalize_to_pcm_wav(bytes, extension.as_deref())
+    })
+    .await
+    {
+        Ok(Ok(data)) => data,
+        Ok(Err(audio::NormalizeError(reason))) => {
+            return api_error(AIError::InvalidRequest, reason);
+        }
+        Err(error) => {
+            return api_error(
+                AIError::Internal,
+                format!("audio normalization failed: {error}"),
+            );
+        }
+    };
+
+    let voices_dir = model_dir.join("voices");
+    if let Err(error) = tokio::fs::create_dir_all(&voices_dir).await {
+        return api_error(
+            AIError::Internal,
+            format!("cannot create voices directory: {error}"),
+        );
+    }
+
+    let target_file_name = format!("{clean_stem}.wav");
+    let target_path = voices_dir.join(&target_file_name);
+    if let Err(error) = tokio::fs::write(&target_path, &normalized).await {
+        return api_error(
+            AIError::Internal,
+            format!("cannot write voice file to disk: {error}"),
+        );
+    }
+
+    let voice_id = format!("voices/{target_file_name}");
+    if set_as_default {
+        state
+            .runtime
+            .set_default_voice(&id, Some(voice_id.clone()))
+            .await;
+    }
+
+    let current_default = state
+        .runtime
+        .get_model(&id)
+        .await
+        .and_then(|spec| spec.default_voice);
+
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "id": id,
+            "voice": voice_id,
+            "name": clean_stem,
+            "default_voice": current_default,
+        })),
+    )
+        .into_response()
 }
 
 async fn chat_completions(
@@ -2988,7 +3214,184 @@ runner = ">=1,<2"
         assert_eq!(voices.len(), 9);
         assert_eq!(voices[0], "Vivian");
         assert_eq!(payload["default_voice"], "Vivian");
-        assert!(voices.iter().any(|voice| voice == "Ono_Anna"));
+        assert_eq!(payload["supports_custom_reference"], false);
+    }
+
+    #[test]
+    fn sanitize_voice_name_cleans_input_and_prevents_traversal() {
+        assert_eq!(sanitize_voice_name("my voice"), "my_voice");
+        assert_eq!(sanitize_voice_name("test.wav"), "test");
+        assert_eq!(sanitize_voice_name("test.WAV"), "test");
+        assert_eq!(sanitize_voice_name("../../etc/passwd"), "etc_passwd");
+        assert_eq!(sanitize_voice_name("小玲-01"), "小玲-01");
+        assert_eq!(sanitize_voice_name("  ___  "), "");
+        assert_eq!(sanitize_voice_name("hello///world"), "hello_world");
+    }
+
+    #[tokio::test]
+    async fn list_model_voices_reports_supports_custom_reference_for_clone_runners() {
+        let runtime = Arc::new(Runtime::new());
+        let temp_dir =
+            std::env::temp_dir().join(format!("macai-test-clone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let voices_dir = temp_dir.join("voices");
+        std::fs::create_dir_all(&voices_dir).unwrap();
+        std::fs::write(voices_dir.join("ref.wav"), b"x").unwrap();
+
+        let clone_model = ai_core::model::ModelSpec {
+            id: "hojo-tts-80m".to_string(),
+            name: "Hojo TTS 80M".to_string(),
+            model_type: "tts".to_string(),
+            provider: "org.hojoai.hojo-tts-light".to_string(),
+            requested_provider: None,
+            provider_selection_reason: None,
+            source: None,
+            path: Some(temp_dir.to_str().unwrap().to_string()),
+            format: Some("directory".to_string()),
+            size_bytes: None,
+            memory_estimate: None,
+            keep_alive: Some("always".to_string()),
+            context_length: None,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            default_voice: Some("voices/ref.wav".to_string()),
+        };
+        runtime.register(clone_model).await;
+
+        let response = list_model_voices(
+            State(app_state(runtime)),
+            AxumPath("hojo-tts-80m".to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["supports_custom_reference"], true);
+        assert_eq!(payload["voices"], serde_json::json!(["voices/ref.wav"]));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn upload_model_voice_rejects_non_tts_model() {
+        let runtime = Arc::new(Runtime::new());
+        runtime.register(mock_model()).await;
+        let boundary = "boundary123";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\nmy_voice\r\n--{boundary}--\r\n"
+        );
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .header(
+                "Content-Type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .unwrap();
+        use axum::extract::FromRequest;
+        let multipart = Multipart::from_request(req, &app_state(runtime.clone()))
+            .await
+            .unwrap();
+        let response = upload_model_voice(
+            State(app_state(runtime)),
+            AxumPath("mock-task".to_string()),
+            multipart,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body_bytes)
+            .contains("custom voices are only supported for TTS models"));
+    }
+
+    #[tokio::test]
+    async fn upload_model_voice_normalizes_and_saves_pcm_wav() {
+        let runtime = Arc::new(Runtime::new());
+        let temp_dir =
+            std::env::temp_dir().join(format!("macai-test-upload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let clone_model = ai_core::model::ModelSpec {
+            id: "hojo-tts-80m".to_string(),
+            name: "Hojo TTS 80M".to_string(),
+            model_type: "tts".to_string(),
+            provider: "org.hojoai.hojo-tts-light".to_string(),
+            requested_provider: None,
+            provider_selection_reason: None,
+            source: None,
+            path: Some(temp_dir.to_str().unwrap().to_string()),
+            format: Some("directory".to_string()),
+            size_bytes: None,
+            memory_estimate: None,
+            keep_alive: Some("always".to_string()),
+            context_length: None,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            default_voice: None,
+        };
+        runtime.register(clone_model).await;
+
+        let boundary = "boundary456";
+        let raw_wav = audio::tests::raw_pcm_wav(&[1000i16; 1000], 16000, 1);
+        let mut body_bytes = Vec::new();
+        body_bytes.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n我的声音\r\n"
+            )
+            .as_bytes(),
+        );
+        body_bytes.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"sample.wav\"\r\nContent-Type: audio/wav\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body_bytes.extend_from_slice(&raw_wav);
+        body_bytes.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .header(
+                "Content-Type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body_bytes))
+            .unwrap();
+
+        use axum::extract::FromRequest;
+        let multipart = Multipart::from_request(req, &app_state(runtime.clone()))
+            .await
+            .unwrap();
+        let response = upload_model_voice(
+            State(app_state(runtime.clone())),
+            AxumPath("hojo-tts-80m".to_string()),
+            multipart,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let resp_bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let payload: Value = serde_json::from_slice(&resp_bytes).unwrap();
+        assert_eq!(payload["name"], "我的声音");
+        assert_eq!(payload["voice"], "voices/我的声音.wav");
+        assert_eq!(payload["default_voice"], "voices/我的声音.wav");
+
+        let saved_wav = temp_dir.join("voices/我的声音.wav");
+        assert!(saved_wav.is_file());
+        let saved_bytes = std::fs::read(&saved_wav).unwrap();
+        assert_eq!(&saved_bytes[..4], b"RIFF");
+        assert_eq!(&saved_bytes[8..12], b"WAVE");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[tokio::test]

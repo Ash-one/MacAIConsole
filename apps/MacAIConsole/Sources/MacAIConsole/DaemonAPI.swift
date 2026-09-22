@@ -68,9 +68,23 @@ struct LoadedModel: Decodable, Identifiable, Hashable {
 struct VoiceResponse: Decodable {
     var voices: [String]
     var defaultVoice: String?
+    var supportsCustomReference: Bool?
 
     enum CodingKeys: String, CodingKey {
         case voices
+        case defaultVoice = "default_voice"
+        case supportsCustomReference = "supports_custom_reference"
+    }
+}
+
+struct VoiceUploadResponse: Decodable {
+    var id: String
+    var voice: String
+    var name: String
+    var defaultVoice: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, voice, name
         case defaultVoice = "default_voice"
     }
 }
@@ -773,6 +787,57 @@ struct DaemonAPI {
     /// GET /api/models/{id}/voices —— 获取 TTS 模型可用音色。
     func voices(_ id: String) async throws -> VoiceResponse {
         try JSONDecoder().decode(VoiceResponse.self, from: try await get("api/models/\(id)/voices"))
+    }
+
+    /// POST /api/models/{id}/voices —— 上传自定义参考音频并转码为规范 PCM WAV 保存为模型音色。
+    func uploadVoice(
+        modelID: String,
+        name: String,
+        audioData: Data,
+        fileName: String,
+        setAsDefault: Bool = true,
+        timeout: TimeInterval = 60
+    ) async throws -> VoiceUploadResponse {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/models/\(modelID)/voices"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        var body = Data()
+        // name field
+        body.append(Data("--\(boundary)\r\n".utf8))
+        body.append(Data("Content-Disposition: form-data; name=\"name\"\r\n\r\n".utf8))
+        body.append(Data("\(name)\r\n".utf8))
+
+        // set_as_default field
+        body.append(Data("--\(boundary)\r\n".utf8))
+        body.append(Data("Content-Disposition: form-data; name=\"set_as_default\"\r\n\r\n".utf8))
+        body.append(Data("\(setAsDefault)\r\n".utf8))
+
+        // file field
+        body.append(Data("--\(boundary)\r\n".utf8))
+        body.append(Data("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n".utf8))
+        body.append(Data("Content-Type: application/octet-stream\r\n\r\n".utf8))
+        body.append(audioData)
+        body.append(Data("\r\n".utf8))
+
+        body.append(Data("--\(boundary)--\r\n".utf8))
+        request.httpBody = body
+
+        AppLogger.debug("API POST \(request.url?.path ?? "") [multipart audio \(audioData.count) bytes]")
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        AppLogger.debug("API POST \(request.url?.path ?? "") → HTTP \(http.statusCode)")
+        guard (200..<300).contains(http.statusCode) else {
+            if let detail = try? JSONDecoder().decode(APIErrorBody.self, from: data) {
+                throw DaemonError.http(status: http.statusCode, message: detail.error.message)
+            }
+            throw DaemonError.http(status: http.statusCode, message: "上传音频失败")
+        }
+        return try JSONDecoder().decode(VoiceUploadResponse.self, from: data)
     }
 
     /// POST /v1/audio/speech —— 返回 WAV 音频数据（试听用）。

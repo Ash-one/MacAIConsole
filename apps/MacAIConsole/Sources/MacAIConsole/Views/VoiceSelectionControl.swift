@@ -169,6 +169,8 @@ struct VoiceSelectionControl: View {
     @State private var player: AVAudioPlayer?
     @State private var playbackDelegate: PlaybackDelegate?
     @State private var auditionGeneration = 0
+    @State private var supportsCustomReference = false
+    @State private var showCustomVoiceSheet = false
 
     /// Provider 内置缺省音色，与 daemon `POST /voice` 清空语义一致。
     private static let fallbackVoice = "zf_001"
@@ -185,6 +187,18 @@ struct VoiceSelectionControl: View {
         }
         .task(id: modelID) { await loadVoices() }
         .onDisappear(perform: flushPendingPersist)
+        .sheet(isPresented: $showCustomVoiceSheet) {
+            CustomVoiceSheet(modelID: modelID) { newVoice in
+                Task {
+                    await loadVoices()
+                    draftVoice = newVoice
+                    persistedVoice = newVoice
+                    if autoAudition {
+                        await audition(newVoice)
+                    }
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -199,8 +213,19 @@ struct VoiceSelectionControl: View {
             Text("无法读取音色清单（模型未注册或守护进程不可达）")
                 .foregroundStyle(.secondary)
         } else if voices.isEmpty {
-            Text("未找到可用音色")
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("未找到可用音色")
+                    .foregroundStyle(.secondary)
+                if supportsCustomReference {
+                    Button {
+                        showCustomVoiceSheet = true
+                    } label: {
+                        Label("添加参考音频", systemImage: "plus.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
         } else {
             pickerRows
         }
@@ -215,6 +240,18 @@ struct VoiceSelectionControl: View {
                     .fixedSize(horizontal: true, vertical: true)
                     .frame(maxWidth: 260, alignment: .leading)
                     .help("滚轮上下快速切换音色；点击菜单可直接选择")
+
+                if supportsCustomReference {
+                    Button {
+                        showCustomVoiceSheet = true
+                    } label: {
+                        Label("添加参考音频", systemImage: "plus.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("上传自定义参考音频（WAV/MP3/M4A/FLAC）作为该模型的可用克隆音色")
+                }
+
                 if isAuditioning {
                     ProgressView().controlSize(.small)
                 }
@@ -256,6 +293,7 @@ struct VoiceSelectionControl: View {
             return
         }
         voices = response.voices
+        supportsCustomReference = response.supportsCustomReference ?? false
         let def = response.defaultVoice.flatMap { $0.isEmpty ? nil : $0 } ?? Self.fallbackVoice
         persistedVoice = def
         draftVoice = response.voices.contains(def) ? def : response.voices.first

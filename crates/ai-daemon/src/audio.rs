@@ -197,11 +197,11 @@ pub(crate) fn wav_duration_ms(bytes: &[u8]) -> Option<u64> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// 手工构造规范 16-bit PCM WAV，不经过被测代码，避免自证。
-    fn raw_pcm_wav(samples: &[i16], sample_rate: u32, channels: u16) -> Vec<u8> {
+    pub(crate) fn raw_pcm_wav(samples: &[i16], sample_rate: u32, channels: u16) -> Vec<u8> {
         let data_len = samples.len() * 2;
         let mut wav = Vec::with_capacity(44 + data_len);
         wav.extend_from_slice(b"RIFF");

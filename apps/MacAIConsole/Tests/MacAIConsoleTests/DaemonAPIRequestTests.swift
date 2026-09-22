@@ -311,6 +311,46 @@ final class DaemonAPIRequestTests: XCTestCase {
         XCTAssertEqual(payload["input"] as? String, "pip install sentencepiece")
     }
 
+    func testVoiceResponseDecodesSupportsCustomReference() async throws {
+        let json = #"{"id":"hojo","voices":["voices/ref.wav"],"default_voice":"voices/ref.wav","supports_custom_reference":true}"#
+        let api = try makeAPI(status: 200, body: json)
+        let response = try await api.voices("hojo")
+        XCTAssertEqual(response.voices, ["voices/ref.wav"])
+        XCTAssertEqual(response.defaultVoice, "voices/ref.wav")
+        XCTAssertEqual(response.supportsCustomReference, true)
+        XCTAssertEqual(RecordingURLProtocol.recorded.first?.url?.path, "/api/models/hojo/voices")
+    }
+
+    func testUploadVoiceSendsMultipartFormData() async throws {
+        let responseBody = #"{"id":"hojo","voice":"voices/test.wav","name":"test","default_voice":"voices/test.wav"}"#
+        let api = try makeAPI(status: 201, body: responseBody)
+        let dummyData = Data("RIFF....WAVE".utf8)
+        let result = try await api.uploadVoice(
+            modelID: "hojo",
+            name: "test",
+            audioData: dummyData,
+            fileName: "test.wav",
+            setAsDefault: true
+        )
+        XCTAssertEqual(result.id, "hojo")
+        XCTAssertEqual(result.voice, "voices/test.wav")
+        XCTAssertEqual(result.name, "test")
+        XCTAssertEqual(result.defaultVoice, "voices/test.wav")
+
+        let request = try XCTUnwrap(RecordingURLProtocol.recorded.first)
+        XCTAssertEqual(request.url?.path, "/api/models/hojo/voices")
+        XCTAssertEqual(request.httpMethod, "POST")
+        let contentType = try XCTUnwrap(request.value(forHTTPHeaderField: "Content-Type"))
+        XCTAssertTrue(contentType.contains("multipart/form-data; boundary=Boundary-"))
+        let bodyData = try XCTUnwrap(request.bodyData)
+        let bodyString = String(decoding: bodyData, as: UTF8.self)
+        XCTAssertTrue(bodyString.contains("name=\"name\""))
+        XCTAssertTrue(bodyString.contains("test"))
+        XCTAssertTrue(bodyString.contains("name=\"set_as_default\""))
+        XCTAssertTrue(bodyString.contains("true"))
+        XCTAssertTrue(bodyString.contains("filename=\"test.wav\""))
+    }
+
     private func makeAPI(status: Int, body: String) throws -> DaemonAPI {
         RecordingURLProtocol.enqueue(status: status, body: body)
         let configuration = URLSessionConfiguration.ephemeral
