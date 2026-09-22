@@ -223,8 +223,9 @@ struct ModelDetailSheet: View {
                 if let actionError {
                     ErrorBanner(text: actionError)
                 }
-                runnerRecognitionCard
-                fileSpecificationCard
+                if case .registered = target {
+                    identifierManagementCard
+                }
                 if modelType == "tts" {
                     voiceAuditionCard
                 }
@@ -234,12 +235,11 @@ struct ModelDetailSheet: View {
                         generationSettingsCard
                     }
                 }
-                if case .registered = target {
-                    identifierManagementCard
-                }
                 if isLoaded {
                     runtimeMetricsCard
                 }
+                runnerRecognitionCard
+                fileSpecificationCard
             }
             .padding(Theme.Space.page)
         }
@@ -499,18 +499,65 @@ struct ModelDetailSheet: View {
                 }
 
                 // 文件大小 / 目录形式
-                HStack(spacing: 16) {
+                HStack(spacing: 20) {
                     if case .repo(let model) = target {
-                        LabeledContent("形态", value: model.isDirectory ? "目录格式" : "单文件格式")
-                        LabeledContent("大小", value: model.isDirectory ? "目录" : Format.bytes(model.sizeBytes))
+                        HStack(spacing: 6) {
+                            Text("形态:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(model.isDirectory ? "目录格式" : "单文件格式")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.primary)
+                        }
+                        HStack(spacing: 6) {
+                            Text("大小:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(model.isDirectory ? "目录" : Format.bytes(model.sizeBytes))
+                                .font(.caption.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(.primary)
+                        }
                     } else if case .profile(let profile) = target {
                         if let est = profile.memoryEstimateBytes {
-                            LabeledContent("预计内存", value: Format.bytes(est))
+                            HStack(spacing: 6) {
+                                Text("预计内存:")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(Format.bytes(est))
+                                    .font(.caption.weight(.semibold).monospacedDigit())
+                                    .foregroundStyle(.primary)
+                            }
                         }
-                        LabeledContent("来源仓库", value: profile.sourceRepo)
+                        HStack(spacing: 6) {
+                            Text("来源仓库:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(profile.sourceRepo)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.primary)
+                        }
+                    } else if case .registered(let entry) = target, let path = entry.path {
+                        let isDir = (try? FileManager.default.attributesOfItem(atPath: path)[.type] as? FileAttributeType) == .typeDirectory
+                        HStack(spacing: 6) {
+                            Text("形态:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(isDir ? "目录格式" : "单文件格式")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.primary)
+                        }
+                        if !isDir, let size = try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64 {
+                            HStack(spacing: 6) {
+                                Text("大小:")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(Format.bytes(UInt64(max(0, size))))
+                                    .font(.caption.weight(.semibold).monospacedDigit())
+                                    .foregroundStyle(.primary)
+                            }
+                        }
                     }
                 }
-                .font(.callout)
 
                 // GGUF 专属元数据
                 if case .repo(let model) = target, let meta = model.ggufMetadata {
@@ -520,16 +567,15 @@ struct ModelDetailSheet: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
-                            LabeledContent("模型架构", value: meta.architecture)
+                            metaItem(label: "模型架构", value: meta.architecture)
                             if let q = meta.quantizationName {
-                                LabeledContent("量化级别", value: q)
+                                metaItem(label: "量化级别", value: q)
                             }
                             if let ctx = meta.contextLength {
-                                LabeledContent("原生上下文上限", value: GGUFMetadata.formatTokenCount(ctx))
+                                metaItem(label: "原生上下文上限", value: GGUFMetadata.formatTokenCount(ctx))
                             }
-                            LabeledContent("张量数量", value: "\(meta.tensorCount)")
+                            metaItem(label: "张量数量", value: "\(meta.tensorCount)")
                         }
-                        .font(.caption)
                     }
                 }
             }
@@ -689,27 +735,135 @@ struct ModelDetailSheet: View {
         }
     }
 
+    private static let standardKeepAliveChoices: [(label: String, value: String)] = [
+        ("1 分钟", "1m"),
+        ("5 分钟", "5m"),
+        ("10 分钟", "10m"),
+        ("30 分钟", "30m"),
+        ("60 分钟", "60m"),
+        ("120 分钟", "120m"),
+        ("始终常驻", "always"),
+    ]
+
+    private func keepAliveChoices(current: String?) -> [(label: String, value: String)] {
+        var choices = Self.standardKeepAliveChoices
+        if let current, !current.isEmpty, !choices.contains(where: { $0.value == current }) {
+            choices.append((current, current))
+        }
+        return choices
+    }
+
     // MARK: - 实时运行监控卡片（已加载专属）
 
     private var runtimeMetricsCard: some View {
         SectionCard(title: "运行时动态状态", icon: "gauge") {
-            VStack(alignment: .leading, spacing: 8) {
-                if let loaded = loadedModel {
-                    HStack(spacing: 16) {
-                        LabeledContent("加速设备", value: loaded.effectiveDevice?.uppercased() ?? "未探测")
-                        if let mem = loaded.memoryUsageBytes {
-                            LabeledContent("实时内存", value: Format.bytes(mem))
-                        }
-                        if let est = loaded.memoryEstimate {
-                            LabeledContent("预估内存", value: Format.bytes(est))
-                        }
-                        if let ka = loaded.keepAlive {
-                            LabeledContent("驻留时间策略", value: ka)
+            if let loaded = loadedModel {
+                HStack(spacing: 10) {
+                    metricTile(title: "加速设备", icon: "bolt.fill") {
+                        if let dev = loaded.effectiveDevice, !dev.isEmpty {
+                            Chip(
+                                text: dev.uppercased(),
+                                color: dev.lowercased() == "metal" ? Theme.warning : Theme.info
+                            )
+                        } else {
+                            Text("未探测")
+                                .font(.callout.weight(.medium))
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    .font(.callout)
+
+                    metricTile(title: "实时驻留内存", icon: "memorychip") {
+                        if let mem = loaded.memoryUsageBytes, mem > 0 {
+                            Text(Format.bytes(mem))
+                                .font(.callout.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(.primary)
+                        } else if modelType == "stt" {
+                            Text("无常驻进程")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("不可测")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if let est = loaded.memoryEstimate {
+                        metricTile(title: "预估内存需求", icon: "chart.bar") {
+                            Text(Format.bytes(est))
+                                .font(.callout.weight(.medium).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    metricTile(title: "驻留时间策略", icon: "clock") {
+                        Picker("驻留时间策略", selection: Binding(
+                            get: { loaded.keepAlive?.isEmpty == false ? loaded.keepAlive! : "always" },
+                            set: { newValue in
+                                Task {
+                                    await controller.setKeepAlive(modelID, keepAlive: newValue)
+                                    await onUpdate()
+                                }
+                            }
+                        )) {
+                            ForEach(keepAliveChoices(current: loaded.keepAlive), id: \.value) { choice in
+                                Text(choice.label).tag(choice.value)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .fixedSize()
+                    }
                 }
             }
+        }
+    }
+
+    private func metricTile<Content: View>(
+        title: String,
+        icon: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            HStack {
+                content()
+                Spacer(minLength: 0)
+            }
+            .frame(height: 24)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.primary.opacity(0.035))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Theme.hairline, lineWidth: 1)
+        )
+    }
+
+    private func metaItem(label: String, value: String) -> some View {
+        HStack(spacing: 6) {
+            Text("\(label):")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
+            Spacer(minLength: 0)
         }
     }
 
